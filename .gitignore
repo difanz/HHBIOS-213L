@@ -1,0 +1,9 @@
+build/
+*.err
+*.ERR
+*.lst
+*.LST
+*.obj
+*.OBJ
+*.map
+*.MAP

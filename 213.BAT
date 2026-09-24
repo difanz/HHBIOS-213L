@@ -1,8 +1,0 @@
-@ECHO OFF
-FOR %%A IN (%PATH%) DO IF %%A==C:\213 GOTO A
-PATH C:\213;%PATH%
-:A
-R16
-CKBD
-VGA %1
-

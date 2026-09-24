@@ -1,0 +1,99 @@
+diff --git a/src/H/parser.h b/src/H/parser.h
+index 71cc836..457e3a5 100644
+--- a/src/H/parser.h
++++ b/src/H/parser.h
+@@ -273,6 +273,7 @@ struct code_info {
+             unsigned char   x64lo_used:1;   /* SPL,BPL,SIL,DIL used */
+ #endif
+             unsigned char   undef_sym:1;    /* v2.06b: struct member is forward ref */
++            unsigned char   masm_jmp_nop:1; /* -Zm: forward JMP is EB rel, NOP */
+         };
+     };
+ };
+diff --git a/src/branch.c b/src/branch.c
+index ae5df72..6590799 100644
+--- a/src/branch.c
++++ b/src/branch.c
+@@ -301,6 +301,22 @@ ret_code process_branch( struct code_info *CodeInfo, unsigned CurrOpnd, const st
+             //    CodeInfo->mem_type = MT_NEAR;
+             //}
+             DebugMsg(("process_branch: CI.memtype=%Xh addr=%Xh\n", CodeInfo->mem_type, addr ));
++            /* MASM 5.1 (-Zm): a forward JMP is a 3-byte slot. If it reaches,
++             * encode EB rel8 followed by NOP instead of a 2-byte short jump.
++             * Pass 1 (still undefined) also takes this path so the slot is
++             * reserved before the target offset is known.
++             */
++            if ( ModuleInfo.m510 &&
++                CodeInfo->token == T_JMP &&
++                opndx->instr != T_SHORT &&
++                CodeInfo->mem_type == MT_EMPTY &&
++                ( state == SYM_UNDEFINED || sym->offset > GetCurrOffset() ) &&
++                addr >= SCHAR_MIN && addr <= SCHAR_MAX ) {
++                CodeInfo->opnd[OPND1].type = OP_I8;
++                CodeInfo->opnd[OPND1].data32l = addr;
++                CodeInfo->masm_jmp_nop = 1;
++                return( NOT_ERROR );
++            }
+             if( CodeInfo->mem_type != MT_NEAR && CodeInfo->token != T_CALL &&
+                 ( addr >= SCHAR_MIN && addr <= SCHAR_MAX ) ) {
+                 CodeInfo->opnd[OPND1].type = OP_I8;
+diff --git a/src/codegen.c b/src/codegen.c
+index 56283de..230ef5a 100644
+--- a/src/codegen.c
++++ b/src/codegen.c
+@@ -749,6 +749,16 @@ static ret_code match_phase_3( struct code_info *CodeInfo, enum operand_type opn
+                 CodeInfo->token == T_XOR ) )
+                 break;
+ 
++            /* MASM 5.1 encodes ADD/OR/.../CMP AX, imm with the accumulator
++             * opcode (05/0D/.../3D), not the sign-extended 83 form.
++             */
++            if( ModuleInfo.m510 && ( CodeInfo->opnd[OPND1].type & OP_A ) &&
++               ( CodeInfo->token == T_ADD || CodeInfo->token == T_OR ||
++                 CodeInfo->token == T_ADC || CodeInfo->token == T_SBB ||
++                 CodeInfo->token == T_AND || CodeInfo->token == T_SUB ||
++                 CodeInfo->token == T_XOR || CodeInfo->token == T_CMP ) )
++                break;
++
+             /* v2.14: ensure that InsFixup->sym is set - it always should, since a fixup is generated,
+              * but obviously there are cases where it is NOT!
+              */
+diff --git a/src/parser.c b/src/parser.c
+index 5be50a5..380e5e7 100644
+--- a/src/parser.c
++++ b/src/parser.c
+@@ -2980,6 +2980,23 @@ static ret_code check_size( struct code_info *CodeInfo, const struct expr opndx[
+             }
+         }
+     }
++    /* -Zm: MASM 5.1 sizes an unsized forward memory operand as WORD.
++     * MOV r/m8,imm8 is one byte shorter than MOV r/m16,imm16, so once the
++     * label is known to be BYTE the shortened instruction is padded with NOP.
++     * Direct addressing only (C6 /0 disp8/16 vs C7 /0).
++     */
++    if ( ModuleInfo.m510 && CodeInfo->token == T_MOV &&
++        ( op1 & OP_M ) && ( op2 & OP_I ) &&
++        opndx[OPND1].explicit == FALSE &&
++        opndx[OPND1].indirect == FALSE &&
++        opndx[OPND1].sym &&
++        ( opndx[OPND1].sym->state == SYM_UNDEFINED ||
++          opndx[OPND1].sym->offset > GetCurrOffset() ) &&
++        (uint_32)CodeInfo->opnd[OPND2].data32l <= UCHAR_MAX &&
++        ( CodeInfo->mem_type == MT_BYTE || CodeInfo->mem_type == MT_EMPTY ) ) {
++        CodeInfo->masm_jmp_nop = 1;
++    }
++
+     DebugMsg1(("check_size exit [CodeInfo->mem_type=%Xh]\n", CodeInfo->mem_type));
+     return( rc );
+ }
+@@ -3546,6 +3563,10 @@ ret_code ParseLine( struct asm_tok tokenarray[] )
+     if ( ERROR == codegen( &CodeInfo ) )
+         return( ERROR );
+ 
++    /* -Zm: MASM 5.1 pads a shortened forward JMP with NOP */
++    if ( CodeInfo.masm_jmp_nop )
++        OutputByte( 0x90 );
++
+     LstWrite( LSTTYPE_CODE, oldofs, &CodeInfo );
+     return( NOT_ERROR );
+ }
