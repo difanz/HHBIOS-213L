@@ -79,7 +79,7 @@ make qa-test     # 跑 qa/tests/ 下全部用例
 
 - `src/`：汇编源码和包含文件
 - `src/c/`：Open Watcom C（`VBEPROBE`）
-- `qa/`：DOSBox-X 配置、下载脚本、冒烟
+- `qa/`：DOSBox-X 配置、下载脚本、`tests/` 用例
 - `tools/`：JWasm 补丁、拼接 `R16` 的脚本、`make check`、编 `VBEPROBE`
 - `build/`：`make` 写出的 COM，已在 `.gitignore` 里
 
