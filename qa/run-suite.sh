@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run DOSBox-X cases under qa/tests/<name>/.
+# Run DOSBox-X cases under qa/tests/<name>/ or another suite root.
 #
 #   case.bat    DOS commands, one per line. The runner writes run.bat that
 #               redirects each command into case.log (later lines append).
@@ -11,18 +11,56 @@
 #   prep        Host shell run from the repo root before the case (optional).
 #   conf        qa/ config file name (optional; default dosbox-x-vbe.conf).
 #   skip        If present, the case is not run. The first line is the reason.
+#   guest.txt   Paths relative to qa/guest/. A missing file skips the case.
+#               Present files are copied onto the drive (basename kept).
+#   keys.txt    Timed keystrokes. DOSBox-X listens on a local nullmodem
+#               socket; qa/input/sendkeys.py sends the file after ready.flg
+#               appears on the drive. The guest TSR writes the BIOS keyboard
+#               buffer. See qa/input/sendkeys.py.
 #
-# Usage: qa/run-suite.sh [--label NAME] [test-name ...]
-# With no test names, every qa/tests/* directory is considered.
+# Usage: qa/run-suite.sh [--label NAME] [--root qa/tests] [test-name ...]
+# With no test names, every directory under the suite root is considered.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 LABEL=qa-test
-if [[ "${1:-}" == "--label" ]]; then
-    LABEL=${2:-qa-test}
-    shift 2
+SUITE_REL=qa/tests
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --label)
+            LABEL=${2:?--label needs a name}
+            shift 2
+            ;;
+        --root)
+            SUITE_REL=${2:?--root needs a path}
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "$LABEL: unknown option $1" >&2
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+case "$SUITE_REL" in
+    /*|~*|*..*)
+        echo "run-suite: --root must stay inside the repo: $SUITE_REL" >&2
+        exit 1
+        ;;
+esac
+SUITE="$ROOT/$SUITE_REL"
+if [[ ! -d "$SUITE" ]]; then
+    echo "$LABEL: suite directory $SUITE_REL is missing" >&2
+    exit 1
 fi
 
 bash "$ROOT/qa/fetch-dosbox-x.sh"
@@ -61,6 +99,18 @@ run_dbx() {
     fi
 }
 
+# qa/tests keeps the historical qa/out/<name> path. Other suites nest.
+out_for() {
+    local name=$1
+    local base
+    base=$(basename "$SUITE_REL")
+    if [[ "$base" == "tests" ]]; then
+        printf '%s\n' "$ROOT/qa/out/$name"
+    else
+        printf '%s\n' "$ROOT/qa/out/$base/$name"
+    fi
+}
+
 passed=0
 skipped=0
 failed=0
@@ -69,7 +119,8 @@ run_one() {
     local dir=$1
     local name conf_name conf stage line src base
     local out found log marker markers=0 miss=0
-    local dbx_status reason
+    local dbx_status reason mount_rel
+    local port dbx_pid ready keys_status
 
     name=$(basename "$dir")
     if [[ ! -d "$dir" ]]; then
@@ -83,6 +134,25 @@ run_one() {
         echo "SKIP $name: $reason"
         skipped=$((skipped + 1))
         return 0
+    fi
+
+    if [[ -f "$dir/guest.txt" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line=$(trim "${line%%#*}")
+            [[ -z "$line" ]] && continue
+            case "$line" in
+                /*|~*|*..*)
+                    echo "FAIL $name: guest.txt path must stay inside qa/guest: $line" >&2
+                    failed=$((failed + 1))
+                    return 0
+                    ;;
+            esac
+            if [[ ! -f "$ROOT/qa/guest/$line" ]]; then
+                echo "SKIP $name: missing qa/guest/$line"
+                skipped=$((skipped + 1))
+                return 0
+            fi
+        done <"$dir/guest.txt"
     fi
 
     if [[ ! -f "$dir/case.bat" ]]; then
@@ -116,10 +186,11 @@ run_one() {
         return 0
     fi
 
-    out="$ROOT/qa/out/$name"
+    out=$(out_for "$name")
     stage="$out/stage"
     rm -rf "$out"
     mkdir -p "$stage" "$ROOT/qa/out/captures"
+    mount_rel=${out#"$ROOT/"}/stage
     # DOSBox captures stdout only when the redirect sits on that command,
     # not when it sits on a CALL of the batch file.
     {
@@ -165,25 +236,86 @@ run_one() {
         done <"$dir/files.txt"
     fi
 
+    if [[ -f "$dir/guest.txt" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line=$(trim "${line%%#*}")
+            [[ -z "$line" ]] && continue
+            base=$(basename "$line")
+            cp "$ROOT/qa/guest/$line" "$stage/$base"
+        done <"$dir/guest.txt"
+    fi
+
     set +e
-    run_dbx "$BIN" \
-        -conf "$conf" \
-        -nomenu \
-        -fastlaunch \
-        -silent \
-        -time-limit 45 \
-        -c "mount c qa/out/$name/stage" \
-        -c "c:" \
-        -c "run.bat" \
-        -c "exit" \
-        >"$out/dosbox.log" 2>&1
-    dbx_status=$?
+    if [[ -f "$dir/keys.txt" ]]; then
+        port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+        echo "KEYS $name via 127.0.0.1:$port"
+        run_dbx "$BIN" \
+            -conf "$conf" \
+            -set "serial serial1=nullmodem port:${port} sock:0 usedtr:0 transparent:1" \
+            -nomenu \
+            -fastlaunch \
+            -silent \
+            -time-limit 45 \
+            -c "mount c $mount_rel" \
+            -c "c:" \
+            -c "run.bat" \
+            -c "exit" \
+            >"$out/dosbox.log" 2>&1 &
+        dbx_pid=$!
+        ready=""
+        local spins
+        for spins in $(seq 1 200); do
+            ready=$(find "$stage" -iname 'ready.flg' -type f | head -n 1)
+            if [[ -n "$ready" ]]; then
+                break
+            fi
+            if ! kill -0 "$dbx_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 0.1
+        done
+        if [[ -z "$ready" ]]; then
+            echo "FAIL $name: ready.flg was not created" >&2
+            kill "$dbx_pid" 2>/dev/null || true
+            wait "$dbx_pid" 2>/dev/null || true
+            echo "--- qa/out/.../$name/dosbox.log ---" >&2
+            tail -n 40 "$out/dosbox.log" >&2 || true
+            failed=$((failed + 1))
+            set -e
+            return 0
+        fi
+        python3 "$ROOT/qa/input/sendkeys.py" --port "$port" --keys "$dir/keys.txt"
+        keys_status=$?
+        if [[ "$keys_status" -ne 0 ]]; then
+            echo "FAIL $name: sendkeys exited $keys_status" >&2
+            kill "$dbx_pid" 2>/dev/null || true
+            wait "$dbx_pid" 2>/dev/null || true
+            failed=$((failed + 1))
+            set -e
+            return 0
+        fi
+        wait "$dbx_pid"
+        dbx_status=$?
+    else
+        run_dbx "$BIN" \
+            -conf "$conf" \
+            -nomenu \
+            -fastlaunch \
+            -silent \
+            -time-limit 45 \
+            -c "mount c $mount_rel" \
+            -c "c:" \
+            -c "run.bat" \
+            -c "exit" \
+            >"$out/dosbox.log" 2>&1
+        dbx_status=$?
+    fi
     set -e
 
     found=$(find "$stage" -iname 'case.log' -type f | head -n 1)
     if [[ -z "$found" ]]; then
         echo "FAIL $name: case.log was not written (dosbox-x status ${dbx_status})" >&2
-        echo "--- qa/out/$name/dosbox.log ---" >&2
+        echo "--- dosbox.log ---" >&2
         tail -n 40 "$out/dosbox.log" >&2 || true
         failed=$((failed + 1))
         return 0
@@ -207,29 +339,29 @@ run_one() {
         return 0
     fi
     if [[ "$miss" -ne 0 ]]; then
-        echo "--- qa/out/$name/case.log ---" >&2
+        echo "--- case.log ---" >&2
         cat "$log" >&2
         failed=$((failed + 1))
         return 0
     fi
 
-    echo "PASS $name (qa/out/$name/case.log)"
+    echo "PASS $name ($log)"
     passed=$((passed + 1))
 }
 
 if [[ $# -gt 0 ]]; then
     for name in "$@"; do
-        run_one "$ROOT/qa/tests/$name"
+        run_one "$SUITE/$name"
     done
 else
     found_any=0
-    for dir in "$ROOT"/qa/tests/*/; do
+    for dir in "$SUITE"/*/; do
         [[ -d "$dir" ]] || continue
         found_any=1
         run_one "$dir"
     done
     if [[ "$found_any" -eq 0 ]]; then
-        echo "$LABEL: qa/tests is empty" >&2
+        echo "$LABEL: $SUITE_REL is empty" >&2
         exit 1
     fi
 fi

@@ -10,3 +10,4 @@ qa/out/
 *.OBJ
 *.map
 *.MAP
+qa/guest/

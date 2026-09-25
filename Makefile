@@ -16,7 +16,7 @@ BUILD := build
 ASMS := $(wildcard $(SRC)/*.ASM)
 COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 
-.PHONY: all clean check vbeprobe qa-smoke qa-test
+.PHONY: all clean check vbeprobe qa-smoke qa-test qa-smoke-usage
 
 all: $(COMS)
 
@@ -53,3 +53,7 @@ qa-smoke:
 # Every qa/tests/* case. Directories with a skip file are reported and not run.
 qa-test:
 	bash qa/run-suite.sh
+
+# Usage smokes under qa/smoke-usage/. Missing qa/guest/ files skip the case.
+qa-smoke-usage:
+	bash qa/run-suite.sh --root qa/smoke-usage --label qa-smoke-usage

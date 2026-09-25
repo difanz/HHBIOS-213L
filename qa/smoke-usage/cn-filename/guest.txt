@@ -1,0 +1,2 @@
+# Paths relative to qa/guest/. Missing files skip this case.
+font/HZK16

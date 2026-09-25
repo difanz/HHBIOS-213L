@@ -1,0 +1,4 @@
+# delay_ms payload. Tokens: enter esc tab bksp space up down left right
+# or sc:SSAA. Other text is ASCII, stuffed into the BIOS keyboard buffer.
+400 hi
+0 enter

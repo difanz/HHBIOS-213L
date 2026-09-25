@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+bash "$ROOT/tools/build-watcom-com.sh" qa/input/keysock.c build/KEYSOCK.COM qa/input/keysock.asm
+bash "$ROOT/tools/build-watcom-com.sh" qa/input/keyecho.c build/KEYECHO.COM

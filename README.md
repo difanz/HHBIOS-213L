@@ -56,8 +56,9 @@ make vbeprobe
 `ow-snapshot.tar.xz` 里也有 `binl64` 和 `lib286`，把 `WATCOM` 指到解开的目录同样可以。`make` 和 `make check` 仍然只编 `src/*.ASM`。没找到 `wcl` 时，只有 `make vbeprobe` 会停下来并说明怎么装。
 
 ```bash
-make qa-smoke    # 只跑 qa/tests/vbeprobe
-make qa-test     # 跑 qa/tests/ 下全部用例
+make qa-smoke         # 只跑 qa/tests/vbeprobe
+make qa-test          # qa/tests/ 下的接口用例
+make qa-smoke-usage   # qa/smoke-usage/ 的使用冒烟，缺字库就跳过
 ```
 
 没设置 `DISPLAY` 时用 `xvfb-run`。`vbeprobe` 的日志在 `qa/out/vbeprobe/case.log`，里面有 `signature=VESA`、`lfb=yes` 和 `VBEPROBE_OK` 即通过。这份 DOSBox-X 还依赖宿主上的 SDL2_net、libpcap、libslirp、FluidSynth、ncurses；缺了运行脚本会把 `ldd` 列出来。
@@ -70,6 +71,18 @@ make qa-test     # 跑 qa/tests/ 下全部用例
 - `prep`：进 DOS 之前在仓库根执行的命令，例如 `make vbeprobe`
 - `conf`：用 `qa/` 里哪份配置，默认 `dosbox-x-vbe.conf`
 - `skip`：这个文件在，用例就不跑，第一行是原因
+- `keys.txt`：按键序列。一行是「延迟毫秒」再加内容。内容是 ASCII、`enter` `esc` `tab` `bksp` `space` `up` `down` `left` `right`，或 `sc:` 加四个十六进制（扫描码、ASCII）
+- `guest.txt`：相对 `qa/guest/` 的路径。缺了文件就跳过，齐了就按文件名拷到测试盘
+
+交互按键走本机 TCP。DOSBox-X 把 COM1 设成 nullmodem 并在 `127.0.0.1` 上听，`qa/input/sendkeys.py` 作为客户端把 `keys.txt` 送进去。客机里的 `KEYSOCK.COM` 在 INT 1Ch 读串口，把扫描码和 ASCII 写进 BIOS 键盘缓冲 `0040:001E`。直接读 60h 端口的程序收不到这些键。换注入方式时改 `qa/input/`，`keys.txt` 保持原样。`qa/tests/keyecho` 会打出 `hi` 再回车，日志里应有 `KEYECHO_OK`。
+
+`qa/guest/` 不进版本库，自己放进去：
+
+- `font/HZK16`：16 点阵字库。没有可以钉死的公开地址，所以没有下载脚本
+- `dos/`：可选。现在的冒烟用 DOSBox-X 自带的命令解释器
+- 编好的 `build/*.COM` 仍从 `build/` 拷到测试盘
+
+`qa/smoke-usage/cn-filename` 在 `font/HZK16` 到位后：先跑 `VGA.COM`（假定它驻留后回到批处理），`CNNAME.COM` 创建文件名，字节是 `D6 D0 CE C4`（GB2312「中文」）加 `.TXT`，然后 `DIR`。这一版核对日志里的 `CNNAME_BYTES=D6D0CEC4`。缺 `qa/guest/font/HZK16` 时这条用例跳过。
 
 `vga-ah0f` 等一个小程序：设 VGA 模式，用 INT 10h AH=0Fh 读 BIOS `0040:0049` 的模式字节。`legacy-213l` 是 2.13L 各模块用例的占位，真正的用例按模块拆成同级目录。
 
@@ -79,8 +92,8 @@ make qa-test     # 跑 qa/tests/ 下全部用例
 
 - `src/`：汇编源码和包含文件
 - `src/c/`：Open Watcom C（`VBEPROBE`）
-- `qa/`：DOSBox-X 配置、下载脚本、`tests/` 用例
-- `tools/`：JWasm 补丁、拼接 `R16` 的脚本、`make check`、编 `VBEPROBE`
+- `qa/`：DOSBox-X 配置、下载脚本、`tests/`、`smoke-usage/`、`input/`
+- `tools/`：JWasm 补丁、拼接 `R16` 的脚本、`make check`、Watcom 编 COM
 - `build/`：`make` 写出的 COM，已在 `.gitignore` 里
 
 原盘用标签 `original-import` 查看。`v0.1.0` 是当前源码树。
