@@ -1,0 +1,3 @@
+Curent displey mode is 03.
+Run CMODE nn to set display demo.
+The nn is HEX number.

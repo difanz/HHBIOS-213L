@@ -1,2 +1,0 @@
-Waiting on a small COM that sets a VGA mode and prints the INT 10h AH=0Fh mode byte (BIOS 0040:0049).
-Delete this file once build/VGA-AH0F.COM exists and files.txt lists it.

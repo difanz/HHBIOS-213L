@@ -3,4 +3,3 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$ROOT"
 make build/VGA.COM
-bash tools/build-watcom-com.sh qa/smoke-usage/cnname.c build/CNNAME.COM
