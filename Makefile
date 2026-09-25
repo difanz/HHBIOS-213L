@@ -16,7 +16,7 @@ BUILD := build
 ASMS := $(wildcard $(SRC)/*.ASM)
 COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 
-.PHONY: all clean check vbeprobe qa-smoke
+.PHONY: all clean check vbeprobe qa-smoke qa-test
 
 all: $(COMS)
 
@@ -49,3 +49,7 @@ $(BUILD)/VBEPROBE.COM: src/c/vbeprobe.c tools/build-vbeprobe.sh
 # Fetch pinned DOSBox-X if needed, build VBEPROBE, run it, check the log.
 qa-smoke:
 	bash qa/smoke.sh
+
+# Every qa/tests/* case. Directories with a skip file are reported and not run.
+qa-test:
+	bash qa/run-suite.sh

@@ -1,0 +1,1 @@
+Slot for 2.13L COM edge cases. Add qa/tests/<module>-<case>/ with the same files as vbeprobe.

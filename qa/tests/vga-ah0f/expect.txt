@@ -1,0 +1,3 @@
+# Substring markers for the future mode-byte probe.
+MODE=
+VGA_AH0F_OK

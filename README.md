@@ -56,10 +56,22 @@ make vbeprobe
 `ow-snapshot.tar.xz` 里也有 `binl64` 和 `lib286`，把 `WATCOM` 指到解开的目录同样可以。`make` 和 `make check` 仍然只编 `src/*.ASM`。没找到 `wcl` 时，只有 `make vbeprobe` 会停下来并说明怎么装。
 
 ```bash
-make qa-smoke
+make qa-smoke    # 只跑 qa/tests/vbeprobe
+make qa-test     # 跑 qa/tests/ 下全部用例
 ```
 
-没设置 `DISPLAY` 时用 `xvfb-run`。日志在 `qa/out/vbeprobe.log`，里面有 `signature=VESA`、`lfb=yes` 和 `VBEPROBE_OK` 即通过。这份 DOSBox-X 还依赖宿主上的 SDL2_net、libpcap、libslirp、FluidSynth、ncurses；缺了 `qa/smoke.sh` 会把 `ldd` 列出来。
+没设置 `DISPLAY` 时用 `xvfb-run`。`vbeprobe` 的日志在 `qa/out/vbeprobe/case.log`，里面有 `signature=VESA`、`lfb=yes` 和 `VBEPROBE_OK` 即通过。这份 DOSBox-X 还依赖宿主上的 SDL2_net、libpcap、libslirp、FluidSynth、ncurses；缺了运行脚本会把 `ldd` 列出来。
+
+下一批是 2.13L 旧模块的边界用例，按 `qa/tests/<名字>/` 往里加，先别写 VESA 驱动。一个目录就是一条用例：
+
+- `case.bat`：挂上测试盘之后的 DOS 命令，一行一条。运行器把每条的输出收进 `case.log`；行里已经写了 `>` 就保持原样
+- `expect.txt`：日志里要出现的 ASCII 字样，一行一条（`#` 开头是注释）
+- `files.txt`：从仓库根拷到测试盘的文件，例如 `build/VBEPROBE.COM`
+- `prep`：进 DOS 之前在仓库根执行的命令，例如 `make vbeprobe`
+- `conf`：用 `qa/` 里哪份配置，默认 `dosbox-x-vbe.conf`
+- `skip`：这个文件在，用例就不跑，第一行是原因
+
+`vga-ah0f` 等一个小程序：设 VGA 模式，用 INT 10h AH=0Fh 读 BIOS `0040:0049` 的模式字节。`legacy-213l` 是 2.13L 各模块用例的占位，真正的用例按模块拆成同级目录。
 
 `qa/dosbox-x-vga.conf` 用 `machine=vgaonly`，留给以后的 VGA 12h。`qa/dosbox-x-vbe.conf` 用 `machine=svga_s3`（带线性帧缓冲）。银行切换用 `machine=vesa_nolfb`。
 

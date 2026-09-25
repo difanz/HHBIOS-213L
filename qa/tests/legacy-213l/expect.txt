@@ -1,0 +1,2 @@
+# Markers the module under test should print.
+LEGACY_OK
