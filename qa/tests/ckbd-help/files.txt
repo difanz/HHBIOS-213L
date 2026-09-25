@@ -1,2 +1,2 @@
-build/VGA.COM
+build/CKBD.COM
 build/WAITSHOT.COM

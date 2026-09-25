@@ -1,0 +1,2 @@
+build/CKBD.COM
+qa/tests/ckbd-already/213L.INI

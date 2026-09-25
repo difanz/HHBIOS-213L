@@ -17,6 +17,11 @@
 #               socket; qa/input/sendkeys.py sends the file after ready.flg
 #               appears on the drive. The guest TSR writes the BIOS keyboard
 #               buffer. See qa/input/sendkeys.py.
+#   capture.txt One PNG basename (for example hz-draw.png). The guest writes
+#               SHOT.FLG when the screen is ready and waits on INT 16h.
+#               The host focuses the DOSBox-X window, sends Host+P
+#               (F12 held, then P), then Enter so the guest continues.
+#               The PNG is renamed under qa/out/captures.
 #
 # Usage: qa/run-suite.sh [--label NAME] [--root qa/tests] [test-name ...]
 # With no test names, every directory under the suite root is considered.
@@ -111,6 +116,83 @@ out_for() {
     fi
 }
 
+# Host+P is the DOSBox-X screenshot chord. -silent forces a dummy video
+# driver, so a capture case starts its own X server and omits -silent.
+SHOT_DISPLAY=""
+ensure_shot_display() {
+    local disp=:97
+    local i
+    if [[ -n "$SHOT_DISPLAY" ]]; then
+        export DISPLAY=$SHOT_DISPLAY
+        return 0
+    fi
+    mkdir -p "$ROOT/qa/out"
+    if ! DISPLAY=$disp xdpyinfo >/dev/null 2>&1; then
+        Xvfb "$disp" -ac -screen 0 1280x800x24 >"$ROOT/qa/out/xvfb.log" 2>&1 &
+        echo $! >"$ROOT/qa/out/xvfb.pid"
+        for i in $(seq 1 50); do
+            if DISPLAY=$disp xdpyinfo >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.1
+        done
+    fi
+    if ! DISPLAY=$disp xdpyinfo >/dev/null 2>&1; then
+        echo "$LABEL: Xvfb $disp did not start" >&2
+        return 1
+    fi
+    if ! DISPLAY=$disp xdotool search --class Xfwm4 >/dev/null 2>&1; then
+        DISPLAY=$disp xfwm4 >"$ROOT/qa/out/xfwm.log" 2>&1 &
+        echo $! >"$ROOT/qa/out/xfwm.pid"
+        sleep 0.6
+    fi
+    SHOT_DISPLAY=$disp
+    export DISPLAY=$disp
+}
+
+# Rename the PNG that Host+P just wrote. Returns 0 when the file is in place.
+take_shot() {
+    local pid=$1
+    local destname=$2
+    local wid="" i png before after
+    local cap="$ROOT/qa/out/captures"
+    for i in $(seq 1 50); do
+        wid=$(DISPLAY=$DISPLAY xdotool search --pid "$pid" 2>/dev/null | head -n 1 || true)
+        if [[ -n "$wid" ]]; then
+            break
+        fi
+        sleep 0.1
+    done
+    if [[ -z "$wid" ]]; then
+        echo "$LABEL: DOSBox-X window not found for pid $pid" >&2
+        return 1
+    fi
+    DISPLAY=$DISPLAY xdotool windowactivate --sync "$wid" || true
+    sleep 0.4
+    find "$cap" -maxdepth 1 -name '*.png' -printf '%f\n' | sort >"$cap/.before"
+    DISPLAY=$DISPLAY xdotool keydown F12
+    sleep 0.12
+    DISPLAY=$DISPLAY xdotool key p
+    sleep 0.12
+    DISPLAY=$DISPLAY xdotool keyup F12
+    png=""
+    for i in $(seq 1 40); do
+        find "$cap" -maxdepth 1 -name '*.png' -printf '%f\n' | sort >"$cap/.after"
+        png=$(comm -13 "$cap/.before" "$cap/.after" | head -n 1 || true)
+        if [[ -n "$png" ]]; then
+            break
+        fi
+        sleep 0.1
+    done
+    rm -f "$cap/.before" "$cap/.after"
+    if [[ -z "$png" ]]; then
+        echo "$LABEL: Host+P did not write a PNG" >&2
+        return 1
+    fi
+    mv "$cap/$png" "$cap/$destname"
+    echo "$LABEL: captured qa/out/captures/$destname"
+}
+
 passed=0
 skipped=0
 failed=0
@@ -120,7 +202,7 @@ run_one() {
     local name conf_name conf stage line src base
     local out found log marker markers=0 miss=0
     local dbx_status reason mount_rel
-    local port dbx_pid ready keys_status
+    local port dbx_pid ready keys_status shot_name="" shot_ok=0
 
     name=$(basename "$dir")
     if [[ ! -d "$dir" ]]; then
@@ -245,57 +327,150 @@ run_one() {
         done <"$dir/guest.txt"
     fi
 
-    set +e
-    if [[ -f "$dir/keys.txt" ]]; then
-        port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
-        echo "KEYS $name via 127.0.0.1:$port"
-        run_dbx "$BIN" \
-            -conf "$conf" \
-            -set "serial serial1=nullmodem port:${port} sock:0 usedtr:0 transparent:1" \
-            -nomenu \
-            -fastlaunch \
-            -silent \
-            -time-limit 45 \
-            -c "mount c $mount_rel" \
-            -c "c:" \
-            -c "run.bat" \
-            -c "exit" \
-            >"$out/dosbox.log" 2>&1 &
-        dbx_pid=$!
-        ready=""
-        local spins
-        for spins in $(seq 1 200); do
-            ready=$(find "$stage" -iname 'ready.flg' -type f | head -n 1)
-            if [[ -n "$ready" ]]; then
-                break
-            fi
-            if ! kill -0 "$dbx_pid" 2>/dev/null; then
-                break
-            fi
-            sleep 0.1
-        done
-        if [[ -z "$ready" ]]; then
-            echo "FAIL $name: ready.flg was not created" >&2
-            kill "$dbx_pid" 2>/dev/null || true
-            wait "$dbx_pid" 2>/dev/null || true
-            echo "--- qa/out/.../$name/dosbox.log ---" >&2
-            tail -n 40 "$out/dosbox.log" >&2 || true
+    if [[ -f "$dir/capture.txt" ]]; then
+        local raw_cap
+        while IFS= read -r raw_cap || [[ -n "$raw_cap" ]]; do
+            raw_cap=$(trim "${raw_cap%%#*}")
+            [[ -z "$raw_cap" ]] && continue
+            shot_name=$raw_cap
+            break
+        done <"$dir/capture.txt"
+        case "$shot_name" in
+            *.png) ;;
+            *)
+                echo "FAIL $name: capture.txt needs one name ending in .png" >&2
+                failed=$((failed + 1))
+                return 0
+                ;;
+        esac
+        case "$shot_name" in
+            */*|\\*|~*|*..*)
+                echo "FAIL $name: capture name must be a bare file: $shot_name" >&2
+                failed=$((failed + 1))
+                return 0
+                ;;
+        esac
+        if ! command -v xdotool >/dev/null 2>&1 || ! command -v Xvfb >/dev/null 2>&1; then
+            echo "FAIL $name: capture needs Xvfb and xdotool" >&2
             failed=$((failed + 1))
-            set -e
             return 0
         fi
-        python3 "$ROOT/qa/input/sendkeys.py" --port "$port" --keys "$dir/keys.txt"
-        keys_status=$?
-        if [[ "$keys_status" -ne 0 ]]; then
-            echo "FAIL $name: sendkeys exited $keys_status" >&2
-            kill "$dbx_pid" 2>/dev/null || true
-            wait "$dbx_pid" 2>/dev/null || true
+        if ! ensure_shot_display; then
+            echo "FAIL $name: capture display did not start" >&2
             failed=$((failed + 1))
-            set -e
             return 0
+        fi
+    fi
+
+    set +e
+    if [[ -f "$dir/keys.txt" || -n "$shot_name" ]]; then
+        local -a dbx_set=()
+        local spins limit=45
+        if [[ -f "$dir/keys.txt" ]]; then
+            port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+            echo "KEYS $name via 127.0.0.1:$port"
+            dbx_set+=(-set "serial serial1=nullmodem port:${port} sock:0 usedtr:0 transparent:1")
+        fi
+        if [[ -n "$shot_name" ]]; then
+            echo "SHOT $name -> qa/out/captures/$shot_name"
+            dbx_set+=(-set "dosbox captures=${ROOT}/qa/out/captures")
+            limit=120
+            DISPLAY=$SHOT_DISPLAY SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy \
+                "$BIN" \
+                -conf "$conf" \
+                "${dbx_set[@]}" \
+                -nomenu \
+                -fastlaunch \
+                -time-limit "$limit" \
+                -c "mount c $mount_rel" \
+                -c "c:" \
+                -c "run.bat" \
+                -c "exit" \
+                >"$out/dosbox.log" 2>&1 &
+        else
+            run_dbx "$BIN" \
+                -conf "$conf" \
+                "${dbx_set[@]}" \
+                -nomenu \
+                -fastlaunch \
+                -silent \
+                -time-limit "$limit" \
+                -c "mount c $mount_rel" \
+                -c "c:" \
+                -c "run.bat" \
+                -c "exit" \
+                >"$out/dosbox.log" 2>&1 &
+        fi
+        dbx_pid=$!
+        if [[ -f "$dir/keys.txt" ]]; then
+            ready=""
+            for spins in $(seq 1 200); do
+                ready=$(find "$stage" -iname 'ready.flg' -type f | head -n 1)
+                if [[ -n "$ready" ]]; then
+                    break
+                fi
+                if ! kill -0 "$dbx_pid" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.1
+            done
+            if [[ -z "$ready" ]]; then
+                echo "FAIL $name: ready.flg was not created" >&2
+                kill "$dbx_pid" 2>/dev/null || true
+                wait "$dbx_pid" 2>/dev/null || true
+                echo "--- qa/out/.../$name/dosbox.log ---" >&2
+                tail -n 40 "$out/dosbox.log" >&2 || true
+                failed=$((failed + 1))
+                set -e
+                return 0
+            fi
+            python3 "$ROOT/qa/input/sendkeys.py" --port "$port" --keys "$dir/keys.txt"
+            keys_status=$?
+            if [[ "$keys_status" -ne 0 ]]; then
+                echo "FAIL $name: sendkeys exited $keys_status" >&2
+                kill "$dbx_pid" 2>/dev/null || true
+                wait "$dbx_pid" 2>/dev/null || true
+                failed=$((failed + 1))
+                set -e
+                return 0
+            fi
+        fi
+        if [[ -n "$shot_name" ]]; then
+            ready=""
+            for spins in $(seq 1 1000); do
+                ready=$(find "$stage" -iname 'shot.flg' -type f | head -n 1)
+                if [[ -n "$ready" ]]; then
+                    break
+                fi
+                if ! kill -0 "$dbx_pid" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.1
+            done
+            if [[ -z "$ready" ]]; then
+                echo "FAIL $name: SHOT.FLG was not created" >&2
+                kill "$dbx_pid" 2>/dev/null || true
+                wait "$dbx_pid" 2>/dev/null || true
+                echo "--- dosbox.log ---" >&2
+                tail -n 40 "$out/dosbox.log" >&2 || true
+                failed=$((failed + 1))
+                set -e
+                return 0
+            fi
+            if take_shot "$dbx_pid" "$shot_name"; then
+                shot_ok=1
+            fi
+            # Release INT 16h. Host+P is consumed as the screenshot chord.
+            DISPLAY=$SHOT_DISPLAY xdotool key Return || true
         fi
         wait "$dbx_pid"
         dbx_status=$?
+        if [[ -n "$shot_name" && "$shot_ok" -ne 1 ]]; then
+            echo "FAIL $name: screenshot was not captured" >&2
+            failed=$((failed + 1))
+            set -e
+            return 0
+        fi
     else
         run_dbx "$BIN" \
             -conf "$conf" \

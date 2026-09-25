@@ -1,4 +1,4 @@
 @echo off
-vga.com /?
+ckbd.com /?
 type case.log > con
 waitshot.com

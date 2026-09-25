@@ -2,5 +2,4 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$ROOT"
-make build/VGA.COM
-bash tools/build-watcom-com.sh qa/input/waitshot.c build/WAITSHOT.COM
+bash tools/build-watcom-com.sh src/c/mode12.c build/MODE12.COM
