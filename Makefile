@@ -16,7 +16,7 @@ BUILD := build
 ASMS := $(wildcard $(SRC)/*.ASM)
 COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 
-.PHONY: all clean check
+.PHONY: all clean check vbeprobe qa-smoke
 
 all: $(COMS)
 
@@ -39,3 +39,13 @@ check: all
 
 clean:
 	rm -rf $(BUILD)
+
+# 16-bit DOS VBE probe. Needs Open Watcom (wcl). Does not run as part of `all`.
+vbeprobe: $(BUILD)/VBEPROBE.COM
+
+$(BUILD)/VBEPROBE.COM: src/c/vbeprobe.c tools/build-vbeprobe.sh
+	bash tools/build-vbeprobe.sh
+
+# Fetch pinned DOSBox-X if needed, build VBEPROBE, run it, check the log.
+qa-smoke:
+	bash qa/smoke.sh

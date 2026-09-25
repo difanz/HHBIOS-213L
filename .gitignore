@@ -1,4 +1,7 @@
 build/
+qa/.cache/
+qa/out/
+*.o
 *.err
 *.ERR
 *.lst
