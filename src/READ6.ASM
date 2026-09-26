@@ -172,6 +172,10 @@ L_S52:
 		MOV	AX,257FH
 		INT	21H
 
+		MOV	ES,DS:[2CH]
+		MOV	AH,49H			; release the unused environment
+		INT	21H
+
 	INCLUDE EXIT1.INC			;1.24
 
 		MOV	BYTE PTR DS:[100H],'6'  ;READ6±Í÷æ

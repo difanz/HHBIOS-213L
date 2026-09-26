@@ -24,6 +24,14 @@ int main(int argc, char **argv)
     int valid = 0;
     if (argc != 2) return 1;
     memset(&r, 0, sizeof(r));
+    if (!strcmp(argv[1], "reader")) {
+        r.x.ax = 0x4a06; r.x.si = 3; intr(0x2f, &r);
+        if (r.x.bx != 0x4a06) return 7;
+        out = fopen("READER.BIN", "wb");
+        if (!out) return 2;
+        if (fputc(*(unsigned char __far *)MK_FP(r.x.cx, 0x100), out) == EOF) return 4;
+        return fclose(out) != 0;
+    }
     if (!strcmp(argv[1], "off")) {
         r.h.ah = 0x51; intr(0x21, &r); psp = r.x.bx;
         segment = *(unsigned __far *)MK_FP(psp, 0x2c);

@@ -169,6 +169,10 @@ UMBs, and DOS-managed UMBs with the XMS discovery interface hidden by a small gu
 fixture. Font tests use distinct simplified/traditional glyph data to verify both
 selection orders and shared single-font storage. The READ2 case checks that an
 extra 16 font bytes require only one extra paragraph, with no retained environment.
+`R16` cases reserve real XMS/EMS handles, leaving exactly 256 KiB, exactly 16
+EMS pages, or two separate 192 KiB XMS holes. They check the chosen reader,
+glyph bytes, conventional memory use and complete reclamation. `READ6` also
+checks that its startup environment is released while its resident block remains.
 API failure injection separately executes the allocator procedures extracted from
 all 15 production modules, including unsupported DOS versions and failed queries,
 linking, strategy changes, and allocation.

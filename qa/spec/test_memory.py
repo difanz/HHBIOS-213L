@@ -3,6 +3,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 
 import pytest
 
@@ -59,14 +60,21 @@ def memory_build(guest_build, assembler, source_dir, tmp_path_factory):
     build = subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/memory.c',
                             str(out / 'MEMORY.COM')], cwd=ROOT, env=env, capture_output=True, text=True)
     assert build.returncode == 0, build.stdout + build.stderr
-    for reader in ('READ4', 'READ6'):
+    for reader in ('READ3', 'READ4', 'READ6', 'R16'):
         build = subprocess.run([assembler, '-q', '-Zm', '-bin', f'-I{source_dir}',
                                 f'-Fo{out}/{reader}.COM', str(source_dir / f'{reader}.ASM')],
                                env=env, capture_output=True)
         assert build.returncode == 0, build.stdout + build.stderr
+    build = subprocess.run([sys.executable, str(ROOT / 'tools/joinr16.py'), str(out / 'R16.COM'),
+                            *(str(out / f'READ{n}.COM') for n in range(3, 7)), str(out / 'R16.COM')],
+                           capture_output=True)
+    assert build.returncode == 0, build.stdout + build.stderr
     build = subprocess.run([assembler, '-q', '-Zm', '-bin',
                             f'-Fo{out}/NOXMS.COM', str(ROOT / 'qa/harness/noxms.asm')],
                            env=env, capture_output=True)
+    assert build.returncode == 0, build.stdout + build.stderr
+    build = subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/pressure.c',
+                            str(out / 'PRESSURE.COM')], cwd=ROOT, env=env, capture_output=True, text=True)
     assert build.returncode == 0, build.stdout + build.stderr
     return out
 
@@ -181,3 +189,57 @@ def test_conventional_font_retains_exact_tail_and_no_environment(dosbox_binary, 
         offset = ((0xd6-0xa1)*94 + 0xd0-0xa1)*32
         assert files['GLYPHS.BIN'].read_bytes() == font[offset:offset+32]*2
     assert footprints[1] - footprints[0] == 16, 'font tail rounded to a whole read buffer'
+
+
+@pytest.mark.parametrize('pressure,reader,available', [('xms', b'5', 256),
+                                                     ('ems', b'4', 16),
+                                                     ('fragment', b'4', 384)])
+def test_automatic_reader_under_memory_pressure(dosbox_binary, memory_build, tmp_path,
+                                               pressure, reader, available):
+    for path in memory_build.glob('*.COM'):
+        shutil.copy2(path, tmp_path)
+    shutil.copy2(ROOT / 'fonts/HZK16', tmp_path)
+    hide_xms = ['NOXMS'] if pressure == 'ems' else []
+    files = run_dos(dosbox_binary, tmp_path, ['MEMORY START.TXT', 'PRESSURE '+pressure,
+                    *hide_xms, 'MEMORY BEFORE.TXT', 'R16 > R16.LOG', 'MEMORY reader',
+                    'MEMORY LIVE.TXT', 'MEMORY glyphs', 'MEMORY off', 'MEMORY FREE.TXT',
+                    'PRESSURE free', 'MEMORY END.TXT'],
+                    settings='\n[dos]\nxms=true\nems=true\numb=true\n')
+    start, before, live, freed, end = (Arena(files[name+'.TXT'])
+                                      for name in ('START', 'BEFORE', 'LIVE', 'FREE', 'END'))
+    assert (before.ems if pressure == 'ems' else before.xms) == available
+    if pressure != 'ems':
+        assert struct.unpack('<2H', files['XSPACE.BIN'].read_bytes()) == (
+                192 if pressure == 'fragment' else 256, available)
+    assert files['READER.BIN'].read_bytes() == reader
+    assert live.occupied() == before.occupied(), 'unnecessary conventional residency'
+    assert live.resident(0x7f) >= 0xa000
+    if reader == b'5':
+        assert before.xms - live.xms == 256
+    else:
+        assert before.ems - live.ems == 16
+    assert (freed.occupied(), freed.occupied(True), freed.xms, freed.ems, freed.vectors) == (
+            before.occupied(), before.occupied(True), before.xms, before.ems, before.vectors)
+    assert end.ems == start.ems
+    if pressure != 'ems':
+        assert end.xms == start.xms
+    font = (ROOT / 'fonts/HZK16').read_bytes()
+    offset = ((0xd6-0xa1)*94 + 0xd0-0xa1)*32
+    assert files['GLYPHS.BIN'].read_bytes() == font[offset:offset+32]*2
+
+
+def test_raw_extended_reader_releases_environment(dosbox_binary, memory_build, tmp_path):
+    for path in memory_build.glob('*.COM'):
+        shutil.copy2(path, tmp_path)
+    shutil.copy2(ROOT / 'fonts/HZK16', tmp_path)
+    files = run_dos(dosbox_binary, tmp_path, ['set HHPAD='+'x'*120, 'MEMORY BEFORE.TXT',
+                    'READ6', 'MEMORY LIVE.TXT', 'MEMORY glyphs', 'MEMORY off', 'MEMORY FREE.TXT'],
+                    settings='\n[dos]\nxms=false\nems=false\n')
+    before, live, freed = (Arena(files[name+'.TXT']) for name in ('BEFORE', 'LIVE', 'FREE'))
+    psp = live.resident(0x7f)
+    assert len([b for b in live.blocks if b[2] == psp]) == 1, 'environment still resident'
+    assert freed.occupied() == before.occupied()
+    assert freed.vectors == before.vectors
+    font = (ROOT / 'fonts/HZK16').read_bytes()
+    offset = ((0xd6-0xa1)*94 + 0xd0-0xa1)*32
+    assert files['GLYPHS.BIN'].read_bytes() == font[offset:offset+32]*2
