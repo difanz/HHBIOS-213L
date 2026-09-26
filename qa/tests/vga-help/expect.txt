@@ -1,4 +1,5 @@
 1999.11.23
+CONOUT_OK
 VGA [/B][/C][/G][/H][/K][/L][/N][/P][/Q][/S][/T][/X][/Y][/Z][/0-9]
 /C:AH=0BH
 SHOT_DONE

@@ -10,6 +10,7 @@ int main(void)
     union REGS regs;
     FILE *flag;
 
+    delay(1000);
     flag = fopen("SHOT.FLG", "w");
     if (flag) {
         fputs("1\n", flag);

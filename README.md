@@ -79,11 +79,13 @@ make qa-smoke-usage   # qa/smoke-usage/ 的使用冒烟
 
 16 点阵字库在 `fonts/HZK16`。字节来自原盘标签 `original-import` 里 `H16F.EXE` 的 ARJ 成员 `HZK16F`（261696 字节），运行时文件名用 `HZK16`。`qa/guest/` 仍不进版本库，留给以后自己放的 DOS 树。编好的 `build/*.COM` 还是从 `build/` 拷到测试盘。
 
-`qa/smoke-usage/cn-filename`：先跑 `VGA.COM`（驻留后回到批处理），`CNNAME.COM` 创建文件名，字节是 `D6 D0 CE C4`（GB2312「中文」）加 `.TXT`，然后 `DIR`。日志里要有 `CNNAME_BYTES=D6D0CEC4`。`VGA.COM` 驻留后可见页是图形方式，`DIR` 的文字不在这页上。`CNSHOW.COM` 在这页上把文件名字节画成 `D6D0CEC4.TXT`。日志里的 `DIR` 仍有原始字节。
+字符方式汉字：`READ2.COM` 从 `HZK16` 装 INT 7Fh，`VGA.COM` 驻留并钩住 INT 10h，`CMODE 3` 把对外模式设成 3（字符方式，显存仍按 12h 画 16 点阵）。`qa/input/conout.c` 编出的 `CONOUT.COM` 把 `VIEW.TXT` 里的每个字节交给 INT 10h AH=0Eh（BL=07），字模由 `VGA.COM` 和 `HZK16` 画出。DOSBox-X 里 `TYPE > CON` 是在控制台回调里调用 INT 10h，这样写进显存的字模留不住，用例先把输出拷到 `VIEW.TXT`，再由 `CONOUT` 交给 INT 10h。
 
-`vga-ah0f` 设 VGA 12h，用 INT 10h AH=0Fh 读模式，并核对 BIOS `0040:0049`。`cmode-query` / `cmode-set12` 跑 `CMODE.COM`：无参数时打印当前模式，参数 `12` 把模式设成 12h。`vga-help` 跑 `VGA.COM /?`，帮助退出、不驻留。`vga-id` 在 `VGA.COM` 驻留后用 INT 10h AH=FFh 读回 `AX=0056h`。`vga-mode12` 只用 BIOS 设 12h，画白框并写 `MODE 12H`。
+`qa/smoke-usage/cn-filename`：装好上述栈之后，`CNNAME.COM` 创建文件名，字节是 `D6 D0 CE C4`（GB2312「中文」）加 `.TXT`，然后 `DIR`。日志里要有 `CNNAME_BYTES=D6D0CEC4`。`CONOUT` 把这份目录列表打到屏幕上，截图里应能认出「中文」。
 
-`ckbd-help` 跑 `CKBD.COM /?`，日志里有 `1999.11.17`。`ckbd-already` 装入两次，第二次打印 `CKBD IS ALREADY!`。
+`vga-ah0f` 设 VGA 12h，用 INT 10h AH=0Fh 读模式，并核对 BIOS `0040:0049`。`cmode-query` / `cmode-set12` 跑 `CMODE.COM`：无参数时打印当前模式，参数 `12` 把模式设成 12h。`vga-help` 在字符方式栈之后跑 `VGA.COM /?`（帮助退出、本次不重复驻留），再由 `CONOUT` 把帮助送进 INT 10h。日志里有 `1999.11.23`。画面上应有「显示模块」。`vga-id` 在 `VGA.COM` 驻留后用 INT 10h AH=FFh 读回 `AX=0056h`。`vga-mode12` 只用 BIOS 设 12h，画白框并写 `MODE 12H`。
+
+`ckbd-help` 在同一套字符方式栈之后跑 `CKBD.COM /?`，再由 `CONOUT` 送进屏幕。日志里有 `1999.11.17`，画面上应有「汉字系统键盘模块」。`ckbd-already` 装入两次，第二次打印 `CKBD IS ALREADY!`。
 
 `read2-glyph` 用 `READ2.COM` 从盘上的 `HZK16` 装 INT 7Fh，再取「中」（`D6 D0`）的前八字节 `0100010001047FFE`。`read2-unload` 调用 INT 2Fh `AX=4A06h SI=0` 卸下这组中断，之后 `SI=3` 不再返回 `BX=4A06h`。`hz-draw` 在驻留 `READ2` 和 `VGA.COM` 之后进入 12h，把「中」「文」两字按 3 倍放大画在屏幕上。
 
