@@ -31,8 +31,11 @@ S_EX		PROC	NEAR
 		MOV	AH,0AH
 		CALL	D_XMS
 		MOV	DX,D_HANDF
+		CMP	DX,D_HANDJ
+		JZ	L_EXDONE
 		MOV	AH,0AH
 		CALL	D_XMS
+L_EXDONE:
 		RET
 S_EX		ENDP
 
@@ -147,8 +150,13 @@ L_S40:
 		MOV	D_HANDF,AX
 
 		MOV	AL,DS:[102H]		;第二字库
-		CMP	AL,' '
+		CMP	AL,DS:[101H]		; share repeated font selection
 		JZ	L_S52
+		CMP	AL,'J'
+		JZ	L_SECOND
+		CMP	AL,'F'
+		JNZ	L_S52
+L_SECOND:
 		CALL	S_READ			;拷贝第二字库
 		JB	L_S52
 		MOV	AX,C_THAN
@@ -229,15 +237,9 @@ S_GETUMB	PROC	NEAR
 		INC	DX
 		MOV	D_LEN,DX		;本模块驻留长度(节)
 
-		MOV	AH,10H			;请求UMB
-		CALL	D_XMS			;XMS
-		CMP	AX,1			;=1:成功,BX=段
-		JZ	L_GU1
-		CALL	S_UMB			;分配UMB段BX
-		CMP	AL,AL			;ZF=1
-		RET
-L_GU1:
-		MOV	D_UMB,BX		;取出UMB段
+		; TSR relocation/freeing requires DOS-owned UMBs, not raw XMS UMBs.
+		CALL	S_UMB
+		CMP	AL,AL			; caller checks D_UMB
 		RET
 S_GETUMB	ENDP
 
@@ -248,9 +250,11 @@ S_UMB		PROC	NEAR
 		JB	L_UMB3
 		MOV	AX,5800H		;取内存分配策略AX
 		INT	21H
+		JC	L_UMB3
 		MOV	D_NCFP,AX
 		MOV	AX,5802H		;取UMB连接状态AL
 		INT	21H
+		JC	L_UMB3
 		CBW
 		MOV	D_UMB0,AX
 
@@ -267,6 +271,12 @@ S_UMB		PROC	NEAR
 		INT	21H
 		JC	L_UMB1
 		MOV	D_UMB,AX		;分配块段
+		PUSH	ES
+		MOV	BX,AX
+		DEC	AX
+		MOV	ES,AX
+		MOV	ES:[1],BX		; owner is the relocated PSP
+		POP	ES
 L_UMB1:
 		MOV	AX,5801H		;恢复内存分配策略
 		MOV	BX,D_NCFP
@@ -290,10 +300,11 @@ S_SETINT	ENDP
 
 ;子程序:拷贝字库 AL=字库名(J,F)
 S_READ		PROC	NEAR
-		CMP	AL,'J'
+		CMP	AL,'F'
 		JZ	L_R0
-		MOV	SFILE+5,AL
+		XOR	AL,AL
 L_R0:
+		MOV	SFILE+5,AL
 		XOR	AX,AX
 		MOV	C_TOFF,AX
 		MOV	C_TSEG,AX

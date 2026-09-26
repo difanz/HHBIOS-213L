@@ -135,8 +135,13 @@ L_S40:
 		MOV	F_DL,AL
 
 		MOV	AL,DS:[102H]		;第二字库
-		CMP	AL,' '
+		CMP	AL,DS:[101H]		; share repeated font selection
 		JZ	L_S52
+		CMP	AL,'J'
+		JZ	L_SECOND
+		CMP	AL,'F'
+		JNZ	L_S52
+L_SECOND:
 		CALL	S_READ			;拷贝第二字库
 		JB	L_S52
 		MOV	AX,D_AX

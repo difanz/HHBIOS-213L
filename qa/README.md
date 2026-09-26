@@ -110,8 +110,8 @@ Turbo C 2.01 also uses READ5 so its real-mode IDE has enough conventional memory
 | Command | What it establishes |
 | --- | --- |
 | `make check` | All 51 COM modules assemble; this is not behavioral proof |
-| `make qa-test` | Real 16-bit classifier/repaint/teletype and keyboard instructions, memory boundaries, FSM/geometry cases, incremental updates, transport failure handling |
-| `make qa-dos` | READ2 + VGA + CMODE in the selected DOSBox: raw B800, four VGA planes, attributes, cursor, font API, mode changes, incremental updates |
+| `make qa-test` | Real 16-bit display and keyboard instructions, UMB allocation failures/state restoration, memory boundaries, FSM/geometry cases, transport failures |
+| `make qa-dos` | DOS memory ownership and reclamation, font storage, raw B800, four VGA planes, attributes, cursor, font API, mode changes, incremental updates |
 | `make qa-application` | tvedit glyphs/frames plus editor cursor movement, Delete, Backspace and saved bytes; configured optional editors run the same scenarios |
 | `make qa-all` | All three required layers; missing prerequisites fail |
 | `make qa-mutate` | Eight reviewed display/keyboard faults are caught by actual assertion failures |
@@ -155,6 +155,18 @@ codes. The tests distinguish those conversions from character erasure.
 API checks include the resident IDs, video mode, full 32-byte Chinese glyph,
 and teletype backspace position/data. Rendering is allowed to settle for 24 BIOS
 ticks after each explicit frame write; no host sleep decides test success.
+
+Memory tests walk the DOS MCB chain before installation, after running another
+program, and after two unload/reload cycles. They check resident ownership and
+interrupt bounds, conventional/UMB occupancy, XMS/EMS reclamation, and preservation
+of the caller's environment and DOS allocation policy. Cases cover `/N`, unavailable
+UMBs, and DOS-managed UMBs with the XMS discovery interface hidden by a small guest
+fixture. Font tests use distinct simplified/traditional glyph data to verify both
+selection orders and shared single-font storage. The READ2 case checks that an
+extra 16 font bytes require only one extra paragraph, with no retained environment.
+API failure injection separately executes the allocator procedures extracted from
+all 15 production modules, including unsupported DOS versions and failed queries,
+linking, strategy changes, and allocation.
 
 The framebuffer address comes from HHBIOS's public `INT 10h AX=1406h` API.
 It may be AE02h, not A000h. CRTC registers are recorded for diagnosis, not used

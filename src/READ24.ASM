@@ -957,24 +957,15 @@ D_LEN		DW	0			;本模块长度(节)
 
 ;子程序:取UMB段
 S_GETUMB	PROC	NEAR
-		CALL	S_GETXMS		;取XMS驱动地址
-		JNZ	L_GU2
 		MOV	AX,BP
 		MOV	CL,4
 		SHR	AX,CL
 		INC	AX
 		MOV	D_LEN,AX		;本模块驻留长度(节)
 
-		MOV	AH,10H			;请求UMB
-		CALL	D_XMS			;XMS
-		CMP	AX,1			;=1:成功,BX=段
-		JZ	L_GU1
-		CALL	S_UMB			;分配UMB段BX
-		CMP	AL,AL			;ZF=1
-		RET
-L_GU1:
-		MOV	D_UMB,BX		;取出UMB段
-L_GU2:
+		; TSR relocation/freeing requires DOS-owned UMBs, not raw XMS UMBs.
+		CALL	S_UMB
+		CMP	AL,AL			; caller checks D_UMB
 		RET
 S_GETUMB	ENDP
 
@@ -985,9 +976,11 @@ S_UMB		PROC	NEAR
 		JB	L_UMB3
 		MOV	AX,5800H		;取内存分配策略AX
 		INT	21H
+		JC	L_UMB3
 		MOV	D_NCFP,AX
 		MOV	AX,5802H		;取UMB连接状态AL
 		INT	21H
+		JC	L_UMB3
 		CBW
 		MOV	D_UMB0,AX
 
@@ -1004,6 +997,12 @@ S_UMB		PROC	NEAR
 		INT	21H
 		JC	L_UMB1
 		MOV	D_UMB,AX		;分配块段
+		PUSH	ES
+		MOV	BX,AX
+		DEC	AX
+		MOV	ES,AX
+		MOV	ES:[1],BX		; owner is the relocated PSP
+		POP	ES
 L_UMB1:
 		MOV	AX,5801H		;恢复内存分配策略
 		MOV	BX,D_NCFP

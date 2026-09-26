@@ -37,7 +37,7 @@ def run_process(args, directory, timeout, env=None, keyboard=None):
     assert status == 0, f'DOSBox exited {status}; see {directory}/dosbox.log'
 
 
-def run_dos(binary, directory, commands, timeout=60, physical_keys=False):
+def run_dos(binary, directory, commands, timeout=60, physical_keys=False, settings=''):
     assert not any(p.name.upper() in ('DONE.TXT', 'FAIL.TXT') for p in directory.iterdir()), (
         f'refusing stale guest results in {directory}; use a fresh case directory')
     # Batch commands are explicit. Do not rewrite their redirections.
@@ -65,6 +65,7 @@ def run_dos(binary, directory, commands, timeout=60, physical_keys=False):
     from qa.spec.physical_keyboard import PhysicalKeyboard
     with PhysicalKeyboard(directory) if physical_keys else nullcontext() as keyboard:
         config.write_text((ROOT / 'qa/dosbox.conf').read_text() +
+                          settings +
                           (keyboard.config if keyboard else '') +
                           '\n[autoexec]\n@echo off\nmount c .\nc:\ncall C:\\RUN.BAT\nexit\n')
         if keyboard:

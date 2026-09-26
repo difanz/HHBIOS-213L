@@ -133,7 +133,7 @@ N_EXIT:
 		RET
 S_EXIT1 	ENDP
 
-; Free ES if it is still a live arena block (owner non-zero).
+; Free ES only while it still belongs to the recorded PSP in BX.
 S_FREELIVE	PROC	NEAR
 		PUSH	AX
 		PUSH	DS
@@ -146,8 +146,8 @@ S_FREELIVE	PROC	NEAR
 		CMP	AL,'Z'
 		JNZ	L_FL2
 L_FL1:
-		CMP	WORD PTR DS:[1],0
-		JZ	L_FL2
+		CMP	WORD PTR DS:[1],BX
+		JNZ	L_FL2
 		MOV	AH,49H
 		INT	21H
 L_FL2:

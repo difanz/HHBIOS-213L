@@ -64,8 +64,11 @@ L_60:
 		INT	21H
 		OR	AX,AX
 		JZ	L_70
-		MOV	AX,DS
-		ADD	AX,800H
+		ADD	AX,15			; retain only the bytes actually read
+		MOV	CL,4
+		SHR	AX,CL
+		MOV	DX,DS
+		ADD	AX,DX
 		MOV	DS,AX
 		JMP	SHORT L_60
 L_70:
@@ -78,6 +81,11 @@ L_70:
 		PUSH	AX
 		PUSH	CS
 		POP	DS
+
+		MOV	ES,DS:[2CH]
+		MOV	AH,49H			; release the unused environment
+		INT	21H
+		MOV	WORD PTR DS:[2CH],0
 
 		MOV	DX,OFFSET INT_7F
 		MOV	AX,257FH
