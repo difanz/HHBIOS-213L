@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stage the cached magiblot 16-bit tvdemo when it is already on disk.
+# The zip is not part of the repo. A missing cache skips the case.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+cd "$ROOT"
+make build/READ2.COM build/VGA.COM build/CMODE.COM
+mkdir -p build qa/guest
+unset JWASM
+jwasm -q -Zm -bin -Fo build/SHOTDLY.COM qa/input/shotdelay.asm
+bash tools/build-watcom-com.sh qa/input/keysock.c build/KEYSOCK.COM qa/input/keysock.asm
+src="$ROOT/qa/.cache/tvision/dos16/tvdemo.exe"
+if [[ -f "$src" ]]; then
+    cp "$src" "$ROOT/qa/guest/tvdemo.exe"
+fi

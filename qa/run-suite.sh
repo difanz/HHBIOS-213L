@@ -218,25 +218,6 @@ run_one() {
         return 0
     fi
 
-    if [[ -f "$dir/guest.txt" ]]; then
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            line=$(trim "${line%%#*}")
-            [[ -z "$line" ]] && continue
-            case "$line" in
-                /*|~*|*..*)
-                    echo "FAIL $name: guest.txt path must stay inside qa/guest: $line" >&2
-                    failed=$((failed + 1))
-                    return 0
-                    ;;
-            esac
-            if [[ ! -f "$ROOT/qa/guest/$line" ]]; then
-                echo "SKIP $name: missing qa/guest/$line"
-                skipped=$((skipped + 1))
-                return 0
-            fi
-        done <"$dir/guest.txt"
-    fi
-
     if [[ ! -f "$dir/case.bat" ]]; then
         echo "FAIL $name: case.bat is missing" >&2
         failed=$((failed + 1))
@@ -255,6 +236,26 @@ run_one() {
             failed=$((failed + 1))
             return 0
         fi
+    fi
+
+    # After prep, so a case can copy a cached guest binary into qa/guest/.
+    if [[ -f "$dir/guest.txt" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line=$(trim "${line%%#*}")
+            [[ -z "$line" ]] && continue
+            case "$line" in
+                /*|~*|*..*)
+                    echo "FAIL $name: guest.txt path must stay inside qa/guest: $line" >&2
+                    failed=$((failed + 1))
+                    return 0
+                    ;;
+            esac
+            if [[ ! -f "$ROOT/qa/guest/$line" ]]; then
+                echo "SKIP $name: missing qa/guest/$line"
+                skipped=$((skipped + 1))
+                return 0
+            fi
+        done <"$dir/guest.txt"
     fi
 
     conf_name=dosbox-x-vbe.conf
