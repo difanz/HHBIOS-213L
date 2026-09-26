@@ -17,7 +17,7 @@ ASMS := $(wildcard $(SRC)/*.ASM)
 INCS := $(wildcard $(SRC)/*.INC)
 COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 
-.PHONY: all clean check vbeprobe qa-smoke qa-test qa-dos qa-application qa-all qa-mutate qa-legacy qa-smoke-usage
+.PHONY: all clean check qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
 QA_PYTHON ?= python3
 
 all: $(COMS)
@@ -42,12 +42,6 @@ check: all
 clean:
 	rm -rf $(BUILD)
 
-# 16-bit DOS VBE probe. Needs Open Watcom (wcl). Does not run as part of `all`.
-vbeprobe: $(BUILD)/VBEPROBE.COM
-
-$(BUILD)/VBEPROBE.COM: qa/tests/vbeprobe/vbeprobe.c tools/build-vbeprobe.sh
-	bash tools/build-vbeprobe.sh
-
 # Fast production-assembly contracts. No network or GUI dependency.
 qa-test:
 	"$(QA_PYTHON)" qa/run.py unit
@@ -67,11 +61,3 @@ qa-mutate:
 
 qa-smoke:
 	"$(QA_PYTHON)" qa/run.py dos -k mixed_frames
-
-# Historical marker/screenshot scripts, retained for comparison only.
-qa-legacy:
-	bash qa/run-suite.sh
-
-# Usage smokes under qa/smoke-usage/. Missing qa/guest/ files skip the case.
-qa-smoke-usage:
-	bash qa/run-suite.sh --root qa/smoke-usage --label qa-smoke-usage

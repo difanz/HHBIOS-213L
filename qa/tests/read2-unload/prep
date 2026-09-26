@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -eu
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-cd "$ROOT"
-make build/READ2.COM
-bash tools/build-watcom-com.sh qa/tests/read2-unload/unload2.c build/UNLOAD2.COM

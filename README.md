@@ -65,7 +65,7 @@ make qa-mutate       # 验证测试能捕获故意引入的汇编错误
 
 - `src/`：汇编源码和包含文件
 - `fonts/`：字库，`HZK16` 在版本库里
-- `qa/`：`spec/` 测试、`harness/` 客机探针、`tests/` 辅助用例及其 C 探针、测试运行与变异工具
+- `qa/`：`spec/` 测试、`harness/` 客机探针、测试运行与变异工具
 - `tools/`：JWasm 补丁、拼接 `R16` 的脚本、`make check`、Watcom 编 COM
 - `build/`：`make` 写出的 COM，已在 `.gitignore` 里
 

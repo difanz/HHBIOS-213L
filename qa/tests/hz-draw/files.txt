@@ -1,4 +1,0 @@
-fonts/HZK16
-build/READ2.COM
-build/VGA.COM
-build/HZDRAW.COM

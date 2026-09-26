@@ -1,5 +1,0 @@
-signature=VESA
-VBEPROBE_OK
-lfb=yes
-memory_kb=
-win_granularity_kb=

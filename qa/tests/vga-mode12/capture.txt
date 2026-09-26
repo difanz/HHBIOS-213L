@@ -1,1 +1,0 @@
-vga-mode12.png

@@ -1,1 +1,0 @@
-READ1 reads the hard-disk partition table through INT 13h. A folder mount has no BIOS disk.

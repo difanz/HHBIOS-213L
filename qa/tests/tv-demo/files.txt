@@ -1,6 +1,0 @@
-fonts/HZK16
-build/READ2.COM
-build/VGA.COM
-build/CMODE.COM
-build/SHOTDLY.COM
-build/KEYSOCK.COM

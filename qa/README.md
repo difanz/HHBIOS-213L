@@ -44,6 +44,11 @@ requirement. Each case uses the common `-conf` / `[autoexec]` interface and a
 private config, so personal DOSBox settings do not affect the test. Executable
 paths/hashes are recorded in ignored output directories for reproduction.
 
+The GB2312 filename case first checks DOS file creation without HHBIOS. If the
+emulator rejects these filename bytes, the case reports a skip with its DOS
+error code. Supported environments must create, enumerate, reopen and read the
+same filename and contents with HHBIOS loaded.
+
 For the application layer, download the tvision r415 editor fixture:
 
 ```sh
@@ -111,7 +116,7 @@ Turbo C 2.01 also uses READ5 so its real-mode IDE has enough conventional memory
 | --- | --- |
 | `make check` | All 51 COM modules assemble; this is not behavioral proof |
 | `make qa-test` | Real 16-bit display and keyboard instructions, UMB allocation failures/state restoration, memory boundaries, FSM/geometry cases, transport failures |
-| `make qa-dos` | DOS memory ownership and reclamation, font storage, raw B800, four VGA planes, attributes, cursor, font API, mode changes, incremental updates |
+| `make qa-dos` | DOS memory ownership and reclamation, font storage, raw B800, four VGA planes, attributes, cursor, font API, mode changes, incremental updates, command-line behavior, VBE queries and GB2312 filenames |
 | `make qa-application` | tvedit glyphs/frames plus editor cursor movement, Delete, Backspace and saved bytes; configured optional editors run the same scenarios |
 | `make qa-all` | All three required layers; missing prerequisites fail |
 | `make qa-mutate` | Eight reviewed display/keyboard faults are caught by actual assertion failures |
@@ -211,12 +216,3 @@ results cannot be generalized to every BIOS/font/card combination.
 
 The framework uses [pytest fixtures/parametrization](https://docs.pytest.org/en/stable/how-to/fixtures.html)
 and [Unicorn's CPU execution API](https://github.com/unicorn-engine/unicorn/wiki/Quick-Start).
-
-## Auxiliary probes
-
-`make qa-legacy` and `make qa-smoke-usage` run the shell probes in `qa/tests`
-and `qa/smoke-usage`, using helpers from `qa/input`. Each case's C probe lives
-alongside its `prep`, `case.bat` and expectations. These targets are outside
-`qa-all`. Their expectations differ from the display contract: `half-del`
-expects erasure of the unmodified half of a Chinese character, and `tv-edit`
-uses space-prefixed Chinese lines. Use `qa/spec` for display regression tests.

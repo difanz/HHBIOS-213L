@@ -1,3 +1,0 @@
-fonts/HZK16
-build/READ2.COM
-build/GLYPH7F.COM

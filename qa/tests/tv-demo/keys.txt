@@ -1,4 +1,0 @@
-# After the desktop is up: Alt-W, then the first Windows-menu item.
-6000 sc:1100
-500 down
-300 enter

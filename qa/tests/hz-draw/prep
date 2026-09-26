@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -eu
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-cd "$ROOT"
-make build/READ2.COM build/VGA.COM
-bash tools/build-watcom-com.sh qa/tests/hz-draw/hzdraw.c build/HZDRAW.COM
