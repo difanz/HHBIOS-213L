@@ -46,6 +46,8 @@ CKBD /E
 VESA
 ```
 
+将 `fonts/HH20.FNT` 放在 DOS 当前目录。中文采用 Noto Sans Mono CJK 的原生 20 像素点阵，西文和常用框线采用 Terminus 10×20 点阵，字符单元为 10×23 像素。简繁字形共享去重后的数据，使用 716 KiB XMS；没有可用 XMS 时使用 EMS 4.0（45 页）。驱动只常驻 16 个字形的缓存。字体来源、开放许可及重建方法见 [字库说明](fonts/README.md)。原有字库读取模块仍为兼容的 16 像素取字接口提供服务。
+
 每次只加载一个显示驱动；`VESA` 与 `VGA`、`EGA`、`HGA` 分别使用。`VESA /N` 强制驻留常规内存，默认优先使用 DOS UMB。该驱动仍按 8086 编译，不依赖 DOS extender、DPMI 或 unreal mode。需要可用的 VGA 兼容 VBE 模式及 B800 映射；不满足条件时拒绝安装。
 
 像素尺寸、扫描线跨度、窗口参数和颜色格式由独立描述符表示，为其他分辨率及高彩色后端提供接口。目前启用的是 800×600 的四平面绘制；高彩色和 LFB 绘制尚未启用。接口、显示页及兼容边界见 [VBE 说明](qa/VBE-RULES.md)。
@@ -85,7 +87,7 @@ make qa-mutate       # 验证测试能捕获故意引入的汇编错误
 ## 目录
 
 - `src/`：汇编源码、包含文件和 VESA 驱动的 C/汇编源码
-- `fonts/`：字库，`HZK16` 在版本库里
+- `fonts/`：原有 `HZK16`、VESA 用的 `HH20.FNT`、字体许可和来源记录
 - `qa/`：`spec/` 测试、`harness/` 客机探针、测试运行与变异工具
 - `tools/`：JWasm 补丁、拼接 `R16` 的脚本、`make check`、Watcom 编 COM
 - `build/`：`make` 写出的 COM，已在 `.gitignore` 里

@@ -1,0 +1,24 @@
+{
+  "name": "HH Console 20",
+  "format": 1,
+  "cell": [
+    10,
+    23
+  ],
+  "em": 20,
+  "records": 9991,
+  "payload_bytes": 733106,
+  "freetype": "2.13.2",
+  "inputs": [
+    {
+      "file": "NotoSansCJK-Regular.ttc",
+      "sha256": "b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a"
+    },
+    {
+      "file": "terminus-normal.otb",
+      "sha256": "482219650d82b9db6330626adf085313fd609086fefa77ad3539b3afb508f06a"
+    }
+  ],
+  "cjk_face": 7,
+  "sha256": "de42dae9e120631226adf5505f076a149135ab5ac24b1ccb70e7c57d77cdb19d"
+}

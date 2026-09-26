@@ -347,7 +347,7 @@ static void extended(void)
         prompt_open=0;
     } else if (op==5) prompt_attr=(u8)request.bx;
     else if (op==6) {
-        request.ax=0x0f12; request.bx=0x1904; request.cx=0x121a;
+        request.ax=0x0f12; request.bx=0x1904; request.cx=(CELL_HEIGHT << 8) | 26;
         request.dx=0x80 | traditional; request.si=screen.width-1;
         request.di=screen.height-1; request.bp=framebuffer;
     } else if (op==7) { logical_mode=(u8)(request.bx >> 8); put8(0x49, logical_mode); }
@@ -386,6 +386,11 @@ u16 CALL dispatch(void)
         request.ax=0x5356; request.bx=1; request.cx=sizeof(screen);
         request.es=resident_segment; request.di=(u16)&screen;
         request.si=resident_bytes; request.bp=banked_text; request.dx=framebuffer;
+        return 1;
+    }
+    if (function==0x14 && lo==19) {
+        request.ax=0x4632; request.bx=font_kind; request.cx=font_kb;
+        request.dx=font_fault; request.si=CELL_WIDTH; request.di=CELL_HEIGHT;
         return 1;
     }
     if (function==0x14 && lo==18) {
@@ -472,7 +477,7 @@ u16 CALL dispatch(void)
         bios(&request); break;
     case 0x11:
         if (lo==0x30) bios(&request);
-        break; /* fixed 8x18 console; no BIOS text font reprogramming */
+        break; /* fixed console grid; no BIOS text font reprogramming */
     case 0x13: {
         u16 saved=position(p), off=request.bp;
         put16(0x50+(p & 7)*2, request.dx);

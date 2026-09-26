@@ -7,7 +7,8 @@ import json
 
 import pytest
 
-from qa.spec.dos import ROOT, digest, run_dos
+from qa.spec.dos import ROOT, digest, run_dos, plane_bits
+from qa.spec.pixels import colored_rows, native_rows
 from qa.spec.machine import FRAME_ALIASES
 from qa.spec.test_dos_display import guest_build  # shared build fixture
 
@@ -20,6 +21,7 @@ def application_dir(guest_build, tmp_path):
     for file in guest_build.glob('*.COM'):
         shutil.copy2(file, tmp_path)
     shutil.copy2(ROOT / 'fonts/HZK16', tmp_path)
+    shutil.copy2(ROOT / 'fonts/HH20.FNT', tmp_path)
     build = subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/appcap.c',
                             str(tmp_path / 'APPCAP.COM'), 'qa/harness/appcap.asm'],
                            cwd=ROOT, capture_output=True, text=True)
@@ -72,7 +74,10 @@ def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir, display):
                                       'APPCAP install', 'TVEDIT VIEW.TXT', 'APPCAP dump'], timeout=45,
                         settings='\n[dosbox]\nmachine=svga_s3\n' if display=='VESA' else '')
     raw = files['APP.BIN'].read_bytes()
-    assert len(raw) == 18416 and raw[:7] == b'\1HHAPP1'
+    assert raw[:7] == b'\1HHAPP2'
+    pitch,cw,ch=struct.unpack_from('<3H',raw,10)
+    assert (pitch,cw,ch)==((100,10,23) if display=='VESA' else (80,8,18))
+    assert len(raw)==4016+pitch*ch*10
     text, plane = raw[16:4016], raw[4016:]
     chars = text[::2]
     font = files['FONT.BIN'].read_bytes()
@@ -92,9 +97,9 @@ def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir, display):
             for half in range(2):
                 cell = index+i+half
                 attr = text[2*cell+1]
-                fg, bg = (255 if attr & 2 else 0), (255 if attr & 32 else 0)
-                expected = bytes((b & fg) | ((255 ^ b) & bg) for b in glyph[half::2]+b'\0\0')
-                actual = bytes(plane[(row*18+y)*80+col+i+half] for y in range(18))
+                bits=native_rows(lead*256+trail,half) if cw==10 else glyph[half::2]+b'\0\0'
+                expected = colored_rows(bits,cw,ch,attr,1)
+                actual = plane_bits(plane,pitch,(col+i+half)*cw,row*ch,cw,ch)
                 assert actual == expected, f'tvedit glyph at {row},{col+i+half}'
     # At least two top-window corners, checked positively against the BIOS font.
     corner_codes = {code: code for code in (0xc9, 0xbb)}
@@ -106,9 +111,9 @@ def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir, display):
         code, attr = text[2*cell:2*cell+2]
         code = corner_codes[code]
         glyph = font[code*16:(code+1)*16]
-        fg, bg = (255 if attr & 2 else 0), (255 if attr & 32 else 0)
-        expected = bytes((b & fg) | ((255 ^ b) & bg) for b in glyph+glyph[-2:])
-        assert bytes(plane[(row*18+y)*80+col] for y in range(18)) == expected
+        bits=native_rows(code) if cw==10 else glyph+glyph[-2:]
+        expected = colored_rows(bits,cw,ch,attr,1)
+        assert plane_bits(plane,pitch,col*cw,row*ch,cw,ch)==expected
 
 
 @pytest.mark.parametrize('editor', ['tvedit', 'borland', 'msedit', 'edit2', 'tc201', 'tc30', 'pct9'])

@@ -3,8 +3,11 @@
 `VGA.COM` retains its 640x480 renderer. The independent `VESA.COM`, built from
 `vesa.c` and `vesa.asm`, draws an 800x600, 16-color console. Load one display
 driver at a time, after a font reader and optionally CKBD. The logical screen
-remains 80x25 cells of 8x18 pixels; the input-method row starts at y=456.
-The remaining right/bottom area is unused by text and accessible to pixel APIs.
+remains 80x25 cells of 10x23 pixels; the input-method row starts at y=575.
+Chinese uses native 20-pixel Noto CJK glyphs, and Western/CP437 uses Terminus
+10x20 bitmaps. Box strokes extend through the row spacing. Font generation,
+licenses, traditional mapping and file format are in [fonts/README.md](../fonts/README.md).
+The final two scanlines remain available to pixel APIs.
 
 VESA queries mode 102h, then a bounded BIOS mode list. It requires VGA-compatible
 800x600 planar 4-bpp graphics, pitch 100, and a readable/writable 64 KiB A000
@@ -42,12 +45,35 @@ integrate arbitrary `4F04h` restoration with its renderer.
 ## Memory and interrupt boundary
 
 Where an extra image page and relocatable window are available, VESA keeps eight
-4 KiB text pages in spare VRAM beginning at offset 64 KiB per plane. B800 is
-mapped while applications run. Refresh copies only the active 4000-byte text page
-to a resident transfer buffer, switches to graphics bank zero, draws changed
+4 KiB text pages in spare VRAM. B800 is
+mapped while applications run. Each outer drawing transaction snapshots the
+active 4000-byte text page in the existing resident transfer buffer before
+switching to graphics bank zero. Refresh draws changed
 cells, and restores the text bank. Classification conversions are copied back
 to the text page. The original `ZJXP.INC` and `HZPOS.INC` are included unchanged.
-No full framebuffer copy or private font cache occupies conventional memory.
+The installer tests candidate banks at 64 KiB intervals, up to four, by
+writing distinct words across all 32 KiB of B800 and clearing the complete
+visible plane through A000. It accepts a bank only if every text word survives.
+This verifies isolation even on BIOS/emulator mappings whose B800 bank address
+differs from the planar A000 address; an advertised extra page alone is not
+sufficient. The selected bank is retained across mode returns.
+
+The read-only `AX=1410h` character-boundary query also works during drawing.
+On a banked adapter, its CX points to this text snapshot; callers must not
+write through it. A query outside drawing first refreshes the snapshot from
+B800. Queries run on the caller's stack and preserve the occupied renderer
+stack, so keyboard IRQ consumers such as EDIT 2.x can still complete a paired
+deletion while a font read is in progress. Interrupts are masked only during
+the bounded 4000-byte snapshot/copy-back operations, not during rasterization
+or XMS/EMS calls. No additional resident text buffer is allocated.
+
+HH20.FNT is loaded before mode installation into XMS, or EMS 4.0 using its
+mapping-preserving move-region service. The resident cache holds 16 packed
+glyphs (1120 bitmap bytes plus 64 bytes of keys/validity). Simplified and
+traditional slot maps share deduplicated glyphs in the external allocation.
+The loader closes its file and releases its allocation on installation failure.
+No full framebuffer or font copy occupies conventional memory. Font lookup
+failures leave the cache entry invalid and set the diagnostic error flag.
 
 On a one-image adapter, the backend probes the VGA 128 KiB aperture. It uses a
 line-aligned scanout wrap when that aperture aliases at 64 KiB, reserving B800
@@ -79,7 +105,10 @@ detected.
 VESA provides text/cursor/page/scroll, teletype, string, palette and pixel BIOS
 operations used by the console, plus HHBIOS font, prompt, bitmap, wide-text,
 redraw, policy and Chinese-boundary interfaces. Font reprogramming is unsupported;
-`AH=11h/AL=30h` still forwards the ROM font query. `AX=1406h` reports maximum pixel
+`AH=11h/AL=30h` still forwards the ROM font query. The compatible `AH=16h`
+bitmap query uses the existing 16-pixel reader; the 8x16 input bitmap API
+scales at the rendering boundary. Normal text draws directly from HH20.FNT.
+`AX=1406h` reports CX=171Ah (23 scanlines, 26 rows) and maximum pixel
 coordinates 799/599. Its framebuffer segment is diagnostic, not a promise of a
 permanently mapped graphics window.
 
@@ -87,6 +116,7 @@ permanently mapped graphics window.
 | --- | --- |
 | `AX=1411h` | Returns AX=5356h, BX=ABI version 1, CX=descriptor size, ES:DI=read-only packed `struct surface` from `vesa.h`, SI=resident bytes, BP=banked-text flag, DX=framebuffer segment. Available while suspended. |
 | `AX=1412h` | Read plane BX=0..3, source byte offset SI, byte count CX, destination ES:DI. Returns AX=0 on success, 1 on invalid bounds/inactive/bank failure, 2 when busy (retry). Source is bounded by 60000 bytes; destination must not wrap. Zero count checks availability without bank changes. Caller serializes subsequent direct text reads against interrupts. |
+| `AX=1413h` | Returns AX=4632h, BX=font storage (1 XMS, 2 EMS), CX=payload size rounded up to KiB, DX=sticky font-read error flag, SI=cell width, DI=cell height. EMS allocation rounds further to 16 KiB pages. |
 
 ## API sequence
 
@@ -128,10 +158,15 @@ Before the mode-set guard, the native BIOS framebuffer matched the test pattern
 but the resident case corrupted it. The test therefore observes the original
 failure, rather than only checking for a success return code.
 
-`test_vesa.py` additionally checks exact Chinese pixels at 800x600, text pages,
+`test_vesa.py` additionally checks exact Chinese pixels and every blank cell
+at 800x600, all text pages across refresh and scrolling,
 offscreen scrolling, prompt bitmaps, wide text, pixel bounds, GC/SEQ ownership,
 state round trips and UMB/conventional MCB ownership. `test_vesa_api.py` executes
 the linked C/ASM COM across foreign stacks with BIOS/allocator failure injection.
+Native simplified/traditional glyphs and an edge-aligned cursor are checked
+with both XMS and EMS in DOS. `test_font20.py` executes the linked loader and
+cache with observable memory-manager calls, including short files, failed
+moves, release on failure and retry after a failed cache miss.
 Real editor movement, whole-character deletion and saved file contents are
 checked by `test_vesa_application.py`. The regular mixed-text pixel suite also
 runs against VESA. These establish framebuffer contents and behavior under
@@ -143,8 +178,9 @@ mode restored. VGA memory mapping and ports remain the emulator's own.
 ## Rendering implementation and performance
 
 `vesa.c` owns mode discovery, geometry validation, BIOS policy and ownership.
-`vesa.asm` owns interrupt entry, VGA/bank access and the planar rasterizer. The
-classifier supplies character/cell coordinates independently of framebuffer
+`vesa.asm` owns interrupt entry, VGA/bank access and the planar rasterizer.
+`vesa_font.c` and `vesa_font.asm` own font loading, XMS/EMS moves and the glyph cache.
+The classifier supplies character/cell coordinates independently of framebuffer
 stride. Drawing batches changed text cells between bank selections, writes four
 planes directly and makes no per-pixel BIOS calls. `VGA.ASM` is unchanged by this
 implementation. Unreal mode and DPMI would add transition and residency costs

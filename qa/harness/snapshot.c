@@ -1,6 +1,7 @@
-/* Observation protocol v1. No PASS strings and no expectations in the guest.
+/* Versioned observation protocol. No expectations in the guest.
  * INPUT.BIN: repeated mode byte + 4000 text bytes. SNAPnn.BIN: raw B800,
- * BDA cursor word, 25 CRTC registers, then four rendered 38400-byte VGA planes.
+ * BDA cursor word, 25 CRTC registers, then four rendered VGA planes.
+ * VESA uses v2: five geometry words after the signature, full physical pixels.
  * FONT.BIN is BIOS 8x16. Query the public HHBIOS framebuffer API: DOSBox-X's
  * protected overflow register readback can disagree with its line comparator.
  * This observes the renderer's framebuffer, not the host window compositor.
@@ -72,7 +73,7 @@ int main(int argc, char **argv)
     union REGPACK display;
     char name[13];
     int mode, frame = 0, plane;
-    unsigned old4, old5, y, framebuffer, pitch, vesa;
+    unsigned old4, old5, y, framebuffer, pitch, vesa, geometry[5], rows, count;
     unsigned char crtc[25];
     if (argc > 1 && strcmp(argv[1], "font") == 0) return font();
     if (argc > 1 && strcmp(argv[1], "api") == 0) return api();
@@ -83,7 +84,7 @@ int main(int argc, char **argv)
     r.x.ax = 0x1411;
     int86(0x10, &r, &r);
     vesa = r.x.ax == 0x5356;
-    /* Hide software cursor, keeping the default 80x25 / 8x18 layout. */
+    /* Hide software cursor, retaining the driver's current cell geometry. */
     r.x.ax = 0x0100; r.x.cx = 0x2000;
     int86(0x10, &r, &r);
     in = fopen("INPUT.BIN", "rb");
@@ -100,7 +101,19 @@ int main(int argc, char **argv)
         sprintf(name, "SNAP%02d.BIN", frame++);
         out = fopen(name, "wb");
         if (!out) return 7;
-        if (fwrite("HHSNAP1\n", 1, 8, out) != 8) return 8;
+        memset(&display, 0, sizeof(display));
+        display.x.ax = 0x1406;
+        intr(0x10, &display);
+        framebuffer = display.x.bp;
+        pitch = (display.x.si+1)/8;
+        if (pitch < 80 || pitch > 128) return 13;
+        if (framebuffer < 0xa000 || framebuffer > 0xb000) return 12;
+        if (fwrite(vesa ? "HHSNAP2\n" : "HHSNAP1\n", 1, 8, out) != 8) return 8;
+        if (vesa) {
+            geometry[0]=display.x.si+1; geometry[1]=display.x.di+1;
+            geometry[2]=pitch; geometry[3]=geometry[0]/80; geometry[4]=display.x.cx>>8;
+            if (fwrite(geometry,2,5,out)!=5) return 8;
+        }
         _disable();
         _fmemcpy(buffer, MK_FP(0xb800, 0), 4000);
         _fmemcpy(buffer + 4000, MK_FP(0x40, 0x50), 2);
@@ -110,23 +123,19 @@ int main(int argc, char **argv)
             outp(0x3d4, y); crtc[y] = inp(0x3d5);
         }
         if (fwrite(crtc, 1, 25, out) != 25) return 8;
-        memset(&display, 0, sizeof(display));
-        display.x.ax = 0x1406;
-        intr(0x10, &display);
-        framebuffer = display.x.bp;
-        pitch = (display.x.si+1)/8;
-        if (pitch < 80 || pitch > 128) return 13;
-        if (framebuffer < 0xa000 || framebuffer > 0xb000) return 12;
         for (plane = 0; plane < 4; ++plane) {
             if (vesa) {
-                for (y=0; y<480; ++y) {
+                for (y=0; y<geometry[1]; y+=rows) {
+                    rows=sizeof(buffer)/pitch;
+                    if (rows>geometry[1]-y) rows=geometry[1]-y;
+                    count=rows*pitch;
                     display.x.ax=0x1412; display.x.bx=plane;
-                    display.x.si=y*pitch; display.x.cx=80;
-                    display.x.es=FP_SEG(buffer); display.x.di=FP_OFF(buffer)+y*80;
+                    display.x.si=y*pitch; display.x.cx=count;
+                    display.x.es=FP_SEG(buffer); display.x.di=FP_OFF(buffer);
                     intr(0x10,&display);
                     if (display.x.ax) return 14;
+                    if (fwrite(buffer,1,count,out)!=count) return 9;
                 }
-                if (fwrite(buffer,1,38400,out)!=38400) return 9;
                 continue;
             }
             _disable();

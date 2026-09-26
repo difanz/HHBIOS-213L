@@ -27,6 +27,7 @@ def prepare(directory, guest_build, vbe_binary, resident, display='VGA'):
     for file in (*guest_build.glob('*.COM'), vbe_binary):
         shutil.copy2(file, directory)
     shutil.copy2(ROOT / 'fonts/HZK16', directory)
+    shutil.copy2(ROOT / 'fonts/HH20.FNT', directory)
     keyboard_config(directory)
     screen = blank()
     put(screen, 2, 10, '中文'.encode('gb2312'))
@@ -35,13 +36,9 @@ def prepare(directory, guest_build, vbe_binary, resident, display='VGA'):
 
 
 def assert_chinese(files):
+    from qa.spec.test_dos_display import assert_hanzi
     shot = Snapshot.read(files['SNAP00.BIN'])
-    font = (ROOT / 'fonts/HZK16').read_bytes()
-    for col, (hi, lo) in zip((10, 12), ((0xd6, 0xd0), (0xce, 0xc4))):
-        offset = ((hi-0xa1)*94 + lo-0xa1)*32
-        glyph = font[offset:offset+32]
-        for half in range(2):
-            assert_pixels(shot, 2, col+half, glyph[half::2]+b'\0\0', 7)
+    assert_hanzi(shot,2,10,'中文')
 
 
 @pytest.mark.parametrize('adapter', ['vesa_oldvbe', 'vesa_nolfb', 'svga_s3'])

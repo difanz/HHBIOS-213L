@@ -179,8 +179,10 @@ registers and drawing events.
 
 The DOS observer returns binary data with a versioned header and exact length.
 Host assertions compare all glyph scanlines in all four planes against the
-BIOS 8x16 font and the committed HZK16, including the driver's 18-line frame
-extension and per-cell colors. B800 attributes and Chinese text must remain
+BIOS 8x16 font and committed HZK16 for VGA, or the distributed HH20.FNT for
+VESA, including frame extensions and per-cell colors. VESA's HHSNAP2 header
+records pixel dimensions, pitch and cell dimensions; all 800x600 pixels are
+captured. B800 attributes and Chinese text must remain
 unchanged; explicitly identified frame cells may use the public conversion
 codes. The tests distinguish those conversions from character erasure.
 API checks include the resident IDs, video mode, full 32-byte Chinese glyph,
@@ -215,14 +217,23 @@ unchanged. These assertions prove framebuffer contents, not host compositing.
 nested calls, foreign caller stacks, returned status, bank failures, initialization
 rollback, state-buffer overflow and DOS UMB allocation failures. Its host C cases
 check geometry, window permissions and RGB masks independently of renderer selection.
+Character-boundary cases poison B800 during a banked draw and require the
+query to use the text snapshot without touching the occupied renderer stack.
 `test_vesa.py` captures all 800x600 pixels in four planes under three VBE profiles,
 checks resident MCB ownership and `/N`, mode/state restoration, GC/SEQ preservation,
-bitmap/wide text, pixel bounds and independent text-page scrolling.
+bitmap/wide text, pixel bounds and all eight text pages across scrolling.
+It checks blank cells across the entire viewport to detect text-bank aliases,
+and checks native simplified/traditional glyphs plus cursor XOR under both
+XMS and EMS. `test_font20.py` executes the linked font loader and cache with
+manager failure injection, verifying file closure, allocation release and
+failed-cache-miss retries. Neither test execution nor a normal build needs
+the optional FreeType/OpenCC font-generation dependencies.
 `test_vesa_application.py` runs the same editing scenarios on VESA as on VGA.
 
 The application observer waits for its unique fixture marker and 24 guest
 ticks. It feeds keys individually, records cursor/row data after each action,
-and captures B800 plus the top ten green-plane rows. DOS writes happen only
+and captures B800 plus the top ten green-plane rows. HHAPP2 records pitch and
+cell dimensions, so the same observer covers VGA and VESA. DOS writes happen only
 after the editor exits. Missing marker, incomplete capture or failed exit is
 a failure. Saved files must match exact expected bytes, including the DOS EOF
 marker written by Turbo C 2.01 and PC Tools. Each editing scenario has an

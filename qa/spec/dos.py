@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import struct
 import subprocess
 import time
 from contextlib import nullcontext
@@ -87,18 +88,34 @@ class Snapshot:
     cursor: tuple[int, int]
     crtc: bytes
     planes: list[bytes]
+    width: int = 640
+    height: int = 480
+    pitch: int = 80
+    cell_width: int = 8
+    cell_height: int = 18
 
     @classmethod
     def read(cls, path):
         raw = path.read_bytes()
-        assert raw[:8] == b'HHSNAP1\n', f'unknown snapshot protocol: {path}'
+        assert raw[:8] in (b'HHSNAP1\n', b'HHSNAP2\n'), f'unknown snapshot protocol: {path}'
+        geometry=(640,480,80,8,18)
+        if raw[:8]==b'HHSNAP2\n':
+            assert len(raw)>=18, f'truncated geometry: {path}'
+            geometry=struct.unpack_from('<5H',raw,8)
+            width,height,pitch,cw,ch=geometry
+            assert 0 < cw <= 32 and 0 < ch <= 32
+            assert width==80*cw and 25*ch <= height <= 1024
+            assert width//8 <= pitch <= 256 and width % 8 == 0
+            raw=raw[:8]+raw[18:]
         raw = raw[8:]
-        assert len(raw) == 4027 + 4 * PLANE, f'truncated/extra snapshot bytes: {path}'
+        size=geometry[1]*geometry[2]
+        assert len(raw) == 4027 + 4 * size, f'truncated/extra snapshot bytes: {path}'
         return cls(raw[:4000], (raw[4001], raw[4000]), raw[4002:4027],
-                   [raw[4027+i*PLANE:4027+(i+1)*PLANE] for i in range(4)])
+                   [raw[4027+i*size:4027+(i+1)*size] for i in range(4)],*geometry)
 
     def glyph(self, row, col, plane=0):
-        return bytes(self.planes[plane][(row*18+y)*80+col] for y in range(18))
+        return plane_bits(self.planes[plane],self.pitch,col*self.cell_width,
+                          row*self.cell_height,self.cell_width,self.cell_height)
 
     def save_ppm(self, path):
         # Dependency-free diagnostic image; pixels are the raw VGA planes.
@@ -107,8 +124,15 @@ class Snapshot:
                    (85, 85, 85), (85, 85, 255), (85, 255, 85), (85, 255, 255),
                    (255, 85, 85), (255, 85, 255), (255, 255, 85), (255, 255, 255)]
         pixels = bytearray()
-        for index in range(PLANE):
-            for bit in range(7, -1, -1):
+        for y in range(self.height):
+            for x in range(self.width):
+                index,bit=y*self.pitch+x//8,7-x%8
                 color = sum(((p[index] >> bit) & 1) << n for n, p in enumerate(self.planes))
                 pixels.extend(palette[color])
-        path.write_bytes(b'P6\n640 480\n255\n' + pixels)
+        path.write_bytes(f'P6\n{self.width} {self.height}\n255\n'.encode()+pixels)
+
+
+def plane_bits(data,pitch,x,y,width,height):
+    """Read actual pixels, including cells that share a framebuffer byte."""
+    return tuple(sum(((data[(y+dy)*pitch+(x+dx)//8] >> (7-(x+dx)%8)) & 1)
+                     << (width-1-dx) for dx in range(width)) for dy in range(height))

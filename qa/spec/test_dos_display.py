@@ -8,6 +8,7 @@ import pytest
 
 from qa.spec.dos import ROOT, Snapshot, digest, run_dos
 from qa.spec.machine import FRAME_ALIASES, blank, put
+from qa.spec.pixels import colored_rows, native_rows
 
 pytestmark = pytest.mark.dos
 
@@ -36,6 +37,7 @@ def capture(dosbox_binary, guest_build, tmp_path, request):
     for file in guest_build.glob('*.COM'):
         shutil.copy2(file, tmp_path)
     shutil.copy2(ROOT / 'fonts/HZK16', tmp_path)
+    shutil.copy2(ROOT / 'fonts/HH20.FNT', tmp_path)
     manifest = {'files': {p.name: digest(p) for p in tmp_path.iterdir()}}
     (tmp_path / 'provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 
@@ -61,6 +63,9 @@ def capture(dosbox_binary, guest_build, tmp_path, request):
 
 
 def assert_char(shot, font, row, col, code, attr=7):
+    if shot.cell_width==10:
+        assert_pixels(shot,row,col,native_rows(code),attr)
+        return
     glyph = font[code*16:(code+1)*16]
     # Box/shading chars extend their last two scanlines to the 18-line cell.
     glyph += glyph[-2:] if 0xb0 <= code <= 0xdf else b'\0\0'
@@ -69,17 +74,19 @@ def assert_char(shot, font, row, col, code, attr=7):
 
 def assert_pixels(shot, row, col, glyph, attr):
     for plane in range(4):
-        fg = 255 if (attr & 15) & (1 << plane) else 0
-        bg = 255 if (attr >> 4) & (1 << plane) else 0
-        expected = bytes((b & fg) | ((b ^ 255) & bg) for b in glyph)
+        expected = colored_rows(glyph,shot.cell_width,shot.cell_height,attr,plane)
         actual = shot.glyph(row, col, plane)
-        assert actual == expected, f'cell ({row},{col}), plane {plane}: {actual.hex()} != {expected.hex()}'
+        assert actual == expected, f'cell ({row},{col}), plane {plane}: {actual} != {expected}'
 
 
 def assert_hanzi(shot, row, col, text, attr=7):
     raw = text.encode('gb2312')
     font = (ROOT / 'fonts/HZK16').read_bytes()
     for i in range(0, len(raw), 2):
+        if shot.cell_width==10:
+            for half in range(2):
+                assert_pixels(shot,row,col+i+half,native_rows(raw[i]*256+raw[i+1],half),attr)
+            continue
         offset = ((raw[i]-0xa1)*94 + raw[i+1]-0xa1)*32
         glyph = font[offset:offset+32]
         assert_pixels(shot, row, col+i, glyph[::2] + b'\0\0', attr)
@@ -139,6 +146,25 @@ def test_vga_incremental_repaint(capture):
     assert_hanzi(shots[1], 2, 4, b'\xe1\xab'.decode('gb2312'))
     assert_char(shots[2], font, 2, 4, 0xe1)
     assert_char(shots[2], font, 2, 5, ord('A'))
+
+
+def test_full_width_grid_and_symbol_spacing(capture):
+    screen=blank()
+    for col in range(80):
+        put(screen,0,col,bytes([33+col]),((col % 8) << 4) | (7-col % 8))
+    samples=['中文测试 800x600', 'αΑ ℃①，Ａ中', '汉字输入，编辑文件']
+    for row,line in zip((3,7,24),samples): put(screen,row,1,line.encode('gb2312'),0x1e)
+    shots,font=capture([(1,screen)])
+    shot=shots[0]
+    assert shot.text==screen
+    for col in range(80): assert_char(shot,font,0,col,33+col,((col % 8) << 4) | (7-col % 8))
+    for row,line in zip((3,7,24),samples):
+        col=1
+        for char in line:
+            encoded=char.encode('gb2312')
+            if len(encoded)==2: assert_hanzi(shot,row,col,char,0x1e)
+            else: assert_char(shot,font,row,col,encoded[0],0x1e)
+            col+=len(encoded)
 
 
 def test_vga_mode_change_without_text_change(capture):

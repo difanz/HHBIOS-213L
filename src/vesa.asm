@@ -16,6 +16,10 @@ extrn display_start:word, split_line:word
 extrn text_bank:word, banked_text_allowed:byte
 extrn font_segment:word, font_offset:word, active:byte, busy:byte, traditional:byte
 extrn direct:byte
+extrn font_get:near, font_open:near, font_close:near, font_bitmap:near
+CELL_WIDTH equ 10
+CELL_HEIGHT equ 23
+GLYPH_HEIGHT equ 20
 start: jmp install
 
 old10 dd 0
@@ -27,12 +31,16 @@ public policy, hanzi, shadow, frame_alias_offset
 hanzi db 1
 D_B800 dw 0b800h
 D_005A db 1
-glyph_bits db 36 dup (0)
+glyph_bits dw CELL_HEIGHT*2 dup (0)
+wide_bits dw CELL_HEIGHT*2 dup (0)
+legacy_bits db 16 dup (0)
+raster_rows dw CELL_HEIGHT dup (0)
+cell_keep dw 0
+cell_shift db 0
+cursor_bits dw 0
 cell_attr db 0
-plane_mask db 0
+plane_number db 0
 glyph_width db 1
-cell_column db 0
-hz_box db 0
 plane_xor dw 0
 plane_background dw 0
 saved_gc db 9 dup (0)
@@ -73,6 +81,8 @@ load_regs macro
 endm
 
 int10_handler proc far
+    cmp ax,1410h
+    je query_boundary
     cmp cs:busy,0
     jne busy10
     mov cs:busy,1
@@ -129,6 +139,47 @@ busy10:
     iret
 chain10:
     jmp cs:old10
+query_boundary:
+    ; Keyboard IRQ handlers may ask while a font read has interrupted drawing.
+    ; Use the current text snapshot without entering the occupied C stack.
+    push ds
+    push es
+    push si
+    push di
+    push dx
+    push bp
+    push cs:D_B800
+    call classifier_policy
+    cmp cs:active,0
+    je query_inactive
+    cmp cs:banked_text,0
+    je query_scan
+    cmp cs:video_depth,0
+    jne query_snapshot
+    call snapshot_text
+query_snapshot:
+    mov ax,offset text_transfer
+    mov cl,4
+    shr ax,cl
+    mov bx,cs
+    add ax,bx
+    mov cs:D_B800,ax
+query_scan:
+    call S_HZPOS
+    jmp short query_done
+query_inactive:
+    xor ax,ax
+    xor cx,cx
+    mov bx,4b48h
+query_done:
+    pop cs:D_B800
+    pop bp
+    pop dx
+    pop di
+    pop si
+    pop es
+    pop ds
+    iret
 int10_handler endp
 
 int8_handler proc far
@@ -291,6 +342,14 @@ aperture_limited:
     mov cs:banked_text,1
 aperture_banked:
     mov cs:framebuffer,0a000h
+    cmp cs:aperture_alias,0ffh
+    jne aperture_known_bank
+    ; BIOS bank granularity alone does not prove where a remapped B800
+    ; window lands. Probe all eight pages against the entire visible plane.
+    call probe_text_bank
+    jc aperture_failed
+    mov cs:aperture_alias,0
+aperture_known_bank:
     mov dx,cs:text_bank
     call select_bank
     jc aperture_failed
@@ -340,6 +399,25 @@ invalidate endp
 
 ; The classifier is shared verbatim with VGA/EGA/HGA. No translated FSM.
 public refresh
+snapshot_text proc near
+    save_regs
+    cli
+    mov ax,cs:active_page
+    mov cl,8
+    shl ax,cl
+    add ax,0b800h
+    mov ds,ax
+    push cs
+    pop es
+    xor si,si
+    mov di,offset text_transfer
+    mov cx,2000
+    cld
+    rep movsw
+    load_regs
+    ret
+snapshot_text endp
+
 refresh proc near
     save_regs
     call classifier_policy
@@ -348,10 +426,6 @@ refresh proc near
     pop es
     cmp cs:banked_text,0
     je refresh_ready
-    xor si,si
-    mov di,offset text_transfer
-    mov cx,2000
-    rep movsw
     mov ax,offset text_transfer
     mov cl,4
     shr ax,cl
@@ -375,7 +449,10 @@ refresh_ready:
     mov si,offset text_transfer
     xor di,di
     mov cx,2000
+    pushf
+    cli
     rep movsw
+    popf
 refresh_done:
     load_regs
     ret
@@ -403,28 +480,14 @@ classifier_policy endp
 S_XSZF proc near
     push dx
     push bx
-    push ax
     xor ah,ah
-    mov cl,4
-    shl ax,cl
-    mov si,cs:font_offset
-    add si,ax
-    mov ds,cs:font_segment
     push cs
-    pop es
-    mov di,offset glyph_bits
-    mov cx,8
-    rep movsw
-    xor ax,ax
-    stosw
-    pop ax
-    cmp al,0b0h
-    jb ascii_tail
-    cmp al,0dfh
-    ja ascii_tail
-    mov ax,cs:word ptr glyph_bits+14
-    mov cs:word ptr glyph_bits+16,ax
-ascii_tail:
+    pop ds
+    mov si,offset glyph_bits
+    push si
+    push ax
+    call font_get
+    add sp,4
     pop bx
     pop dx
     push cs
@@ -437,33 +500,13 @@ S_XSZF endp
 S_XSHZ proc near
     push dx
     push bx
-    mov cs:hz_box,0
-    cmp ah,0a9h
-    jne hanzi_font
-    mov cs:hz_box,1
-hanzi_font:
-    mov dx,ax
-    mov ah,cs:traditional
-    int 7fh
-    mov ds,dx
-    xor si,si
-    mov di,offset glyph_bits
-    mov cx,16
-copy_hanzi:
-    lodsw
-    mov cs:[di],al
-    mov cs:[di+18],ah
-    inc di
-    loop copy_hanzi
-    mov word ptr cs:glyph_bits+16,0
-    mov word ptr cs:glyph_bits+34,0
-    cmp cs:hz_box,0
-    je hanzi_tail
-    mov ax,word ptr cs:glyph_bits+14
-    mov word ptr cs:glyph_bits+16,ax
-    mov ax,word ptr cs:glyph_bits+32
-    mov word ptr cs:glyph_bits+34,ax
-hanzi_tail:
+    push cs
+    pop ds
+    mov si,offset glyph_bits
+    push si
+    push ax
+    call font_get
+    add sp,4
     pop bx
     pop dx
     push cs
@@ -476,118 +519,170 @@ hanzi_tail:
     pop dx
     pop bx
     add dl,cs:glyph_width
-    mov si,offset glyph_bits+18
+    mov si,offset glyph_bits+CELL_HEIGHT*2
     call blit_cell
     ret
 S_XSHZ endp
 
-; DS:SI points to 18 monochrome rows, BL is the complete text attribute.
-; Write four planes with four sequencer changes, no per-pixel BIOS calls.
+; DS:SI is 23 left-aligned ten-bit words. Wide text doubles each pixel and
+; splits at a cell boundary; the ten-pixel grid is unchanged.
 blit_cell proc near
+    cmp cs:glyph_width,2
+    je blit_double
+    jmp blit_narrow
+blit_double:
+    save_regs
+    push bx
+    push dx
+    mov di,offset wide_bits
+    mov cx,CELL_HEIGHT
+blit_double_row:
+    lodsw
+    push cx
+    xor bx,bx
+    xor dx,dx
+    mov cx,10
+blit_double_bit:
+    shl ax,1
+    rcl bx,1
+    rcl dx,1
+    shl bx,1
+    rcl dx,1
+    test bl,2
+    jz blit_double_zero
+    or bl,1
+blit_double_zero:
+    loop blit_double_bit
+    ; DX:BX contains 20 bits. Each output word is left-aligned.
+    mov ax,bx
+    mov cl,4
+    shr ax,cl
+    mov cl,12
+    shl dx,cl
+    or ax,dx
+    and ax,0ffc0h
+    mov cs:[di],ax
+    mov cl,6
+    shl bx,cl
+    mov cs:[di+CELL_HEIGHT*2],bx
+    add di,2
+    pop cx
+    loop blit_double_row
+    pop dx
+    pop bx
+    push cs
+    pop ds
+    mov si,offset wide_bits
+    call blit_narrow
+    inc dl
+    mov si,offset wide_bits+CELL_HEIGHT*2
+    call blit_narrow
+    load_regs
+    ret
+blit_cell endp
+
+; Ten-pixel cells share framebuffer bytes. Select the read plane as well as
+; the write plane, and preserve the neighbor bits on every word store.
+blit_narrow proc near
     save_regs
     cmp dl,80
     jae blit_done
     cmp dh,25
     ja blit_done
     mov cs:cell_attr,bl
-    mov cs:cell_column,dl
-    mov di,dx
+    mov bp,dx
     xor ax,ax
-    mov al,dh
-    mov bx,18
+    mov al,dl
+    mov bx,CELL_WIDTH
     mul bx
-    cmp di,1900h
-    jb blit_position
-    add ax,6
-blit_position:
-    mul cs:display_pitch
-    and di,255
-    add ax,di
+    mov cl,al
+    and cl,7
+    mov cs:cell_shift,cl
+    mov dx,0ffc0h
+    shr dx,cl
+    xchg dh,dl
+    not dx
+    mov cs:cell_keep,dx
+    shr ax,1
+    shr ax,1
+    shr ax,1
     mov di,ax
+    mov ax,bp
+    mov al,ah
+    xor ah,ah
+    mov bx,CELL_HEIGHT
+    mul bx
+    mul cs:display_pitch
+    add di,ax
+    xor bx,bx
+    mov bp,offset raster_rows
+blit_prepare:
+    lodsw
+    mov cl,cs:cell_shift
+    shr ax,cl
+    xchg al,ah
+    mov cs:[bp],ax
+    add bp,2
+    inc bx
+    cmp bx,CELL_HEIGHT
+    jb blit_prepare
     mov es,cs:framebuffer
-    mov cs:plane_mask,1
+    mov cs:plane_number,0
 blit_plane:
-    push si
     push di
+    mov dx,3ceh
+    mov al,4
+    mov ah,cs:plane_number
+    out dx,ax
+    mov cl,ah
+    mov ah,1
+    shl ah,cl
     mov dx,3c4h
     mov al,2
-    mov ah,cs:plane_mask
     out dx,ax
     mov bl,cs:cell_attr
-    xor ah,ah
-    test bl,cs:plane_mask
+    xor dx,dx
+    test bl,ah
     jz blit_fg
-    not ah
+    not dx
 blit_fg:
     mov cl,4
     shr bl,cl
-    mov bh,0
-    test bl,cs:plane_mask
+    xor cx,cx
+    test bl,ah
     jz blit_bg
-    not bh
+    not cx
 blit_bg:
-    xor ah,bh
-    mov al,ah
-    mov cs:plane_xor,ax
-    push ax
-    mov al,bh
-    mov ah,bh
-    mov cs:plane_background,ax
-    pop ax
-    mov cx,18
+    xor dx,cx
+    mov cs:plane_xor,dx
+    mov cs:plane_background,cx
+    mov bp,offset raster_rows
+    mov cx,CELL_HEIGHT
 blit_line:
-    lodsb
-    cmp cs:glyph_width,2
-    je blit_wide
-    and al,ah
-    xor al,bh
-    mov es:[di],al
-    jmp short blit_next
-blit_wide:
-    call expand_bits
+    mov ax,cs:[bp]
     and ax,cs:plane_xor
     xor ax,cs:plane_background
-    mov es:[di],ah
-    cmp cs:cell_column,79
-    je blit_next
-    mov es:[di+1],al
-blit_next:
+    mov bx,cs:cell_keep
+    not bx
+    and ax,bx
+    mov bx,es:[di]
+    and bx,cs:cell_keep
+    or ax,bx
+    mov es:[di],ax
+    add bp,2
     add di,cs:display_pitch
     loop blit_line
     pop di
-    pop si
-    shl cs:plane_mask,1
-    cmp cs:plane_mask,10h
+    inc cs:plane_number
+    cmp cs:plane_number,4
     jb blit_plane
+    mov dx,3c4h
     mov ax,0f02h
     out dx,ax
 blit_done:
     load_regs
     ret
-blit_cell endp
-
-expand_bits proc near
-    push bx
-    push cx
-    mov bl,al
-    xor ax,ax
-    mov cx,8
-expand_bit:
-    shl bl,1
-    jnc expand_zero
-    shl ax,1
-    shl ax,1
-    or al,3
-    jmp short expand_next
-expand_zero:
-    shl ax,1
-    shl ax,1
-expand_next:
-    loop expand_bit
-    pop cx
-    pop bx
-    ret
-expand_bits endp
+blit_narrow endp
 
 public draw, draw_wide
 draw_wide proc near
@@ -634,14 +729,23 @@ bitmap_column:
     push cx
     push cs
     pop es
-    mov di,offset glyph_bits
+    mov di,offset legacy_bits
     mov cx,8
     rep movsw
-    mov word ptr es:[di],0
     push ds
     push si
     push cs
     pop ds
+    push bx
+    push dx
+    mov ax,offset glyph_bits
+    push ax
+    mov ax,offset legacy_bits
+    push ax
+    call font_bitmap
+    add sp,4
+    pop dx
+    pop bx
     mov si,offset glyph_bits
     call blit_cell
     pop si
@@ -706,34 +810,49 @@ cursor_xor proc near
     mov bx,ax
     mov al,ah
     xor ah,ah
-    mov dx,18
+    mov dx,CELL_HEIGHT
     mul dx
-    add ax,15
+    add ax,GLYPH_HEIGHT-1
     mul cs:display_pitch
-    xor bh,bh
-    add ax,bx
     mov di,ax
+    xor ax,ax
+    mov al,bl
+    mov dx,CELL_WIDTH
+    mul dx
+    mov cl,al
+    and cl,7
+    mov dx,0ffc0h
+    shr dx,cl
+    xchg dh,dl
+    mov cs:cursor_bits,dx
+    shr ax,1
+    shr ax,1
+    shr ax,1
+    add di,ax
     mov es,cs:framebuffer
-    mov cx,[bp+6]
-    cmp cx,16
+    mov ax,[bp+6]
+    cmp ax,16
     jbe cursor_lines
-    mov cx,16
+    mov ax,16
 cursor_lines:
+    mov bx,GLYPH_HEIGHT
+    mul bx
+    add ax,15
+    mov cl,4
+    shr ax,cl
+    mov cx,ax
     jcxz cursor_done
     mov dx,3ceh
-    mov ax,0f01h
-    out dx,ax
-    mov ax,0f00h
-    out dx,ax
     mov ax,1803h
     out dx,ax
 cursor_line:
     mov al,es:[di]
-    mov byte ptr es:[di],0ffh
+    mov ax,cs:cursor_bits
+    mov es:[di],al
+    mov al,es:[di+1]
+    mov es:[di+1],ah
     sub di,cs:display_pitch
     loop cursor_line
-    mov ax,1
-    out dx,ax
     mov ax,3
     out dx,ax
 cursor_done:
@@ -781,6 +900,7 @@ video_save_gc:
     jb video_save_gc
     cmp cs:banked_text,0
     je video_direct
+    call snapshot_text
     xor dx,dx
     call select_bank
     jc video_unavailable
@@ -1000,6 +1120,79 @@ stack_top label word
 _TEXT ends
 INIT_TEXT segment word public 'INIT'
 assume cs:DGROUP
+probe_text_bank proc near
+    save_regs
+    mov bp,cs:text_bank
+    mov si,4
+probe_bank:
+    mov dx,cs:text_bank
+    call select_bank
+    jc probe_next
+    mov dx,3ceh
+    mov ax,0d06h
+    out dx,ax
+    mov ax,1
+    out dx,ax
+    mov ax,3
+    out dx,ax
+    mov ax,4
+    out dx,ax
+    mov ax,5
+    out dx,ax
+    mov ax,0ff08h
+    out dx,ax
+    mov dx,3c4h
+    mov ax,0f02h
+    out dx,ax
+    mov ax,0b800h
+    mov es,ax
+    xor di,di
+    mov ax,5aa5h
+    mov cx,16384
+probe_fill:
+    stosw
+    add ax,7
+    loop probe_fill
+    xor dx,dx
+    call select_bank
+    jc probe_failed
+    mov dx,3ceh
+    mov ax,0506h
+    out dx,ax
+    mov ax,0a000h
+    mov es,ax
+    xor di,di
+    xor ax,ax
+    mov cx,30000
+    rep stosw
+    mov dx,cs:text_bank
+    call select_bank
+    jc probe_failed
+    mov dx,3ceh
+    mov ax,0d06h
+    out dx,ax
+    mov ax,0b800h
+    mov es,ax
+    xor di,di
+    mov ax,5aa5h
+    mov cx,16384
+probe_verify:
+    scasw
+    jne probe_next
+    add ax,7
+    loop probe_verify
+    load_regs
+    clc
+    ret
+probe_next:
+    add cs:text_bank,bp
+    dec si
+    jnz probe_bank
+probe_failed:
+    load_regs
+    stc
+    ret
+probe_text_bank endp
 install:
     cld
     push cs
@@ -1048,6 +1241,9 @@ options_done:
     int 2fh
     cmp bx,4a06h
     jne no_font
+    call font_open
+    or ax,ax
+    jz no_font20
     mov ax,3510h
     int 21h
     mov word ptr old10,bx
@@ -1123,6 +1319,7 @@ no_font:
     mov dx,offset msg_font
     jmp short install_error
 no_vbe:
+    call font_close
     mov dx,offset msg_vbe
     jmp short install_error
 bad_option:
@@ -1138,6 +1335,9 @@ usage:
     int 21h
     mov ax,4c00h
     int 21h
+no_font20:
+    mov dx,offset msg_font20
+    jmp install_error
 
 ; DOS-owned UMBs, with complete restoration of allocation policy on failure.
 ; This follows the existing display-module allocator without requiring XMS.
@@ -1194,6 +1394,7 @@ resident_paragraphs dw 0
 force_low db 0
 msg_loaded db 'A HHBIOS display driver is already installed.',13,10,'$'
 msg_font db 'Load a HHBIOS font reader before VESA.',13,10,'$'
+msg_font20 db 'VESA needs HH20.FNT and enough XMS or EMS 4.0 memory.',13,10,'$'
 msg_vbe db 'VESA needs a VGA-compatible 800x600x16 VBE mode.',13,10,'$'
 msg_usage db 'VESA [/N]  800x600x16 display; /N keeps the driver in conventional memory.',13,10,'$'
 INIT_TEXT ends
@@ -1206,6 +1407,7 @@ _END segment byte public 'ZZEND'
 resident_end db 0
 _END ends
 _SCRATCH segment para public 'TAIL'
+public text_transfer
 text_transfer db 4096 dup (0)
 image_end label byte
 _SCRATCH ends

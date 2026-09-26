@@ -6,7 +6,8 @@ import subprocess
 
 import pytest
 
-from qa.spec.dos import ROOT, run_dos
+from qa.spec.dos import ROOT, run_dos, plane_bits
+from qa.spec.pixels import colored_rows, native_rows
 from qa.spec.machine import blank, put
 from qa.spec.test_application import keyboard_config
 from qa.spec.test_dos_display import guest_build
@@ -35,6 +36,7 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
     for p in vesa_build.glob('*.COM'):
         shutil.copy2(p, tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16', tmp_path)
+    shutil.copy2(ROOT/'fonts/HH20.FNT', tmp_path)
     keyboard_config(tmp_path)
     screen=blank()
     put(screen, 2, 10, '中文'.encode('gb2312'), 0x1e)
@@ -45,7 +47,7 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
     resident=files['RESIDENT.BIN'].read_bytes()
     abi=struct.unpack_from('<10H',resident)
     assert abi[:3]==(0x5356,1,28) and abi[4]==1
-    assert 0 < abi[5] < 20*1024  # bounded resident data, no full framebuffer copy
+    assert 0 < abi[5] < 24*1024  # bounded cache, no full font/framebuffer copy
     assert (abi[8]<0xa000)==bool(residency)
     owner,paragraphs=struct.unpack_from('<HH',resident,49)
     assert owner==abi[8] and paragraphs==(abi[5]+15)//16
@@ -56,6 +58,7 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
     assert len(raw)==8+20+4000+240000
     regs=struct.unpack_from('<10H',raw,8)
     assert regs[5:7] == (799,599), regs
+    assert regs[2]==0x171a
     text=raw[28:4028]
     assert text==screen
     planes=[raw[4028+p*60000:4028+(p+1)*60000] for p in range(4)]
@@ -64,13 +67,20 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
         hi,lo=char.encode('gb2312'); off=((hi-0xa1)*94+lo-0xa1)*32
         bits=font[off:off+32]
         for half in range(2):
-            glyph=bits[half::2]+b'\0\0'
+            glyph=native_rows(hi*256+lo,half)
             for p in range(4):
-                fg=255 if attr & (1 << p) else 0
-                bg=255 if (attr >> 4) & (1 << p) else 0
-                expected=bytes((b & fg) | ((b ^ 255) & bg) for b in glyph)
-                actual=bytes(planes[p][(row*18+y)*100+col+half] for y in range(18))
-                assert actual==expected, (row,col,half,p,actual.hex(),expected.hex())
+                expected=colored_rows(glyph,10,23,attr,p)
+                actual=plane_bits(planes[p],100,(col+half)*10,row*23,10,23)
+                assert actual==expected, (row,col,half,p,actual,expected)
+    # Observe the whole viewport, including cells the fixture did not change.
+    # A text-bank alias can draw every sampled glyph correctly yet leave a
+    # stripe of B800 character/attribute bytes elsewhere in the framebuffer.
+    for row in range(25):
+        for col in range(80):
+            if screen[2*(row*80+col)]==32:
+                for plane in planes:
+                    assert plane_bits(plane,100,col*10,row*23,10,23)==(0,)*23, (row,col)
+    for plane in planes: assert not any(plane[57500:])
 
 
 @pytest.mark.parametrize('operation',['text','legacy','state','ports'])
@@ -78,6 +88,7 @@ def test_vesa_return_and_register_ownership(dosbox_binary,vesa_build,tmp_path,op
     from qa.spec.test_vbe import assert_chinese
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path); keyboard_config(tmp_path)
+    shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
     screen=blank(); put(screen,2,10,'中文'.encode('gb2312'))
     (tmp_path/'INPUT.BIN').write_bytes(bytes([3])+bytes(screen))
     files=run_dos(dosbox_binary,tmp_path,['READ5','CKBD','VESA','VESATEST '+operation,'SNAPSHOT'],
@@ -106,6 +117,7 @@ def test_vesa_return_and_register_ownership(dosbox_binary,vesa_build,tmp_path,op
 def test_vesa_prompt_bitmap_wide_text_and_pixels(dosbox_binary,vesa_build,tmp_path):
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path)
+    shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
     (tmp_path/'INPUT.BIN').write_bytes(bytes([3])+bytes(blank()))
     files=run_dos(dosbox_binary,tmp_path,['SNAPSHOT font','READ5','VESA','VESATEST drawing','VESATEST'],
                   settings='\n[dosbox]\nmachine=svga_s3\n')
@@ -114,47 +126,48 @@ def test_vesa_prompt_bitmap_wide_text_and_pixels(dosbox_binary,vesa_build,tmp_pa
     assert data[10:]==b'\xa5'*64
     raw=files['VESA00.BIN'].read_bytes()
     planes=[raw[4028+p*60000:4028+(p+1)*60000] for p in range(4)]
-    def check(col,bits,attr):
+    def check(col,bits,attr,width=10,clip=False):
         for p in range(4):
-            fg=255 if attr & (1 << p) else 0
-            bg=255 if (attr >> 4) & (1 << p) else 0
-            expected=bytes((b & fg) | ((b ^ 255) & bg) for b in bits)
-            assert bytes(planes[p][(456+y)*100+col] for y in range(18))==expected
+            expected=colored_rows(bits,width,23,attr,p)
+            if clip: expected=tuple(row >> (width-10) for row in expected)
+            assert plane_bits(planes[p],100,col*10,575,10 if clip else width,23)==expected
     for col in range(4):
         check(col,bytes((i*3+7) & 255 for i in range(col*16,col*16+16))+b'\0\0',0x4b)
-    font=files['FONT.BIN'].read_bytes(); hzk=(ROOT/'fonts/HZK16').read_bytes()
-    off=((0xd6-0xa1)*94+0xd0-0xa1)*32
-    glyphs=[font[65*16:66*16],hzk[off:off+32:2],hzk[off+1:off+32:2],font[90*16:91*16]]
+    glyphs=[native_rows(65),native_rows(0xd6d0),native_rows(0xd6d0,1),native_rows(90)]
     for i,glyph in enumerate(glyphs):
-        wide=[sum(((v >> bit) & 1)*3 << (bit*2) for bit in range(8)) for v in glyph]+[0,0]
-        check(70+i*2,bytes(v >> 8 for v in wide),0x2e)
-        check(71+i*2,bytes(v & 255 for v in wide),0x2e)
-        if i==0: check(79,bytes(v >> 8 for v in wide),0x2e)
-    check(80,b'\0'*18,0)  # clipped wide glyph must not spill into the margin
+        # Column 79 is subsequently overwritten by the clipped A.
+        check(70+i*2,glyph,0x2e,20,clip=i==3)
+        if i==0: check(79,glyph,0x2e,20,clip=True)
+    for p in range(4): assert planes[p][59800:59999]==b'\0'*199
     for p in range(4): assert planes[p][-1] & 1 == (9 >> p) & 1
 
 
 def test_vesa_text_pages_and_offscreen_scrolling(dosbox_binary,vesa_build,tmp_path):
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path)
+    shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
     files=run_dos(dosbox_binary,tmp_path,['READ5','VESA','VESATEST pages'],
                   settings='\n[dosbox]\nmachine=svga_s3\n')
     raw=files['PAGES.BIN'].read_bytes()
-    assert len(raw)==7216
-    assert struct.unpack_from('<8H',raw,7200)==(7,0x1801,0x2e41,0x2e48,0x2e42,0x2e43,0,0x2e41)
+    assert len(raw)==9264
+    assert struct.unpack_from('<8H',raw,9200)==(7,0x1801,0x2e41,0x2e48,0x2e42,0x2e43,0,0x2e41)
+    first=tuple(0x2e41+p for p in range(8))
+    assert struct.unpack_from('<8H',raw,9216)==first
+    assert struct.unpack_from('<8H',raw,9232)==first
+    after=list(first); after[3]=0x2e20  # offscreen page 3 scrolled up
+    assert struct.unpack_from('<8H',raw,9248)==tuple(after)
     font=(ROOT/'fonts/HZK16').read_bytes(); off=((0xd6-0xa1)*94+0xd0-0xa1)*32
     for plane in range(4):
-        fg=255 if 0xe & (1 << plane) else 0
-        bg=255 if 1 & (1 << plane) else 0
         for half in range(2):
-            bits=font[off+half:off+32:2]+b'\0\0'
-            expected=bytes((b & fg) | ((b ^ 255) & bg) for b in bits)
-            assert bytes(raw[plane*1800+y*100+20+half] for y in range(18))==expected
+            bits=native_rows(0xd6d0,half)
+            expected=colored_rows(bits,10,23,0x1e,plane)
+            assert plane_bits(raw[plane*2300:(plane+1)*2300],100,(20+half)*10,0,10,23)==expected
 
 
 def test_vesa_one_image_aperture_or_clean_rejection(dosbox_binary,vesa_build,tmp_path):
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path)
+    shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
     screen=blank(); put(screen,24,78,'中'.encode('gb2312'),0x1e)
     (tmp_path/'INPUT.BIN').write_bytes(bytes([3])+bytes(screen))
     files=run_dos(dosbox_binary,tmp_path,['READ5','VESACAPS',('VESA > VESA.LOG',(0,1)),
@@ -172,8 +185,34 @@ def test_vesa_one_image_aperture_or_clean_rejection(dosbox_binary,vesa_build,tmp
     font=(ROOT/'fonts/HZK16').read_bytes(); off=((0xd6-0xa1)*94+0xd0-0xa1)*32
     for plane in range(4):
         for half in range(2):
-            glyph=font[off+half:off+32:2]+b'\0\0'
-            fg=255 if 14 & (1 << plane) else 0
-            bg=255 if 1 & (1 << plane) else 0
-            expected=bytes((b & fg) | ((b ^ 255) & bg) for b in glyph)
-            assert bytes(raw[4028+plane*60000+(24*18+y)*100+78+half] for y in range(18))==expected
+            glyph=native_rows(0xd6d0,half)
+            expected=colored_rows(glyph,10,23,0x1e,plane)
+            data=raw[4028+plane*60000:4028+(plane+1)*60000]
+            assert plane_bits(data,100,(78+half)*10,24*23,10,23)==expected
+
+
+@pytest.mark.parametrize('storage',['xms','ems'])
+def test_native_font_storage_banks_and_cursor(dosbox_binary,vesa_build,tmp_path,storage):
+    for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
+    shutil.copy2(ROOT/'fonts/HZK16',tmp_path)
+    shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
+    files=run_dos(dosbox_binary,tmp_path,['READ2','VESA','VESATEST fonts'],
+                  settings='\n[dosbox]\nmachine=svga_s3\n[dos]\nxms='+('true' if storage=='xms' else 'false')+'\nems=true\n')
+    raw=files['FONT20.BIN'].read_bytes()
+    assert len(raw)==20+4*4*2300
+    regs=struct.unpack_from('<10H',raw)
+    assert (regs[0],regs[1],regs[2],regs[3],regs[5],regs[6])==(0x4632,1 if storage=='xms' else 2,716,0,10,23)
+    frames=[raw[20+i*9200:20+(i+1)*9200] for i in range(4)]
+    for traditional in (False,True):
+        frame=frames[int(traditional)]
+        for p in range(4):
+            for half in range(2):
+                expected=colored_rows(native_rows(0xbaba,half,traditional),10,23,0x1e,p)
+                assert plane_bits(frame[p*2300:(p+1)*2300],100,(78+half)*10,0,10,23)==expected
+    assert frames[3]==frames[1], 'two cursor XORs must restore every framebuffer bit'
+    for p in range(4):
+        for y in range(23):
+            for x in range(800):
+                byte=p*2300+y*100+x//8
+                changed=(frames[2][byte]^frames[1][byte]) >> (7-x%8) & 1
+                assert changed==int(x>=790 and y<20), (p,x,y)

@@ -12,7 +12,9 @@ typedef unsigned long u32;
 /* The console remains 80x25. Pixel geometry is a separate contract. */
 #define TEXT_COLS 80
 #define TEXT_ROWS 25
-#define CELL_HEIGHT 18
+#define CELL_WIDTH 10
+#define CELL_HEIGHT 23
+#define GLYPH_HEIGHT 20
 #define FORMAT_PLANAR4 3
 
 #pragma pack(push, 1)
@@ -48,6 +50,10 @@ extern u8 CALL banked_text_allowed;
 extern u8 CALL active, busy, policy, hanzi, traditional;
 extern u16 CALL shadow[TEXT_COLS*TEXT_ROWS];
 extern u16 CALL frame_alias_offset;
+void CALL font_get(u16 code, u16 *out);
+u16 CALL font_open(void);
+void CALL font_close(void);
+extern u16 CALL font_kind, font_kb, font_fault;
 void CALL bios(struct registers *r);
 void CALL refresh(void);
 void CALL invalidate(void);

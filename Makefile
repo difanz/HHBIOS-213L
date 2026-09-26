@@ -22,7 +22,7 @@ QA_PYTHON ?= python3
 
 all: $(COMS) $(BUILD)/VESA.COM
 
-$(BUILD)/VESA.COM: $(SRC)/vesa.c $(SRC)/vesa.asm $(SRC)/vesa.h $(INCS) tools/build-vesa.sh | $(BUILD)
+$(BUILD)/VESA.COM: $(SRC)/vesa.c $(SRC)/vesa.asm $(SRC)/vesa.h $(SRC)/vesa_font.c $(SRC)/vesa_font.asm $(INCS) tools/build-vesa.sh | $(BUILD)
 	JWASM="$(JWASM)" bash tools/build-vesa.sh "$@" "$(SRC)"
 
 $(BUILD):

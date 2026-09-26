@@ -10,7 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static unsigned capture_seg, framebuffer, pitch, vesa, age, settle, finished;
+static unsigned capture_seg, framebuffer, pitch, cell_width, cell_height, image_size;
+static unsigned vesa, age, settle, finished;
 static unsigned keys[64], key_count, step, records;
 static unsigned exit_keys[8] = {0x2d00}, exit_count = 1, exit_step;
 static unsigned release_alt;
@@ -72,7 +73,7 @@ static int visible(unsigned char __far *text, const char *marker, unsigned lengt
 static void record_step(void)
 {
     unsigned cursor = *(unsigned __far *)MK_FP(0x40, 0x50);
-    unsigned offset = 18416 + records*164;
+    unsigned offset = image_size + records*164;
     *(unsigned __far *)MK_FP(capture_seg, offset) = step ? keys[step-1] : 0;
     *(unsigned __far *)MK_FP(capture_seg, offset+2) = cursor;
     if ((cursor >> 8) < 25)
@@ -150,9 +151,9 @@ void app_poll(void)
         _fmemcpy(MK_FP(capture_seg, 16), text, 4000);
         if (vesa) {
             memset(&view,0,sizeof(view));
-            for (y=0; y<180; ++y) {
-                view.x.ax=0x1412; view.x.bx=1; view.x.cx=80;
-                view.x.si=y*pitch; view.x.es=capture_seg; view.x.di=4016+y*80;
+            for (y=0; y<10*cell_height; ++y) {
+                view.x.ax=0x1412; view.x.bx=1; view.x.cx=pitch;
+                view.x.si=y*pitch; view.x.es=capture_seg; view.x.di=4016+y*pitch;
                 intr(0x10,&view);
                 if (view.x.ax==2) { --settle; return; }
                 if (view.x.ax) { finished=1; return; }
@@ -184,10 +185,14 @@ int main(int argc, char **argv)
         if (!file || fread(&capture_seg, 2, 1, file) != 1) return 2;
         fclose(file);
         if (*(unsigned char __far *)MK_FP(capture_seg, 0) != 1) return 3;
+        pitch=*(unsigned __far *)MK_FP(capture_seg,10);
+        cell_height=*(unsigned __far *)MK_FP(capture_seg,14);
+        if (pitch<80 || pitch>128 || !cell_height || cell_height>32) return 3;
+        image_size=4016+10*cell_height*pitch;
         file = fopen("APP.BIN", "wb");
         if (!file) return 4;
-        for (i = 0; i < 18416; i += size) {
-            size = 18416-i < 256 ? 18416-i : 256;
+        for (i = 0; i < image_size; i += size) {
+            size = image_size-i < 256 ? image_size-i : 256;
             _fmemcpy(scratch, MK_FP(capture_seg, i), size);
             if (fwrite(scratch, 1, size, file) != size) return 5;
         }
@@ -198,7 +203,7 @@ int main(int argc, char **argv)
             file = fopen("KEYLOG.BIN", "wb");
             if (!file) return 12;
             for (i = 0; i < records; ++i) {
-                _fmemcpy(scratch, MK_FP(capture_seg, 18416+i*164), 164);
+                _fmemcpy(scratch, MK_FP(capture_seg, image_size+i*164), 164);
                 if (fwrite(scratch, 164, 1, file) != 1) return 13;
             }
             if (fclose(file)) return 14;
@@ -224,17 +229,24 @@ int main(int argc, char **argv)
         if (!start_length || fgetc(file) != EOF || ferror(file)) return 18;
         fclose(file);
     }
-    if (_dos_allocmem(0x800, &capture_seg)) return 7;
-    _fmemset(MK_FP(capture_seg, 0), 0, 16);
-    _fmemcpy(MK_FP(capture_seg, 1), "HHAPP1", 6);
     memset(&r, 0, sizeof(r));
     r.x.ax = 0x1406;
     intr(0x10, &r);
     framebuffer = r.x.bp;
     pitch = (r.x.si+1)/8;
+    cell_width=(r.x.si+1)/80;
+    cell_height=r.x.cx>>8;
     if (pitch < 80 || pitch > 128) return 8;
+    if (!cell_height || cell_height>32) return 8;
     if (framebuffer < 0xa000 || framebuffer > 0xb000) return 8;
     r.x.ax=0x1411; intr(0x10,&r); vesa=r.x.ax==0x5356;
+    image_size=4016+10*cell_height*pitch;
+    if (_dos_allocmem((image_size+65*164+15)/16, &capture_seg)) return 7;
+    _fmemset(MK_FP(capture_seg, 0), 0, 16);
+    _fmemcpy(MK_FP(capture_seg, 1), "HHAPP2", 6);
+    *(unsigned __far *)MK_FP(capture_seg,10)=pitch;
+    *(unsigned __far *)MK_FP(capture_seg,12)=cell_width;
+    *(unsigned __far *)MK_FP(capture_seg,14)=cell_height;
     file = fopen("CAPSEG.BIN", "wb");
     if (!file || fwrite(&capture_seg, 2, 1, file) != 1) return 9;
     if (fclose(file)) return 10;

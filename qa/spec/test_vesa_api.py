@@ -190,8 +190,10 @@ class Driver:
 
     def run(self,entry='int10_handler',limit=300000,**registers):
         near=entry!='int10_handler'
-        for name,value in dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
-                               SP=0xe000,EFLAGS=0x202,**registers).items(): self.put(name,value)
+        context=dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
+                     SP=0xe000,EFLAGS=0x202)
+        context.update(registers)
+        for name,value in context.items(): self.put(name,value)
         address=(self.get('SS')<<4)+self.get('SP')
         frame=struct.pack('<H',0xff00) if near else struct.pack('<HHH',0xff00,0x1000,0x202)
         self.uc.mem_write(address,frame)
@@ -199,6 +201,40 @@ class Driver:
         assert self.get('IP')==0xff00
         assert self.get('SP')==0xe000+len(frame)
         assert self.read('stack_bottom',2)==b'\x5a\xa5'
+
+
+@pytest.mark.parametrize('drawing',[False,True])
+@pytest.mark.parametrize('col,role',[(3,1),(4,2),(5,0)])
+def test_keyboard_query_uses_live_text_or_banked_snapshot_without_c_reentry(vesa_driver,drawing,col,role):
+    from qa.spec.machine import blank, put
+    banks=[]
+    def bios(m):
+        assert m.get('AX')==0x4f05
+        banks.append(m.get('DX')); m.put('AX',0x004f)
+    m=Driver(vesa_driver,bios)
+    m.write('active',b'\1'); m.write('banked_text',b'\1')
+    text=blank(); put(text,4,3,'中a')
+    m.uc.mem_write(0xb8000,bytes(text))
+    if drawing:
+        m.run('begin_draw')
+        assert banks==[0]
+        m.write('busy',b'\1')
+        # While A000 is selected, reading B800 does not expose the text page.
+        m.uc.mem_write(0xb8000,b'\xa5'*4000)
+    m.write('request',b'\xa5'*20)
+    bottom,top=m.symbols['stack_bottom'],m.symbols['stack_top']
+    stack=bytes(m.uc.mem_read(0x10000+bottom,top-bottom))
+    initial=dict(AX=0x1410,BX=0,CX=0x5678,DX=0x400+col,
+                 SI=0x1234,DI=0x3456,BP=0x4567,DS=0x3000,ES=0x4000)
+    m.run(**initial)
+    assert (m.get('AX'),m.get('BX'),m.get('CX'))==(role,0x4b48,0x1000+m.symbols['text_transfer']//16)
+    for name in ('DX','SI','DI','BP','DS','ES'): assert m.get(name)==initial[name]
+    assert m.read('request',20)==b'\xa5'*20
+    assert m.read('busy')==bytes([drawing])
+    assert m.get('SS')==0x8000 and m.get('EFLAGS')==0x202
+    assert bytes(m.uc.mem_read(0x10000+bottom,top-bottom))==stack
+    assert m.read('text_transfer',4000)==bytes(text)
+    assert banks==([0] if drawing else [])
 
 
 @pytest.mark.parametrize('failed_bank',[0,1])
@@ -214,14 +250,17 @@ def test_bank_failure_stops_access_and_disables_renderer(vesa_driver,failed_bank
     m.uc.mem_write(0x30000,b'\xa5'*16)
     accesses=[]
     m.uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE,
-                  lambda uc,access,address,size,value,_: accesses.append(address),
+                  lambda uc,access,address,size,value,_: accesses.append((address,tuple(calls))),
                   begin=0xa0000,end=0xbffff)
     m.run(AX=0x1412,BX=0,SI=0,CX=16,ES=0x3000,DI=0)
     assert m.get('AX')==1 and m.read('active')==b'\0'
     assert m.uc.mem_read(0x20101,1)==b'\xff'
     assert calls==([0] if failed_bank==0 else [0,1])
     if failed_bank==0:
-        assert accesses==[] and m.uc.mem_read(0x30000,16)==b'\xa5'*16
+        # The pre-switch text snapshot is safe; no framebuffer access may
+        # occur after the BIOS rejects the switch to graphics bank zero.
+        assert accesses==[(address,()) for address in range(0xb8000,0xb8000+4000,2)]
+        assert m.uc.mem_read(0x30000,16)==b'\xa5'*16
 
 
 def test_capture_during_render_requests_retry_without_touching_stack(vesa_driver):
@@ -293,14 +332,14 @@ def test_refresh_batches_banks_and_avoids_idle_pixel_writes(vesa_driver):
     m.uc.hook_add(UC_HOOK_MEM_WRITE,
                   lambda uc,access,address,size,value,_: writes.append(size),
                   begin=0xa0000,end=0xaffff)
-    m.run('refresh',limit=10000000)
-    assert banks==[0,1] and sum(writes)==2000*18*4
+    m.run('refresh',limit=20000000)
+    assert banks==[0,1] and sum(writes)==2000*23*4*2
     banks.clear(); writes.clear()
     m.run('refresh',limit=10000000)
     assert banks==[0,1] and writes==[]
     banks.clear(); writes.clear(); m.uc.mem_write(0xb8000,b'A')
     m.run('refresh',limit=10000000)
-    assert banks==[0,1] and 0 < sum(writes) < 2000*18*4
+    assert banks==[0,1] and 0 < sum(writes) < 2000*23*4*2
 
 
 def test_zero_length_capture_checks_availability_without_bank_switch(vesa_driver):

@@ -124,9 +124,10 @@ static int pages(void)
     static char text[]="BC";
     union REGPACK r;
     FILE *out;
-    unsigned p,i,values[8];
+    unsigned p,i,values[8],height,trace[24],stage;
     unsigned __far *v;
     memset(&r,0,sizeof(r)); r.x.ax=0x0100; r.x.cx=0x2000; intr(0x10,&r);
+    r.x.ax=0x1406; intr(0x10,&r); height=r.x.cx>>8;
     _disable();
     for (p=0;p<8;++p) {
         v=MK_FP(0xb800+p*0x100,0);
@@ -135,10 +136,20 @@ static int pages(void)
     }
     v=MK_FP(0xbf00,0); v[5*80+20]=0x1ed6; v[5*80+21]=0x1ed0;
     _enable();
+    stage=0;
+    _disable();
+    for (p=0;p<8;++p) trace[stage++]=*(unsigned __far *)MK_FP(0xb800+p*0x100,0);
+    _enable();
     r.x.ax=0x0507; intr(0x10,&r); ticks(24);
+    _disable();
+    for (p=0;p<8;++p) trace[stage++]=*(unsigned __far *)MK_FP(0xb800+p*0x100,0);
+    _enable();
     r.x.ax=0x0f00; intr(0x10,&r); values[0]=r.x.bx>>8;
     r.x.ax=0x1301; r.x.bx=0x032e; r.x.dx=0x184f; r.x.cx=2;
     r.x.es=FP_SEG(text); r.x.bp=FP_OFF(text); intr(0x10,&r);
+    _disable();
+    for (p=0;p<8;++p) trace[stage++]=*(unsigned __far *)MK_FP(0xb800+p*0x100,0);
+    _enable();
     r.x.ax=0x0300; r.x.bx=0x0300; intr(0x10,&r); values[1]=r.x.dx;
     _disable();
     v=MK_FP(0xb800,0); values[2]=v[0];
@@ -147,15 +158,47 @@ static int pages(void)
     _enable();
     out=fopen("PAGES.BIN","wb"); if (!out) return 16;
     for (p=0;p<4;++p) {
-        r.x.ax=0x1412; r.x.bx=p; r.x.si=5*18*100; r.x.cx=1800;
+        r.x.ax=0x1412; r.x.bx=p; r.x.si=5*height*100; r.x.cx=height*100;
         r.x.es=FP_SEG(buffer); r.x.di=FP_OFF(buffer); intr(0x10,&r);
         if (r.x.ax) return 17;
-        fwrite(buffer,1,1800,out);
+        fwrite(buffer,1,height*100,out);
     }
     r.x.ax=0x0500; intr(0x10,&r);
     r.x.ax=0x0f00; intr(0x10,&r); values[6]=r.x.bx>>8;
     r.x.ax=0x0800; r.x.bx=0; intr(0x10,&r); values[7]=r.x.ax;
     fwrite(values,2,8,out);
+    fwrite(trace,2,24,out);
+    return fclose(out)!=0;
+}
+
+static int fonts(void)
+{
+    union REGPACK r;
+    FILE *out;
+    unsigned pass,plane,y;
+    memset(&r,0,sizeof(r)); r.x.ax=0x0100; r.x.cx=0x2000; intr(0x10,&r);
+    out=fopen("FONT20.BIN","wb"); if (!out) return 18;
+    r.x.ax=0x1413; intr(0x10,&r); fwrite(&r,1,sizeof(r),out);
+    for (pass=0;pass<4;++pass) {
+        if (!pass) {
+            *(unsigned __far *)MK_FP(0xb800,24*160+78*2)=0x1eba;
+            *(unsigned __far *)MK_FP(0xb800,24*160+79*2)=0x1eba; /* GB2312 Han */
+            r.x.ax=0x180c; r.x.bx=0x0100; intr(0x10,&r);
+            r.x.ax=0x1812; intr(0x10,&r); /* simplified bank */
+        } else if (pass==1) {
+            r.x.ax=0x1811; intr(0x10,&r); /* traditional bank */
+        } else {
+            r.x.ax=0x1408; r.x.dx=0x184f; intr(0x10,&r); /* XOR last cell */
+        }
+        for (plane=0;plane<4;++plane) {
+            for (y=0;y<23;++y) {
+                r.x.ax=0x1412; r.x.bx=plane; r.x.si=(24*23+y)*100;
+                r.x.cx=100; r.x.es=FP_SEG(buffer); r.x.di=FP_OFF(buffer);
+                intr(0x10,&r); if (r.x.ax) return 19;
+                fwrite(buffer,1,100,out);
+            }
+        }
+    }
     return fclose(out)!=0;
 }
 int main(int argc, char **argv)
@@ -165,6 +208,7 @@ int main(int argc, char **argv)
     unsigned plane, y, count, frame=0, pitch=100;
     unsigned char mode;
     char name[13];
+    if (argc>1 && strcmp(argv[1],"fonts")==0) return fonts();
     if (argc>1 && strcmp(argv[1],"fallback")==0) {
         memset(&r,0,sizeof(r)); r.x.ax=0x1411; intr(0x10,&r);
         out=fopen("FALLBACK.BIN","wb"); if (!out) return 18;
