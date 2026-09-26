@@ -123,6 +123,43 @@ def test_editor_edits_saved_bytes(pytestconfig, dosbox_binary, application_dir, 
     exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario)
 
 
+@pytest.mark.parametrize('display', ['VGA', 'VESA'])
+def test_tvedit_tabs_and_long_lines(pytestconfig, dosbox_binary, tvedit_dir, display):
+    directory = tvedit_dir
+    lines = ['HHBIOS-QA  Chinese document / tabs / right edge',
+             '中文文件与 English 混排，标点：，。！？',
+             'ASCII:\tA\tB\tC', '中文:\t甲\t乙\t丙',
+             '1\t中文\tA', '中文\tDEF\t123',
+             '1234567890'*7+'123456中',
+             '1234567890'*7+'1234567中',
+             '第七行完整汉字，第八行在窗口右边缘截断。',
+             '', '文件中的制表符保留为 09h；屏幕按字节列展开。',
+             'αΑ ℃①，Ａ中', '', '文件内容只读，退出后逐字节检查。']
+    original = ('\r\n'.join(lines)+'\r\n').encode('gb2312')
+    (directory / 'VIEW.TXT').write_bytes(original)
+    (directory / 'application.json').write_text(json.dumps({
+        'editor': 'tvedit', 'command': 'TVEDIT VIEW.TXT',
+        'files': {'TVEDIT.EXE': digest(directory / 'TVEDIT.EXE')},
+    }, indent=2)+'\n')
+    shots = pytestconfig.getoption('--screenshots')
+    files = run_dos(dosbox_binary, directory, ['READ2', display, ('CMODE 3', 3),
+                    'APPCAP install', 'TVEDIT VIEW.TXT', 'APPCAP dump'],
+                    physical_keys=shots, screenshots=shots,
+                    settings='\n[dosbox]\nmachine=svga_s3\n' if display=='VESA' else '')
+    raw = files['APP.BIN'].read_bytes()
+    assert raw[:7] == b'\1HHAPP2'
+    chars = raw[16:4016:2]
+    for line in lines[2:6]:
+        expanded = line.encode('gb2312').expandtabs(8)
+        assert chars.count(expanded) == 1, 'Tabs must align to byte columns inside the editor'
+    assert files['VIEW.TXT'].read_bytes() == original
+    if shots:
+        images = json.loads(files['SCREENSHOTS.JSON'].read_text())
+        assert len(images) == 1
+        assert (images[0]['width'], images[0]['height']) == (
+            (800, 600) if display == 'VESA' else (640, 480))
+
+
 @pytest.mark.parametrize('editor', ['borland', 'tc30'])
 @pytest.mark.parametrize('loader', ['READ4', 'READ5'])
 def test_borland_dpmi_font_memory(pytestconfig, dosbox_binary, application_dir, editor, loader):
@@ -212,7 +249,14 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
                       f'CKBD {switch} > KEYMODE.LOG',
                       'APPCAP install', command, 'C:', 'APPCAP dump'], timeout=45,
                       physical_keys=True,
+                      screenshots=pytestconfig.getoption('--screenshots'),
                       settings='\n[dosbox]\nmachine=svga_s3\n' if display=='VESA' else '')
+    if pytestconfig.getoption('--screenshots'):
+        shots = json.loads(files['SCREENSHOTS.JSON'].read_text())
+        expected_size = (800, 600) if display == 'VESA' else (640, 480)
+        assert len(shots) == len(json.loads(files['PHYSICAL-KEYS.JSON'].read_text()))
+        assert all((shot['width'], shot['height']) == expected_size for shot in shots), (
+            'SDL dimensions differ: check video mode, scaling and desktop clipping')
     log = files['KEYLOG.BIN'].read_bytes()
     assert len(log) == 164*(len(keys)+1)
     records = [(struct.unpack_from('<HH', log, i), log[i+4:i+164])

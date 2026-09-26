@@ -49,6 +49,7 @@ gc_index db 0
 seq_index db 0
 video_depth db 0
 aperture_alias db 0ffh
+text_map db 1
 public banked_text
 banked_text db 0
 aperture_result dw 1
@@ -354,7 +355,10 @@ aperture_known_bank:
     call select_bank
     jc aperture_failed
     mov dx,3ceh
-    mov ax,0d06h
+    ; Prefer shared A000-BFFF decoding: B800-only selects CGA scanout in
+    ; classic DOSBox. Probe the narrower map only if the shared map fails.
+    mov ah,cs:text_map
+    mov al,6
     out dx,ax
     cmp cs:aperture_alias,0ffh
     jne aperture_done
@@ -1123,13 +1127,16 @@ assume cs:DGROUP
 probe_text_bank proc near
     save_regs
     mov bp,cs:text_bank
+probe_map:
+    mov cs:text_bank,bp
     mov si,4
 probe_bank:
     mov dx,cs:text_bank
     call select_bank
     jc probe_next
     mov dx,3ceh
-    mov ax,0d06h
+    mov ah,cs:text_map
+    mov al,6
     out dx,ax
     mov ax,1
     out dx,ax
@@ -1169,7 +1176,8 @@ probe_fill:
     call select_bank
     jc probe_failed
     mov dx,3ceh
-    mov ax,0d06h
+    mov ah,cs:text_map
+    mov al,6
     out dx,ax
     mov ax,0b800h
     mov es,ax
@@ -1189,6 +1197,11 @@ probe_next:
     dec si
     jnz probe_bank
 probe_failed:
+    cmp cs:text_map,1
+    jne probe_exhausted
+    mov cs:text_map,0dh
+    jmp probe_map
+probe_exhausted:
     load_regs
     stc
     ret

@@ -16,8 +16,10 @@ import time
 
 
 class PhysicalKeyboard:
-    def __init__(self, directory):
+    def __init__(self, directory, screenshots=False):
         self.directory = directory
+        self.screenshots = screenshots
+        self.captures = []
         self.server = socket.socket()
         self.server.bind(('127.0.0.1', 0))
         self.server.listen(1)
@@ -35,6 +37,10 @@ class PhysicalKeyboard:
             x11 = ctypes.util.find_library('X11')
             xtst = ctypes.util.find_library('Xtst')
             assert x11 and xtst, 'Physical keyboard tests require libX11 and libXtst'
+            if self.screenshots:
+                assert shutil.which('import'), 'Screenshots require ImageMagick import'
+                (self.directory / 'screenshots').mkdir()
+                (self.directory / 'SCREEN.KEY').touch()
             self.x = ctypes.CDLL(x11)
             self.t = ctypes.CDLL(xtst)
             self.x.XOpenDisplay.argtypes = [ctypes.c_char_p]
@@ -45,12 +51,15 @@ class PhysicalKeyboard:
             self.x.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
             self.x.XKeysymToKeycode.restype = ctypes.c_uint
             self.x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            self.x.XGetInputFocus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong),
+                                             ctypes.POINTER(ctypes.c_int)]
             self.t.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
             r, w = os.pipe()
             self.log = (self.directory / 'xvfb.log').open('wb')
             try:
                 self.xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(w), '-screen', '0',
-                                              '800x600x24', '-nolisten', 'tcp'],
+                                              '1280x1024x24' if self.screenshots else '800x600x24',
+                                              '-nolisten', 'tcp'],
                                              pass_fds=(w,), stdout=self.log, stderr=self.log)
                 os.close(w)
                 w = None
@@ -70,7 +79,27 @@ class PhysicalKeyboard:
 
     @property
     def config(self):
-        return f'\n[serial]\nserial1=nullmodem server:127.0.0.1 port:{self.port} transparent:1\n'
+        return (f'\n[serial]\nserial1=nullmodem server:127.0.0.1 port:{self.port} transparent:1\n'
+                + ('\n[sdl]\nshowmenu=false\n' if self.screenshots else ''))
+
+    def capture(self, key):
+        """Observe SDL scanout after the guest settles, before sending a key.
+
+        Capture the focused emulator window, excluding the X root/background.
+        No screenshot hotkey is injected into the application under test.
+        """
+        window, revert = ctypes.c_ulong(), ctypes.c_int()
+        self.x.XGetInputFocus(self.display, ctypes.byref(window), ctypes.byref(revert))
+        assert window.value > 1, 'DOSBox has no focused window to capture'
+        relative = f'screenshots/step-{len(self.captures):03d}.png'
+        subprocess.run(['import', '-display', self.name, '-window', str(window.value),
+                        str(self.directory / relative)], check=True, timeout=5,
+                       capture_output=True)
+        header = (self.directory / relative).read_bytes()[:24]
+        assert header[:8] == b'\x89PNG\r\n\x1a\n', 'Window capture is not PNG'
+        width, height = struct.unpack('>II', header[16:24])
+        self.captures.append({'file': relative, 'before_key': key,
+                              'width': width, 'height': height})
 
     def event(self, name, pressed):
         code = self.x.XKeysymToKeycode(self.display, self.x.XStringToKeysym(name.encode()))
@@ -93,6 +122,12 @@ class PhysicalKeyboard:
             key, = struct.unpack('<H', self.pending[:2])
             self.requests.append(key)
             self.pending = self.pending[2:]
+            if self.screenshots:
+                self.capture(key)
+            if key == 0xffff:
+                assert self.screenshots, 'Guest requested a screenshot without --screenshots'
+                self.client.sendall(b'\xa5')
+                continue
             names = {0x50: 'Down', 0x48: 'Up', 0x47: 'Home', 0x4f: 'End',
                      0x4b: 'Left', 0x4d: 'Right', 0x53: 'Delete', 0x0e: 'BackSpace',
                      0x3c: 'F2', 0x3d: 'F3', 0x1c: 'Return', 0x01: 'Escape',
@@ -110,6 +145,8 @@ class PhysicalKeyboard:
 
     def __exit__(self, *_):
         (self.directory / 'physical-keys.json').write_text(json.dumps(self.requests)+'\n')
+        if self.screenshots:
+            (self.directory / 'screenshots.json').write_text(json.dumps(self.captures, indent=2)+'\n')
         if self.display:
             self.x.XCloseDisplay(self.display)
         if self.xvfb:

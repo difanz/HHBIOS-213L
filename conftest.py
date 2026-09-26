@@ -29,6 +29,8 @@ def pytest_addoption(parser):
                      help='Optional unpacked application fixtures: tc201/, tc30/.')
     parser.addoption('--pctools', type=Path, default=os.environ.get('PCTOOLS_DIR'),
                      help='Optional PC Tools 9 directory; needs DOSBox absolute disk reads and mtools.')
+    parser.addoption('--screenshots', action='store_true',
+                     help='Capture the actual SDL window before each application key (requires ImageMagick import).')
     parser.addoption('--djgpp-cc', default=os.environ.get('DJGPP_CC', 'i586-pc-msdosdjgpp-gcc'),
                      help='DJGPP cross compiler for optional standalone DPMI host tests.')
     parser.addoption('--cwsdpmi', type=Path, default=os.environ.get('CWSDPMI_EXE'),
@@ -80,6 +82,12 @@ def pytest_runtest_makereport(item, call):
     report = (yield).get_result()
     if report.when == 'call':
         item.test_failed = report.failed
+        directory = item.funcargs.get('tmp_path')
+        if item.config.getoption('--screenshots') and directory is not None:
+            (directory / 'case.json').write_text(json.dumps({
+                'nodeid': item.nodeid, 'outcome': report.outcome,
+                'failure': str(report.longrepr) if report.failed else None,
+            }, indent=2)+'\n')
 
 
 @pytest.fixture

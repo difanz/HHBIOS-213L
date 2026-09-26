@@ -33,7 +33,7 @@ def guest_build(assembler, source_dir, tmp_path_factory):
 
 
 @pytest.fixture(params=['VGA', 'VESA'])
-def capture(dosbox_binary, guest_build, tmp_path, request):
+def capture(dosbox_binary, guest_build, tmp_path, request, pytestconfig):
     for file in guest_build.glob('*.COM'):
         shutil.copy2(file, tmp_path)
     shutil.copy2(ROOT / 'fonts/HZK16', tmp_path)
@@ -47,7 +47,9 @@ def capture(dosbox_binary, guest_build, tmp_path, request):
         files = run_dos(dosbox_binary, tmp_path, ['SNAPSHOT font', 'READ2 > READ2.LOG',
                                           request.param+' > DISPLAY.LOG', ('CMODE 3 > CMODE.LOG', 3),
                                           'SNAPSHOT api', 'SNAPSHOT > PROBE.LOG'], timeout=30 + 4*len(frames),
-                        settings='\n[dosbox]\nmachine=svga_s3\n' if request.param=='VESA' else '')
+                        settings='\n[dosbox]\nmachine=svga_s3\n' if request.param=='VESA' else '',
+                        physical_keys=pytestconfig.getoption('--screenshots'),
+                        screenshots=pytestconfig.getoption('--screenshots'))
         capture_frames.api = files['API.BIN'].read_bytes()
         snapshots = []
         for index in range(len(frames)):
@@ -56,6 +58,22 @@ def capture(dosbox_binary, guest_build, tmp_path, request):
             shot = Snapshot.read(files[key])
             shot.save_ppm(tmp_path / f'frame{index:02d}.ppm')
             snapshots.append(shot)
+        if pytestconfig.getoption('--screenshots'):
+            captures = json.loads(files['SCREENSHOTS.JSON'].read_text())
+            assert len(captures) == len(snapshots)
+            for index, (image, shot) in enumerate(zip(captures, snapshots)):
+                assert (image['width'], image['height']) == (shot.width, shot.height), (
+                    'SDL dimensions differ: check video mode, scaling and desktop clipping')
+                actual = subprocess.check_output(['convert', str(tmp_path / image['file']),
+                                                  '-depth', '8', 'rgb:-'])
+                expected = (tmp_path / f'frame{index:02d}.ppm').read_bytes().split(b'\n', 3)[3]
+                # SDL 1 may use RGB565 and zero-fill low bits; SDL 2 expands
+                # the VGA palette to RGB888. Normalize only those exact
+                # palette quantizations, preserving every pixel/color check.
+                quantized = {80: 85, 84: 85, 168: 170, 248: 255, 252: 255}
+                dac = bytes(quantized.get(value, value) for value in range(256))
+                assert actual.translate(dac) == expected.translate(dac), (
+                    'SDL scanout differs from the captured VGA planes')
         font = files['FONT.BIN'].read_bytes()
         assert len(font) == 4096
         return snapshots, font
@@ -165,6 +183,61 @@ def test_full_width_grid_and_symbol_spacing(capture):
             if len(encoded)==2: assert_hanzi(shot,row,col,char,0x1e)
             else: assert_char(shot,font,row,col,encoded[0],0x1e)
             col+=len(encoded)
+
+
+def test_text_layout_boundaries(capture):
+    """Dense mixed text, aligned tables, all colors, and independent row ends."""
+    screen = blank()
+    put(screen, 0, 0, ('1234567890' * 8).encode(), 0x70)
+    put(screen, 1, 2, '中文显示 / HHBIOS 80 x 25 text cells', 0x1f)
+    borders = {}
+    for row, left, middle, right in [(3, '╔', '╦', '╗'), (5, '╠', '╬', '╣'),
+                                    (9, '╚', '╩', '╝')]:
+        line = (left + '═'*18 + middle + '═'*35 + right).encode('cp437')
+        put(screen, row, 2, line, 0x1e)
+        borders.update({(row, 2+i): code for i, code in enumerate(line)})
+    for row in (4, 6, 7, 8):
+        for col in (2, 21, 57):
+            put(screen, row, col, b'\xba', 0x1e)
+            borders[row, col] = 0xba
+    for row, name, value in [(4, '项目 Item', '内容 / Value'),
+                             (6, '中文 + English', '文件编辑 ABC 123'),
+                             (7, '符号 Symbols', 'αΑ ℃①，Ａ中'),
+                             (8, '框线与正文', '屯 / CD CD = one Hanzi')]:
+        put(screen, row, 4, name, 0x1e)
+        put(screen, row, 23, value, 0x1e)
+    put(screen, 11, 2, 'FG 0..15:')
+    put(screen, 13, 2, 'BG 0..15:')
+    for color in range(16):
+        put(screen, 11, 14+color*4, f'{color:X}中', 0x70 | color)
+        put(screen, 13, 14+color*4, f'{color:X}中', (color << 4) | (15-color))
+    put(screen, 15, 2, 'Odd/even cell positions:')
+    put(screen, 16, 3, '中文 A 中文 B 中文', 0x2e)
+    put(screen, 17, 4, '中文 A 中文 B 中文', 0x2e)
+    put(screen, 19, 2, 'Last complete pair in columns 79-80 ->')
+    put(screen, 19, 78, '中', 0x4f)
+    put(screen, 20, 2, 'Orphan D6 at column 80; no cross-row pairing ->')
+    put(screen, 20, 79, b'\xd6', 0x4f)
+    put(screen, 21, 0, b'\xd0', 0x4f)
+    put(screen, 21, 2, '<- D0 at column 1; separate Western glyph')
+    put(screen, 23, 2, 'Last row / bottom-right:')
+    put(screen, 24, 0, '底行从第一列到最后一列 / no scrolling', 0x1e)
+    put(screen, 24, 78, '字', 0x1e)
+    shots, font = capture([(3, screen)])
+    shot = shots[0]
+    assert_text(screen, shot.text, set(borders))
+    for (row, col), code in borders.items():
+        assert_char(shot, font, row, col, code, 0x1e)
+    assert_hanzi(shot, 8, 23, '屯', 0x1e)
+    for color in range(16):
+        assert_hanzi(shot, 11, 15+color*4, '中', 0x70 | color)
+        assert_hanzi(shot, 13, 15+color*4, '中', (color << 4) | (15-color))
+    assert_hanzi(shot, 16, 3, '中文', 0x2e)
+    assert_hanzi(shot, 17, 4, '中文', 0x2e)
+    assert_hanzi(shot, 19, 78, '中', 0x4f)
+    assert_char(shot, font, 20, 79, 0xd6, 0x4f)
+    assert_char(shot, font, 21, 0, 0xd0, 0x4f)
+    assert_hanzi(shot, 24, 78, '字', 0x1e)
 
 
 def test_vga_mode_change_without_text_change(capture):

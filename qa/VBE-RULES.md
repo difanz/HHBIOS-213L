@@ -56,7 +56,12 @@ writing distinct words across all 32 KiB of B800 and clearing the complete
 visible plane through A000. It accepts a bank only if every text word survives.
 This verifies isolation even on BIOS/emulator mappings whose B800 bank address
 differs from the planar A000 address; an advertised extra page alone is not
-sufficient. The selected bank is retained across mode returns.
+sufficient. It first probes the shared A000-BFFF VGA aperture, then the narrower
+B800-BFFF aperture if necessary. This preserves planar scanout on implementations
+that interpret B800-only decoding as CGA, while supporting implementations whose
+shared aperture does not expose banked B800 memory. The selected bank and aperture
+are retained across mode returns. SDL window captures check the resulting visible
+pixels independently of the driver's plane-read API.
 
 The read-only `AX=1410h` character-boundary query also works during drawing.
 On a banked adapter, its CX points to this text snapshot; callers must not

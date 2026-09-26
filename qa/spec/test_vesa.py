@@ -114,12 +114,14 @@ def test_vesa_return_and_register_ownership(dosbox_binary,vesa_build,tmp_path,op
             assert records[3][0]==0x5003
 
 
-def test_vesa_prompt_bitmap_wide_text_and_pixels(dosbox_binary,vesa_build,tmp_path):
+def test_vesa_prompt_bitmap_wide_text_and_pixels(dosbox_binary,vesa_build,tmp_path,pytestconfig):
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path)
     shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
     (tmp_path/'INPUT.BIN').write_bytes(bytes([3])+bytes(blank()))
     files=run_dos(dosbox_binary,tmp_path,['SNAPSHOT font','READ5','VESA','VESATEST drawing','VESATEST'],
+                  physical_keys=pytestconfig.getoption('--screenshots'),
+                  screenshots=pytestconfig.getoption('--screenshots'),
                   settings='\n[dosbox]\nmachine=svga_s3\n')
     data=files['DRAW.BIN'].read_bytes()
     assert struct.unpack_from('<5H',data)==(14,9,1,1,1)
@@ -192,11 +194,13 @@ def test_vesa_one_image_aperture_or_clean_rejection(dosbox_binary,vesa_build,tmp
 
 
 @pytest.mark.parametrize('storage',['xms','ems'])
-def test_native_font_storage_banks_and_cursor(dosbox_binary,vesa_build,tmp_path,storage):
+def test_native_font_storage_banks_and_cursor(dosbox_binary,vesa_build,tmp_path,storage,pytestconfig):
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path)
     shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
     files=run_dos(dosbox_binary,tmp_path,['READ2','VESA','VESATEST fonts'],
+                  physical_keys=pytestconfig.getoption('--screenshots'),
+                  screenshots=pytestconfig.getoption('--screenshots'),
                   settings='\n[dosbox]\nmachine=svga_s3\n[dos]\nxms='+('true' if storage=='xms' else 'false')+'\nems=true\n')
     raw=files['FONT20.BIN'].read_bytes()
     assert len(raw)==20+4*4*2300

@@ -4,6 +4,7 @@
 #include <conio.h>
 #include <stdio.h>
 #include <string.h>
+#include "hostshot.h"
 
 static unsigned char buffer[4096];
 static void ticks(unsigned n)
@@ -198,6 +199,7 @@ static int fonts(void)
                 fwrite(buffer,1,100,out);
             }
         }
+        if (hostshot()) return 20;
     }
     return fclose(out)!=0;
 }
@@ -260,6 +262,7 @@ int main(int argc, char **argv)
             }
         }
         if (fclose(out)) return 6;
+        if (hostshot()) return 20;
     }
     return fclose(in)!=0;
 }

@@ -13,6 +13,7 @@
 #include <conio.h>
 #include <stdio.h>
 #include <string.h>
+#include "hostshot.h"
 
 static unsigned char buffer[38400];
 
@@ -152,6 +153,7 @@ int main(int argc, char **argv)
             if (fwrite(buffer, 1, 38400, out) != 38400) return 9;
         }
         if (fclose(out) != 0) return 10;
+        if (hostshot()) return 15;
     }
     if (ferror(in)) return 11;
     return fclose(in) != 0;

@@ -247,6 +247,44 @@ the next action. `KEYLOG.BIN` contains 164-byte records: requested key (word),
 BIOS cursor (word), and the 160-byte cursor row. The initial record has key zero.
 See [KEYBOARD-RULES.md](KEYBOARD-RULES.md) for behavior and scope.
 
+## Display screenshots
+
+Add `--screenshots` to display or editor runs to capture the actual SDL window
+through an isolated Xvfb display. This optional workflow needs ImageMagick
+(`import` and `convert`) in addition to the physical-keyboard dependencies.
+For example, with the selected toolchain and application fixture options:
+
+```sh
+python qa/run.py dos qa/spec/test_dos_display.py qa/spec/test_vesa.py --screenshots
+python qa/run.py application qa/spec/test_vesa_application.py --screenshots
+python qa/run.py application qa/spec/test_application.py -k tabs_and_long --screenshots
+python qa/gallery.py --output qa/out/gallery qa/out/runs/<run-id> [qa/out/runs/<another-run> ...]
+```
+
+Open `qa/out/gallery/index.html` locally. The self-contained gallery retains
+original PNGs, source/tool hashes, raw observations, test outcomes and failures.
+It copies no third-party executables. `screenshots.json` links each frame to the
+next requested key; the guest has settled and recorded its previous action at
+that point. Startup and exit-menu frames are included. No screenshot hotkey is
+sent to the guest, and capture does not replace or repaint any glyphs.
+
+The virtual desktop accommodates a window resized from DOS text mode to the
+full graphics resolution. Tests reject clipped or scaled window dimensions.
+Text-screen cases compare every SDL pixel against the four recorded planes,
+normalizing only the exact VGA-palette quantization of SDL RGB565 surfaces.
+This checks visible scanout as well as framebuffer contents. Boundary scenes
+include tables mixed with Chinese, 16 foreground/background colors, odd/even
+cell positions, all four corners, orphan bytes at row boundaries, bottom-right
+glyphs, policy changes, prompt clipping, simplified/traditional glyphs and
+cursor XOR. The Turbo Vision document includes real tabs and clipped long lines;
+its assertions cover tab alignment and unchanged file bytes, while right-edge
+appearance remains available for visual review.
+
+Capturing delays delivery of the next requested key. These runs establish
+screen contents and editing results, not interactive latency. A passing case
+does not assert that every visual detail is correct; review the full pictures
+and retain unexpected or intermittent results alongside successful captures.
+
 Every `qa/run.py` execution retains `qa/out/runs/<unique-id>/` containing a
 JUnit XML report, console log, source/font/tool hashes and commands. DOS cases
 add build products, guest logs, raw snapshots and PPM images. Host subprocess
