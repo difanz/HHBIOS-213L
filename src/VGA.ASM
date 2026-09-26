@@ -39,6 +39,8 @@ D_TUXS		DB	1EH			;第一提示行颜色
 D_5D16		DW	18			;16线或18线方式
 D_ZJXP		DB	2			;直接写屏周期
 
+D_VBEBUSY	DB	0			; BIOS mode-set recursion guard
+
 D_AH		DW	OFFSET L_AH00		;AH=0
 D_AH01		DW	OFFSET L_AH01		;AH=1
 		DW	OFFSET L_AH02		;AH=2
@@ -74,6 +76,10 @@ INT_10		PROC	FAR
 		CBW
 		IRET
 L_00:
+		CMP	CS:D_VBEBUSY,0
+		JNZ	L_10
+		CMP	AX,4F02H
+		JZ	L_VBESET
 		MOV	CS:IN_INT10,0FFH
 		OR	AH,AH
 		JZ	L_01
@@ -147,6 +153,35 @@ L_RET2:
 		MOV	CS:IN_INT10,0
 		IRET
 INT_10		ENDP
+
+; Let the VBE BIOS own its modes. Suspend VGA refresh during the BIOS call;
+; failed mode sets must leave the previous HHBIOS display state unchanged.
+L_VBESET:
+		PUSH	WORD PTR CS:K_INT8
+		MOV	BYTE PTR CS:K_INT8,0EBH
+		MOV	CS:D_VBEBUSY,1
+		PUSHF
+		CALL	CS:D_INT10
+		MOV	CS:D_VBEBUSY,0
+		PUSH	BX
+		PUSH	BP
+		MOV	BP,SP
+		CMP	AX,004FH
+		JNZ	L_VBEFAIL
+		MOV	BYTE PTR CS:[100H],0
+		PUSH	ES
+		MOV	ES,CS:D_INT16
+		MOV	BYTE PTR ES:[101H],0FFH
+		POP	ES
+		JMP	SHORT L_VBERET
+L_VBEFAIL:
+		MOV	BX,SS:[BP+4]
+		MOV	BYTE PTR CS:K_INT8,BL
+L_VBERET:
+		POP	BP
+		POP	BX
+		ADD	SP,2
+		IRET
 
 ;AH=0 设置显示方式
 L_AH00:

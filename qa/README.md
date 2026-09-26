@@ -8,6 +8,8 @@ API results, cursor movement and saved document bytes.
 Read [DISPLAY-RULES.md](DISPLAY-RULES.md) for the mixed-text contract and the
 two-state Chinese-pairing FSM. Ambiguous GB2312/CP437 bytes require explicit
 policy to determine how they display.
+The [VBE contract](VBE-RULES.md) covers mode ownership, banked framebuffer tests,
+the API sequence and performance criteria for a future VBE renderer.
 
 ## Setup
 
@@ -236,7 +238,8 @@ kill. This validates specific detection abilities, not total code coverage.
 
 Unicorn is not cycle accurate. The DOS layer uses `VGA.COM` with
 `machine=vgaonly`; EGA/HGA share the assembly classifier and are built, but are
-not validated on physical hardware. There is no VBE-driver validation here.
+not validated on physical hardware. VBE tests cover coexistence with the VGA
+resident driver; Chinese rendering inside VBE graphics modes is not implemented.
 The full suite's executable provenance is in its manifest; font and emulator
 results cannot be generalized to every BIOS/font/card combination.
 
