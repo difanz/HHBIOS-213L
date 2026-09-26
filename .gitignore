@@ -11,3 +11,6 @@ qa/out/
 *.map
 *.MAP
 qa/guest/
+qa/.venv/
+__pycache__/
+.pytest_cache/

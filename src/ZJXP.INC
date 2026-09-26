@@ -6,15 +6,47 @@ D_ZBFS		DB	3		;=0´¿Î÷ÎÄ·½Ê½,=1²»´¦ÀíÖÆ±í·û
 					;=2´¦Àí²¿·ÖÖÆ±í·û,=3´¦ÀíÈ«²¿ÖÆ±í·û
 D_NUM		DB	0		;×Ö·ûÉÁË¸¼ÆÊý
 
+D_LASTMODE		DB	0FFH
+D_LASTHZ		DB	0
+D_COL		DB	0
+D_ROW		DB	0
+D_PAIR		DB	0
+		INCLUDE	FRM.INC
+
 ;×Ó³ÌÐò:´¦ÀíÖ±½ÓÐ´ÆÁ
 S_XR		PROC	NEAR
+        ; A policy change also invalidates unchanged source cells.
+		MOV	AL,CS:D_ZBFS
+		CMP	AL,CS:D_LASTMODE
+		JNZ	L_XRPOL
+		MOV	AL,CS:K_HZ1
+		CMP	AL,CS:D_LASTHZ
+		JZ	L_XRSCAN
+L_XRPOL:
+		PUSH	CS
+		POP	ES
+		MOV	DI,OFFSET D_XPQ
+		MOV	CX,2000
+		XOR	SI,SI
+L_XRINV:
+		LODSW
+		NOT	AX
+		STOSW
+		LOOP	L_XRINV
+L_XRSCAN:
+		MOV	AL,CS:D_ZBFS
+		MOV	CS:D_LASTMODE,AL
+		MOV	AL,CS:K_HZ1
+		MOV	CS:D_LASTHZ,AL
 		CMP	CS:D_ZBFS,1		;=1²»´¦ÀíÖÆ±í·û
-		JZ	L_XR10
+		JBE	L_XR10
 
 		CMP	CS:D_ZBFS,2		;=2´¦Àí²¿·ÖÖÆ±í·û
 		JZ	L_XR1
 		CALL	S_SXSM			;ÊúÏòÉ¨Ãè
 L_XR1:
+		MOV	CS:D_COL,0
+		MOV	CS:D_ROW,0
 		MOV	CX,25*80		;ÐéÆÁÇø³¤¶È
 		XOR	SI,SI
 L_XR2:
@@ -30,6 +62,10 @@ L_XR2:
 		MOV	DI,SI
 L_XR3:
 		INC	CX
+		MOV	BL,CS:D_COL
+		ADD	BL,CL
+		CMP	BL,80
+		JAE	L_XR3A
 		CMP	AL,[DI] 		;×Ö·ûÏàÍ¬?
 		JNZ	L_XR3A
 		ADD	DI,2
@@ -51,12 +87,40 @@ L_XR4:
 		CALL	S_LXZF			;×ª»»ÂëÐ´ÈëB800
 		JMP	SHORT L_XR8
 L_XR5:
+		CMP	CS:D_ZBFS,3
+		JNE	L_XRPROP
+		PUSH	ES
+		PUSH	BX
+		PUSH	DX
+		PUSH	DS
+		POP	ES
+		MOV	BX,SI
+		SUB	BX,2
+		MOV	DL,CS:D_COL
+		MOV	DH,CS:D_ROW
+		CALL	S_CORNER
+		POP	DX
+		POP	BX
+		POP	ES
+		JNZ	L_XRPROP
+		MOV	CX,1
+		CALL	S_ZJZF
+		JMP	SHORT L_XR8
+L_XRPROP:
 		CALL	S_QTZF			;´¦ÀíÖÆ±í·û
 L_XR8:
 		POP	CX
 		POP	SI
 L_XR9:
-		LOOP	L_XR2			;´¦ÀíÏÂÒ»¸ö×Ö·û
+		INC	CS:D_COL
+		CMP	CS:D_COL,80
+		JB	L_XRCOL
+		MOV	CS:D_COL,0
+		INC	CS:D_ROW
+L_XRCOL:
+		DEC	CX
+		JZ	L_XR10
+		JMP	L_XR2			;´¦ÀíÏÂÒ»¸ö×Ö·û
 L_XR10:
 		MOV	CX,25*80		;ÐéÆÁÇø³¤¶È
 		PUSH	CS
@@ -78,11 +142,7 @@ L_XR11:
 		DIV	DL			;Ã¿ÐÐ×Ö·ûÊý
 		XCHG	AH,AL
 		MOV	DX,AX			;µ±Ç°×Ö·ûÎ»ÖÃ
-		CALL	S_HDEL
-		LODSW				;È¡×Ö·û
-		MOV	WORD PTR CS:D_XPQ[SI-2],AX
-		MOV	CX,AX
-		CALL	S_XRXS			;ÏÔÊ¾
+		CALL	S_XRROW
 		POP	DI
 		POP	SI
 		POP	CX
@@ -93,6 +153,40 @@ L_XR11:
 L_XR12:
 		RET
 S_XR		ENDP
+
+; Redraw a changed row so a byte edit can repair the rest of a DBCS run.
+; DS:SI is the changed word, DX its position; ES is the shadow segment.
+S_XRROW		PROC	NEAR
+		XOR	AH,AH
+		MOV	AL,DL
+		SHL	AX,1
+		SUB	SI,AX
+		MOV	DI,SI
+		ADD	DI,OFFSET D_XPQ
+		XOR	DL,DL
+		MOV	CS:D_PAIR,0
+		MOV	CX,80
+L_XRROW:
+		LODSW
+		STOSW
+		PUSH	DS
+		PUSH	ES
+		PUSH	SI
+		PUSH	DI
+		PUSH	CX
+		PUSH	DX
+		MOV	CX,AX
+		CALL	S_XRXS
+		POP	DX
+		POP	CX
+		POP	DI
+		POP	SI
+		POP	ES
+		POP	DS
+		INC	DL
+		LOOP	L_XRROW
+		RET
+S_XRROW		ENDP
 
 D_ZBFB		DB	80H, 81H, 82H, 14H, 83H, 84H, 85H,0B7H
 	;0B0H		°    ±	  ²    ³    ´	 µ    ¶    ·
@@ -126,17 +220,23 @@ L_QT1:
 		JB	L_QT3
 L_QT11:
 		CALL	S_ZBF			;È¡×ª»»Âë
+		CMP	CS:D_COL,79
+		JAE	L_QT13
 		MOV	DL,[SI] 		;ÓÒ±ß×Ö·û		1.16
 		CMP	AL,DL
 		JZ	L_QT12
 		CMP	DL,BL			;ÅÐÒÑÊÇÖÆ±í·û?
 		JNZ	L_QT13
 L_QT12:
+		CMP	CS:D_COL,0
+		JE	L_QT13
 		MOV	DL,[SI-4]		;×ó±ß×Ö·û		1.16
 		CMP	DL,BL			;ÅÐÒÑÊÇÖÆ±í·û?
 		JZ	L_QT14
 		CMP	AL,DL
 		JNZ	L_QT13
+		CMP	CS:D_COL,78
+		JAE	L_QT14
 		CMP	BYTE PTR [SI+2],0A0H	;ÓÒ±ßµÚ¶þ×Ö·ûÎªºº×Ö?	1.19
 		JBE	L_QT14
 L_QT13:
@@ -148,6 +248,8 @@ L_QT3:
 		XOR	BH,BH
 		MOV	DL,CS:D_ZBF[BX-0B3H]	;È¡ÊôÐÔ
 		XOR	BP,BP
+		CMP	CS:D_COL,0
+		JE	L_QT4
 		TEST	DL,30H			;ÅÐ×ó±ß?
 		JZ	L_QT4
 		MOV	CH,DL
@@ -167,6 +269,8 @@ L_QT3:
 L_QT3A: 	CALL	L_QT9			;Ð´Èë
 		INC	BP
 L_QT4:
+		CMP	CS:D_ROW,0
+		JE	L_QT5
 		TEST	DL,0CH			;ÅÐÉÏ±ß?
 		JZ	L_QT5
 		MOV	CH,DL
@@ -200,6 +304,8 @@ L_QT4A:
 		CALL	L_QT9			;Ð´Èë
 		INC	BP
 L_QT5:
+		CMP	CS:D_COL,79
+		JE	L_QT6
 		TEST	DL,3			;ÅÐÓÒ±ß?
 		JZ	L_QT6
 		MOV	CH,DL
@@ -222,6 +328,8 @@ L_QT5A:
 		CALL	L_QT9			;Ð´Èë
 		INC	BP
 L_QT6:
+		CMP	CS:D_ROW,24
+		JE	L_QT7
 		TEST	DL,0C0H 		;ÅÐÏÂ±ß?
 		JZ	L_QT7
 		MOV	CH,DL
@@ -275,6 +383,8 @@ S_QTZF		ENDP
 ;×Ó³ÌÐò:Èý¸öÒÔÉÏÖÆ±í·ûÏò×ó²éÑ¯
 S_LXZF		PROC	NEAR
 		PUSH	CX
+		CMP	CS:D_COL,0
+		JE	L_LX1
 		MOV	BL,[SI-4]		;×ó±ß×Ö·û
 		CMP	BL,0A0H 		;ÅÐºº×Ö?
 		JBE	L_LX1
@@ -368,6 +478,7 @@ D_ZBF		DB	01000100B,01010100B,01100100B,10011000B
 
 ;×Ó³ÌÐò:ÊúÏòÉ¨Ãè
 S_SXSM		PROC	NEAR
+		MOV	CS:D_COL,0
 		XOR	SI,SI
 		MOV	CX,80			;Ã¿ÐÐ×Ö·ûÊý
 L_SX1:
@@ -392,6 +503,7 @@ L_SX5:
 		POP	CX
 		POP	SI
 		ADD	SI,2
+		INC	CS:D_COL
 		LOOP	L_SX1
 		RET
 S_SXSM		ENDP
@@ -404,6 +516,7 @@ L_ZX1:
 		INC	DX
 		ADD	SI,80*2 		;ÏÂÒ»ÐÐ
 		DEC	CX
+		JZ	L_ZX3
 		CMP	BL,DS:[SI]		;ÅÐ×ª»»Âë?
 		JZ	L_ZX2
 		CMP	AL,DS:[SI]		;ÅÐ×Ö·û?
@@ -421,6 +534,8 @@ L_ZX3:
 		CALL	S_QSX			;È¡ÊúÏßÊôÐÔ
 		AND	DH,0FH
 		MOV	CH,DH			;±£ÁôµÍ4Î»
+		CMP	DI,160
+		JB	L_ZX5
 		MOV	BL,[DI-80*2]		;ÉÏÒ»ÐÐ×Ö·û
 		CMP	BL,0A0H 		;ÅÐÖÆ±í·û?
 		JA	L_ZX5
@@ -430,8 +545,13 @@ L_ZX3:
 		CMP	CH,DH			;ÅÐ?
 		JZ	L_ZX7
 L_ZX5:
+		CMP	CS:D_COL,0
+		JE	L_ZXLEFT
 		CMP	BYTE PTR [DI-2],0A0H	;×óÓÒÎª×Ö·û?
 		JA	L_ZX8
+L_ZXLEFT:
+		CMP	CS:D_COL,79
+		JE	L_ZX7
 		CMP	BYTE PTR [DI+2],0A0H
 		JA	L_ZX8
 L_ZX7:
@@ -500,6 +620,7 @@ S_XRXS		PROC	NEAR
 		CMP	AL,0A0H 		;ÅÐºº×Ö?
 		JA	L_XX2
 L_XX1:
+		MOV	CS:D_PAIR,0
 		CMP	CS:D_ZBFS,1		;=0´¿Î÷ÎÄ·½Ê½ »ò1²»´¦ÀíÖÆ±í·û
 		JBE	L_XX1A
 		CALL	S_ALVB			;ALÖÆ±í·û×ª³ÉASCIIÖÆ±í·û
@@ -512,6 +633,8 @@ S_XRZF:
 		MOV	DS,BP
 		JMP	S_XSZF
 L_XX2:
+		CMP	CS:D_ZBFS,3
+		JNE	L_XXPAIR
 		PUSH	BX
 		PUSH	ES
 		MOV	BX,SI
@@ -522,20 +645,32 @@ L_XX2:
 		POP	ES
 		POP	BX
 		JZ	L_XX1
+L_XXPAIR:
 		CALL	S_PVHZ			;ÅÐÕûºº×Ö?
 		JZ	L_XX3
-		CMP	DL,1			;µ±Ç°×Ö·ûÁÐÎ»ÖÃ
-		JB	L_XX1
-		MOV	BX,DS:[SI-4]		;×ó±ß×Ö·û
-		CMP	BL,0A0H
-		JBE	L_XX1
-		MOV	AH,BL			;×ó±ß×Ö·û(ÊôÐÔBH)
-		MOV	BL,CH			;µ±Ç°×Ö·ûÊôÐÔ(×Ö·ûAL)
-		DEC	DX
-		JMP	SHORT S_XRHZ
+		RET	; The preceding lead already drew both halves.
 L_XX3:
+		CMP	AL,0F7H
+		JA	L_XX1
 		CMP	DL,79			;µ±Ç°×Ö·ûÔÚÐÐÎ²
 		JAE	L_XX1
+		CMP	BYTE PTR DS:[SI],0FEH
+		JA	L_XX1
+		CMP	CS:D_ZBFS,3
+		JNE	L_XXTRAIL
+		PUSH	BX
+		PUSH	DX
+		PUSH	ES
+		PUSH	DS
+		POP	ES
+		MOV	BX,SI
+		INC	DL
+		CALL	S_CORNER
+		POP	ES
+		POP	DX
+		POP	BX
+		JZ	L_XX1
+L_XXTRAIL:
 		MOV	BX,DS:[SI]		;ÓÒ±ß×Ö·û
 		CMP	BL,0A0H
 		JBE	L_XX1
@@ -568,115 +703,13 @@ L_XRHZ2:
 		JMP	S_XRZF
 S_XRXS		ENDP
 
-;×Ó³ÌÐò:ÅÐÕûºº×Ö ·µ»ØZF=0ÎªÇ°×Ö½Ú,=1Îªºó×Ö½Ú
+; Row state: ZF=1 starts a pair, ZF=0 consumes its already-drawn trail.
 S_PVHZ		PROC	NEAR
-		PUSH	SI
-		XOR	BL,BL
-		OR	DL,DL
-		JZ	L_PV2
-		MOV	BH,DL			;µ±Ç°×Ö·ûÁÐÎ»ÖÃ
-		SUB	SI,4
-L_PV1:
-		CMP	BYTE PTR [SI],0A0H
-		JB	L_PV2
-		SUB	SI,2
-		NOT	BL
-		DEC	BH
-		JNZ	L_PV1
-L_PV2:
-		POP	SI
+		MOV	BL,CS:D_PAIR
+		XOR	CS:D_PAIR,0FFH
 		OR	BL,BL
 		RET
 S_PVHZ		ENDP
 
-; DS:SI changed cell, DX position. Shadow still has the old word.
-; One changed cell of a non-corner pair blanks the other cell.
-S_HDEL		PROC	NEAR
-		PUSH	AX
-		PUSH	BX
-		PUSH	CX
-		PUSH	DX
-		PUSH	SI
-		PUSH	DI
-		PUSH	ES
-		PUSH	DS
-		MOV	AL,DS:[SI]
-		CMP	AL,CS:D_XPQ[SI]
-		JZ	HD_OUT
-		MOV	AL,CS:D_XPQ[SI]
-		CMP	AL,0A0H
-		JBE	HD_OUT
-		XOR	BL,BL
-		MOV	BH,DL
-		MOV	DI,SI
-		OR	BH,BH
-		JZ	HD_PAR
-HD_WLK:		SUB	DI,2
-		CMP	BYTE PTR CS:D_XPQ[DI],0A0H
-		JBE	HD_PAR
-		NOT	BL
-		DEC	BH
-		JNZ	HD_WLK
-HD_PAR:		OR	BL,BL
-		JNZ	HD_LEFT
-		CMP	DL,79
-		JAE	HD_OUT
-		MOV	DI,SI
-		ADD	DI,2
-		JMP	SHORT HD_PART
-HD_LEFT:	OR	DL,DL
-		JZ	HD_OUT
-		MOV	DI,SI
-		SUB	DI,2
-HD_PART:	MOV	AL,CS:D_XPQ[DI]
-		CMP	AL,0A0H
-		JBE	HD_OUT
-		CMP	AL,DS:[DI]
-		JNZ	HD_OUT
-		PUSH	DS
-		PUSH	CS
-		POP	ES
-		MOV	BX,SI
-		ADD	BX,OFFSET D_XPQ
-		CALL	S_CORNER
-		JZ	HD_SKIP
-		PUSH	DX
-		CMP	DI,SI
-		JB	HD_PDEC
-		INC	DL
-		JMP	SHORT HD_PCALL
-HD_PDEC:	DEC	DL
-HD_PCALL:	MOV	BX,DI
-		ADD	BX,OFFSET D_XPQ
-		CALL	S_CORNER
-		POP	DX
-		JZ	HD_SKIP
-		POP	DS
-		MOV	BYTE PTR DS:[DI],20H
-		CMP	DI,SI
-		JA	HD_OUT
-		PUSH	SI
-		PUSH	DX
-		PUSH	DS
-		DEC	DL
-		MOV	SI,DI
-		LODSW
-		MOV	WORD PTR CS:D_XPQ[SI-2],AX
-		MOV	CX,AX
-		CALL	S_XRXS
-		POP	DS
-		POP	DX
-		POP	SI
-		JMP	SHORT HD_OUT
-HD_SKIP:	POP	DS
-HD_OUT:		POP	DS
-		POP	ES
-		POP	DI
-		POP	SI
-		POP	DX
-		POP	CX
-		POP	BX
-		POP	AX
-		RET
-S_HDEL		ENDP
+
 

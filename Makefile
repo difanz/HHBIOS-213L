@@ -17,7 +17,8 @@ ASMS := $(wildcard $(SRC)/*.ASM)
 INCS := $(wildcard $(SRC)/*.INC)
 COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 
-.PHONY: all clean check vbeprobe qa-smoke qa-test qa-smoke-usage
+.PHONY: all clean check vbeprobe qa-smoke qa-test qa-dos qa-application qa-all qa-mutate qa-legacy qa-smoke-usage
+QA_PYTHON ?= python3
 
 all: $(COMS)
 
@@ -26,12 +27,12 @@ $(BUILD):
 
 # R16.COM is the stub with READ3..READ6 appended (R16 /S).
 $(BUILD)/R16.COM: $(SRC)/R16.ASM $(BUILD)/READ3.COM $(BUILD)/READ4.COM $(BUILD)/READ5.COM $(BUILD)/READ6.COM | $(BUILD)
-	$(JWASM) $(JWFLAGS) -I$(SRC) -Fo$(BUILD)/R16.stub -Fw$(BUILD)/R16.err $(SRC)/R16.ASM
+	env -u JWASM "$(JWASM)" $(JWFLAGS) -I$(SRC) -Fo$(BUILD)/R16.stub -Fw$(BUILD)/R16.err $(SRC)/R16.ASM
 	rm -f $(BUILD)/R16.err
 	python3 tools/joinr16.py $(BUILD)/R16.stub $(BUILD)/READ3.COM $(BUILD)/READ4.COM $(BUILD)/READ5.COM $(BUILD)/READ6.COM $@
 
 $(BUILD)/%.COM: $(SRC)/%.ASM $(INCS) | $(BUILD)
-	$(JWASM) $(JWFLAGS) -I$(SRC) -Fo$@ -Fw$(BUILD)/$*.err $<
+	env -u JWASM "$(JWASM)" $(JWFLAGS) -I$(SRC) -Fo$@ -Fw$(BUILD)/$*.err $<
 	rm -f $(BUILD)/$*.err
 
 # Confirm every src/*.ASM produced a non-empty build/*.COM.
@@ -47,12 +48,28 @@ vbeprobe: $(BUILD)/VBEPROBE.COM
 $(BUILD)/VBEPROBE.COM: src/c/vbeprobe.c tools/build-vbeprobe.sh
 	bash tools/build-vbeprobe.sh
 
-# Fetch pinned DOSBox-X if needed, build VBEPROBE, run it, check the log.
-qa-smoke:
-	bash qa/smoke.sh
-
-# Every qa/tests/* case. Directories with a skip file are reported and not run.
+# Fast production-assembly contracts. No network or GUI dependency.
 qa-test:
+	"$(QA_PYTHON)" qa/run.py unit
+
+# Explicit DOSBox layer: required tools must be configured, never skipped.
+qa-dos:
+	"$(QA_PYTHON)" qa/run.py dos
+
+qa-application:
+	"$(QA_PYTHON)" qa/run.py application
+
+qa-all:
+	"$(QA_PYTHON)" qa/run.py all
+
+qa-mutate:
+	"$(QA_PYTHON)" qa/mutate.py
+
+qa-smoke:
+	"$(QA_PYTHON)" qa/run.py dos -k mixed_frames
+
+# Historical marker/screenshot scripts, retained for comparison only.
+qa-legacy:
 	bash qa/run-suite.sh
 
 # Usage smokes under qa/smoke-usage/. Missing qa/guest/ files skip the case.

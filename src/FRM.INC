@@ -1,4 +1,4 @@
-; Frame corners stay CP437. The eight corner bytes, the matching
+; Frame corners stay CP437. Pure and mixed corner bytes, the matching
 ; bar (CD double, C4 single), and a line on the other axis.
 ; That line may still be B3 or BA, or already 14h / 15h after the
 ; vertical scan rewrites a short stroke. B800 is not rewritten here.
@@ -12,6 +12,15 @@ D_FRMC		LABEL	BYTE
 		DB	0BFH, 0C4H, 2
 		DB	0C0H, 0C4H, 1
 		DB	0D9H, 0C4H, 0
+		DB	0B7H, 0C4H, 2
+		DB	0B8H, 0CDH, 2
+		DB	0BDH, 0C4H, 0
+		DB	0BEH, 0CDH, 0
+		DB	0D3H, 0C4H, 1
+		DB	0D4H, 0CDH, 1
+		DB	0D5H, 0CDH, 3
+		DB	0D6H, 0C4H, 3
+D_FRME		LABEL	BYTE
 D_CFLG		DB	0
 
 ; ES:BX = cell. DL = column, DH = row.
@@ -27,7 +36,7 @@ S_CORNER	PROC	NEAR
 		MOV	SI,BX
 		MOV	AL,ES:[SI]
 		MOV	DI,OFFSET D_FRMC
-		MOV	CX,8
+		MOV	CX,(D_FRME-D_FRMC)/3
 SC_TAB: 	CMP	AL,CS:[DI]
 		JNZ	SC_NXT
 		PUSH	AX
@@ -41,7 +50,7 @@ SC_TAB: 	CMP	AL,CS:[DI]
 SC_NXT: 	ADD	DI,3
 		LOOP	SC_TAB
 		MOV	DI,OFFSET D_FRMC
-		MOV	CX,8
+		MOV	CX,(D_FRME-D_FRMC)/3
 SB_TAB: 	CMP	AL,CS:[DI+1]
 		JNZ	SB_NXT
 		PUSH	AX
@@ -89,7 +98,11 @@ CG_VERT:	TEST	CL,2
 CG_UP:		OR	DH,DH
 		JZ	CG_NO
 		MOV	AL,ES:[SI-160]
-CG_LINE:	CMP	AL,0B3H
+CG_LINE:	CMP	AL,1EH
+		JZ	CG_YES
+		CMP	AL,1FH
+		JZ	CG_YES
+		CMP	AL,0B3H
 		JZ	CG_YES
 		CMP	AL,0BAH
 		JZ	CG_YES
@@ -135,7 +148,11 @@ BG_RIGHT:	CMP	DL,79
 BG_UPR: 	OR	DH,DH
 		JZ	BG_NO
 		MOV	AL,ES:[SI+2-160]
-BG_LINE:	CMP	AL,0B3H
+BG_LINE:	CMP	AL,1EH
+		JZ	BG_YES
+		CMP	AL,1FH
+		JZ	BG_YES
+		CMP	AL,0B3H
 		JZ	BG_YES
 		CMP	AL,0BAH
 		JZ	BG_YES
@@ -149,82 +166,3 @@ BG_NO:		XOR	AL,AL
 BG_YES: 	XOR	AL,AL
 		RET
 S_BGEO		ENDP
-
-IFDEF D_005A
-D_EPF		DB	0
-
-; Cursor has already stepped one column left (DL).
-; ZF=1: that cell and the lead on its left were a non-corner
-; pair and both cells are now spaces. Caller steps one more column.
-S_0EP		PROC	NEAR
-		PUSH	AX
-		PUSH	BX
-		PUSH	CX
-		PUSH	DX
-		PUSH	SI
-		PUSH	DI
-		PUSH	ES
-		MOV	BYTE PTR CS:D_EPF,0
-		OR	DL,DL
-		JZ	EP_RET
-		MOV	AL,DH
-		MOV	BL,80
-		MUL	BL
-		XOR	BH,BH
-		MOV	BL,DL
-		ADD	AX,BX
-		SHL	AX,1
-		MOV	BX,AX
-		MOV	AL,CS:D_XPQ[BX]
-		CMP	AL,0A0H
-		JBE	EP_RET
-		XOR	CL,CL
-		MOV	CH,DL
-		MOV	SI,BX
-EP_WLK: 	SUB	SI,2
-		CMP	BYTE PTR CS:D_XPQ[SI],0A0H
-		JBE	EP_PAR
-		NOT	CL
-		DEC	CH
-		JNZ	EP_WLK
-EP_PAR: 	OR	CL,CL
-		JZ	EP_RET
-		MOV	AL,CS:D_XPQ[BX-2]
-		CMP	AL,0A0H
-		JBE	EP_RET
-		PUSH	CS
-		POP	ES
-		PUSH	BX
-		SUB	BX,2
-		ADD	BX,OFFSET D_XPQ
-		DEC	DL
-		CALL	S_CORNER
-		POP	BX
-		JZ	EP_RET
-		INC	DL
-		PUSH	BX
-		ADD	BX,OFFSET D_XPQ
-		CALL	S_CORNER
-		POP	BX
-		JZ	EP_RET
-		MOV	BYTE PTR CS:D_XPQ[BX],20H
-		MOV	BYTE PTR CS:D_XPQ[BX-2],20H
-		CMP	BYTE PTR CS:D_005A,1
-		JNZ	EP_MARK
-		PUSH	ES
-		MOV	ES,CS:D_B800
-		MOV	BYTE PTR ES:[BX],20H
-		MOV	BYTE PTR ES:[BX-2],20H
-		POP	ES
-EP_MARK:	MOV	BYTE PTR CS:D_EPF,1
-EP_RET: 	POP	ES
-		POP	DI
-		POP	SI
-		POP	DX
-		POP	CX
-		POP	BX
-		POP	AX
-		CMP	BYTE PTR CS:D_EPF,1
-		RET
-S_0EP		ENDP
-ENDIF
