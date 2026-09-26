@@ -45,7 +45,7 @@ clean:
 # 16-bit DOS VBE probe. Needs Open Watcom (wcl). Does not run as part of `all`.
 vbeprobe: $(BUILD)/VBEPROBE.COM
 
-$(BUILD)/VBEPROBE.COM: src/c/vbeprobe.c tools/build-vbeprobe.sh
+$(BUILD)/VBEPROBE.COM: qa/tests/vbeprobe/vbeprobe.c tools/build-vbeprobe.sh
 	bash tools/build-vbeprobe.sh
 
 # Fast production-assembly contracts. No network or GUI dependency.

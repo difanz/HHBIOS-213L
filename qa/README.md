@@ -215,7 +215,8 @@ and [Unicorn's CPU execution API](https://github.com/unicorn-engine/unicorn/wiki
 ## Auxiliary probes
 
 `make qa-legacy` and `make qa-smoke-usage` run the shell probes in `qa/tests`
-and `qa/smoke-usage`, using helpers from `qa/input`. These targets are outside
+and `qa/smoke-usage`, using helpers from `qa/input`. Each case's C probe lives
+alongside its `prep`, `case.bat` and expectations. These targets are outside
 `qa-all`. Their expectations differ from the display contract: `half-del`
 expects erasure of the unmodified half of a Chinese character, and `tv-edit`
 uses space-prefixed Chinese lines. Use `qa/spec` for display regression tests.
