@@ -24,9 +24,11 @@ def textmode_build(tmp_path_factory):
     return out
 
 
-def test_native_vbe_mode_catalog(dosbox_binary,textmode_build,tmp_path):
+def test_native_vbe_mode_catalog(dosbox_binary,textmode_build,tmp_path,pytestconfig):
     shutil.copy2(textmode_build,tmp_path)
-    files = run_dos(dosbox_binary,tmp_path,['TEXTMODE'],settings='\n[dosbox]\nmachine=svga_s3\n')
+    config=pytestconfig.getoption('--vesa-research-config')
+    settings='\n[dosbox]\nmachine=svga_s3\n'+ ('\n'+config.read_text() if config else '')
+    files = run_dos(dosbox_binary,tmp_path,['TEXTMODE'],settings=settings)
     raw = files['VBELIST.BIN'].read_bytes()
     assert raw[:4] == b'VESA' and len(raw)>512 and (len(raw)-512)%260 == 0
     modes = []
@@ -37,7 +39,8 @@ def test_native_vbe_mode_catalog(dosbox_binary,textmode_build,tmp_path):
         modes.append(dict(mode=f'{mode:03x}',status=f'{status:04x}',attributes=attr,
                           kind='graphics' if attr&16 else 'text',x=x,y=y,
                           cell=list(info[22:24]),pitch=pitch,planes=info[24],bpp=info[25],
-                          memory_model=info[27],window_kib=struct.unpack_from('<H',info,6)[0]))
+                          memory_model=info[27],window_kib=struct.unpack_from('<H',info,6)[0],
+                          granularity_kib=struct.unpack_from('<H',info,4)[0]))
     (tmp_path/'modes.json').write_text(json.dumps(dict(
         version=f'{struct.unpack_from("<H",raw,4)[0]:04x}',
         memory_kib=struct.unpack_from('<H',raw,18)[0]*64,modes=modes),indent=2)+'\n')
@@ -77,3 +80,33 @@ def test_native_text_geometry(dosbox_binary,textmode_build,tmp_path,pytestconfig
         # VGA may double short scanlines. Capture must include the entire grid.
         assert shot['width'] >= cols*8
         assert shot['height'] >= rows*struct.unpack_from('<H',bda,0x85)[0]
+
+
+@pytest.mark.parametrize('mode', ['25','43','50','108','109','10a','10b','10c'])
+def test_native_text_services(dosbox_binary,textmode_build,tmp_path,mode):
+    """Retain native inconsistencies as observations; do not normalize them."""
+    shutil.copy2(textmode_build,tmp_path)
+    files=run_dos(dosbox_binary,tmp_path,['TEXTMODE '+mode+' audit'],
+                  settings='\n[dosbox]\nmachine=svga_s3\n')
+    before=files['TEXTMODE.BIN'].read_bytes()
+    if int(mode,16)>=0x100 and struct.unpack_from('<H',before,10)[0]!=0x004f:
+        assert 'MOUSE.BIN' not in files and 'PAGES.BIN' not in files
+        pytest.skip(f'Native BIOS rejects VBE {mode}h')
+    mouse=files['MOUSE.BIN'].read_bytes(); assert len(mouse)==100
+    regs=[struct.unpack_from('<10H',mouse,i*20) for i in range(5)]
+    pages=files['PAGES.BIN'].read_bytes()
+    cols,rows,stride,count=struct.unpack_from('<4H',pages)
+    assert len(pages)==8+16*count and 0<count<=8
+    assert (cols,rows,stride)==(struct.unpack_from('<H',before,20+0x4a)[0],
+                               before[20+0x84]+1,struct.unpack_from('<H',before,20+0x4c)[0])
+    records=[]
+    for i in range(count):
+        record=struct.unpack_from('<8H',pages,8+16*i)
+        assert record[0]==i and record[4] in (0,1) and record[5]<=cols*rows
+        records.append(dict(zip(('request','active','offset','stride','addressable',
+                                 'overwritten_words','first','last'),record)))
+    observation=dict(mode=mode,grid=[cols,rows],page_bytes=stride,pages=records,
+        mouse_present=regs[0][0]==0xffff,
+        mouse={name:list(r[2:4]) for name,r in zip(
+            ('default_max','custom_max','custom_min','interior_13_21'),regs[1:])})
+    (tmp_path/'services.json').write_text(json.dumps(observation,indent=2)+'\n')

@@ -16,6 +16,60 @@ static unsigned char controller[512], info[256], bda[256];
 
 static unsigned word(const unsigned char *p) { return p[0] | ((unsigned)p[1]<<8); }
 
+/* Native mouse ranges and page isolation, without assuming BIOS consistency.
+ * MOUSE.BIN: five REGPACKs (reset, default max, custom max, custom min, interior).
+ * PAGES.BIN: cols,rows,stride,count; eight-word records per candidate page:
+ * request,active,offset,stride,addressable,mismatches,first,last.
+ */
+static int audit(void)
+{
+    union REGPACK r,mouse[5];
+    unsigned pages[8][8],cols=word(bda+0x4a),rows=(unsigned)bda[0x84]+1;
+    unsigned stride=word(bda+0x4c),count,p,i,header[4];
+    unsigned __far *text;
+    FILE *out;
+    memset(mouse,0,sizeof(mouse)); memset(&r,0,sizeof(r));
+    intr(0x33,&r); mouse[0]=r;
+    if (r.x.ax==0xffff) {
+        r.x.ax=4; r.x.cx=0x7fff; r.x.dx=0x7fff; intr(0x33,&r);
+        r.x.ax=3; intr(0x33,&r); mouse[1]=r;
+        r.x.ax=7; r.x.cx=0; r.x.dx=cols*8-1; intr(0x33,&r);
+        r.x.ax=8; r.x.cx=0; r.x.dx=rows*8-1; intr(0x33,&r);
+        r.x.ax=4; r.x.cx=0x7fff; r.x.dx=0x7fff; intr(0x33,&r);
+        r.x.ax=3; intr(0x33,&r); mouse[2]=r;
+        r.x.ax=4; r.x.cx=0; r.x.dx=0; intr(0x33,&r);
+        r.x.ax=3; intr(0x33,&r); mouse[3]=r;
+        r.x.ax=4; r.x.cx=13; r.x.dx=21; intr(0x33,&r);
+        r.x.ax=3; intr(0x33,&r); mouse[4]=r;
+    }
+    out=fopen("MOUSE.BIN","wb"); if (!out) return 11;
+    if (fwrite(mouse,1,sizeof(mouse),out)!=sizeof(mouse)) { fclose(out); return 12; }
+    if (fclose(out)) return 12;
+    /* The last visible image can fit even when its trailing page padding
+     * would not. Test each page start, then bound its actual visible extent. */
+    count=stride ? 1+32767U/stride : 0; if (count>8) count=8;
+    memset(pages,0,sizeof(pages));
+    for (p=0;p<count;++p) {
+        r.x.ax=0x0500|p; intr(0x10,&r);
+        pages[p][0]=p; pages[p][1]=*(unsigned char __far *)MK_FP(0x40,0x62);
+        pages[p][2]=*(unsigned __far *)MK_FP(0x40,0x4e);
+        pages[p][3]=*(unsigned __far *)MK_FP(0x40,0x4c);
+        if ((unsigned long)pages[p][2]+(unsigned long)cols*rows*2>32768UL) continue;
+        pages[p][4]=1; text=MK_FP(0xb800,pages[p][2]);
+        for (i=0;i<cols*rows;++i) text[i]=0x3041+p;
+    }
+    for (p=0;p<count;++p) if (pages[p][4]) {
+        text=MK_FP(0xb800,pages[p][2]);
+        for (i=0;i<cols*rows;++i) if (text[i]!=0x3041+p) ++pages[p][5];
+        pages[p][6]=text[0]; pages[p][7]=text[cols*rows-1];
+    }
+    r.x.ax=0x0500; intr(0x10,&r);
+    header[0]=cols; header[1]=rows; header[2]=stride; header[3]=count;
+    out=fopen("PAGES.BIN","wb"); if (!out) return 13;
+    if (fwrite(header,2,4,out)!=4 || fwrite(pages,16,count,out)!=count) { fclose(out); return 14; }
+    return fclose(out)!=0;
+}
+
 static int catalog(void)
 {
     union REGPACK r;
@@ -103,5 +157,18 @@ static int select_mode(const char *name)
 
 int main(int argc, char **argv)
 {
-    return argc==1 ? catalog() : argc==2 ? select_mode(argv[1]) : 1;
+    int status;
+    if (argc==1) return catalog();
+    if (argc!=2 && (argc!=3 || strcmp(argv[2],"audit"))) return 1;
+    status=select_mode(argv[1]);
+    if (status || argc==2) return status;
+    if (!strcmp(argv[1],"25") || !strcmp(argv[1],"43") || !strcmp(argv[1],"50")) return audit();
+    /* A rejected VBE mode leaves the previous mode intact; do not audit it
+     * under the requested mode's name. Re-query before accessing text RAM. */
+    {
+        union REGPACK r;
+        memset(&r,0,sizeof(r)); r.x.ax=0x4f03; intr(0x10,&r);
+        if (r.x.ax!=0x004f || (r.x.bx&0x3fff)!=(unsigned)strtoul(argv[1],0,16)) return 0;
+    }
+    return audit();
 }

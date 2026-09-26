@@ -29,6 +29,7 @@ TITLES = {
     'test_native_font_storage_banks_and_cursor': 'Simplified / traditional / cursor XOR / restored',
     'test_tvedit_tabs_and_long_lines': 'Turbo Vision document: tabs and right-edge clipping',
     'test_native_text_geometry': 'Native BIOS text mode, without HHBIOS',
+    'test_banked_wide_framebuffer': 'Banked VBE rendering experiment, without a text BIOS',
 }
 
 
@@ -89,6 +90,7 @@ def main():
             parameters = parameters.rstrip(']')
             app = read_json(directory / 'application.json', {})
             grid = read_json(directory / 'grid.json')
+            wide = read_json(directory / 'wide.json')
             if base in TITLES:
                 title = TITLES[base]+' / '+parameters
             elif app:
@@ -102,6 +104,7 @@ def main():
             for name in ('APP.BIN', 'KEYLOG.BIN', 'INPUT.BIN', 'FONT20.BIN', 'DRAW.BIN',
                          'VIEW.TXT', 'SAVED.TXT', 'application.json', 'emulator.json',
                          'TEXTMODE.BIN', 'TEXT.BIN', 'GRID.BIN', 'grid.json',
+                         'RESULT.BIN', 'STATUS.BIN', 'FRAME.BIN', 'FONT16.BIN', 'WIDE.IN', 'wide.json',
                          'physical-keys.json', 'screenshots.json', 'provenance.json', 'dosbox.conf'):
                 if (directory / name).is_file():
                     shutil.copy2(directory / name, dest / name)
@@ -141,7 +144,7 @@ def main():
             cover = min(1 if grid else initial, len(figures)-1)
             emulator = read_json(directory / 'emulator.json', {})
             metadata = dict(case, title=title, run=run.name, directory=directory.name,
-                            emulator=emulator, images=images, native_grid=grid,
+                            emulator=emulator, images=images, native_grid=grid, framebuffer_experiment=wide,
                             drivers={name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
                                      for name in ('VGA.COM', 'VESA.COM', 'CKBD.COM')
                                      if (directory / name).is_file()})
@@ -154,6 +157,12 @@ def main():
             geometry = (f'<p>Native BIOS observation, without HHBIOS: '
                         f'{grid["before"][0]}×{grid["before"][1]} before launch → '
                         f'{grid["during"][0]}×{grid["during"][1]} while running.</p>') if grid else ''
+            if wide:
+                geometry += (f'<p>Foreground rendering experiment; no virtual text BIOS or application test. '
+                             f'Grid {wide["grid"][0]}×{wide["grid"][1]}, {wide["scale"]}x bitmap scale, '
+                             f'{wide["bpp"]} bpp. Window {wide["window_kib"]} KiB, '
+                             f'granularity {wide["granularity_kib"]} KiB; '
+                             f'{wide["write_bank_calls"]} bank calls per full draw.</p>')
             rest = ''.join(figure for index, figure in enumerate(figures) if index != cover)
             sections.append(f'<section id="{case_id}"><h2>{escaped}</h2>'
                             f'<p>Assertions: <strong>{case["outcome"]}</strong> · '
@@ -181,6 +190,8 @@ No screenshot hotkeys, redraws or replacement glyphs. Click an image for the ori
 The HHBIOS console is 80×25 cells: VGA 640×480, VESA 800×600.
 Cases labeled native BIOS run without HHBIOS and study existing text modes;
 they do not demonstrate Chinese rendering in larger grids.</p>
+<p>Banked framebuffer experiments draw bitmap fixtures directly in DOS.
+They verify rendering, not resident B800 emulation or application compatibility.</p>
 <p>“Passed” describes the test assertions, not every visual detail. Framebuffer checks,
 saved file bytes and cursor observations accompany the pictures. Capturing pauses key
 delivery; these runs are not latency measurements. Failures are retained.</p>

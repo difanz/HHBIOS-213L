@@ -16,9 +16,10 @@ import time
 
 
 class PhysicalKeyboard:
-    def __init__(self, directory, screenshots=False):
+    def __init__(self, directory, screenshots=False, desktop_size=(1280,1024)):
         self.directory = directory
         self.screenshots = screenshots
+        self.desktop_size = desktop_size
         self.captures = []
         self.server = socket.socket()
         self.server.bind(('127.0.0.1', 0))
@@ -59,7 +60,8 @@ class PhysicalKeyboard:
             self.log = (self.directory / 'xvfb.log').open('wb')
             try:
                 self.xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(w), '-screen', '0',
-                                              '1280x1024x24' if self.screenshots else '800x600x24',
+                                              (f'{self.desktop_size[0]}x{self.desktop_size[1]}x24'
+                                               if self.screenshots else '800x600x24'),
                                               '-nolisten', 'tcp'],
                                              pass_fds=(w,), stdout=self.log, stderr=self.log)
                 os.close(w)
@@ -96,6 +98,9 @@ class PhysicalKeyboard:
         # window keeps its centered origin. Move it before observing scanout.
         self.x.XMoveWindow(self.display, window.value, 0, 0)
         self.x.XSync(self.display, 0)
+        # XSync completes the move, not SDL's repaint of newly exposed areas.
+        # Let the emulator process the expose event before sampling scanout.
+        time.sleep(.15)
         relative = f'screenshots/step-{len(self.captures):03d}.png'
         subprocess.run(['import', '-display', self.name, '-window', str(window.value),
                         str(self.directory / relative)], check=True, timeout=5,

@@ -14,6 +14,9 @@ The [text-mode study](TEXT-MODES.md) records native BIOS and application behavio
 for 80x43/50/60 and 132x25/43/50/60, and the design for rendering existing text
 modes on larger graphics surfaces. These native observations do not imply that
 the Chinese driver already supports those grids.
+The [wide rendering study](WIDE-RENDERING.md) adds standalone DOS framebuffer
+experiments for larger and widescreen surfaces, with exact memory and scanout
+checks. Optional emulator profiles are confined to those experiments.
 
 ## Setup
 

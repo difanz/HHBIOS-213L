@@ -6,8 +6,11 @@ Increasing the framebuffer size must not invent a new application-visible mode
 or force a program to accept more columns.
 
 This is a design backed by native BIOS/application observations. The shipping
-HHBIOS drivers still expose 80x25; wider/taller Chinese rendering, mouse
+HHBIOS drivers still expose 80x25; resident wider/taller Chinese rendering, mouse
 translation and virtual VBE text-mode enumeration are not implemented yet.
+The [wide framebuffer experiments](WIDE-RENDERING.md) exercise larger bitmap
+grids, integer enlargement, bank crossings and several pixel formats in a
+foreground DOS program. They also extend the native mouse/page observations.
 
 ## Mode families
 

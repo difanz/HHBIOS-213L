@@ -31,6 +31,8 @@ def pytest_addoption(parser):
                      help='Optional PC Tools 9 directory; needs DOSBox absolute disk reads and mtools.')
     parser.addoption('--screenshots', action='store_true',
                      help='Capture the actual SDL window before each application key (requires ImageMagick import).')
+    parser.addoption('--vesa-research-config', type=Path,
+                     help='Optional emulator configuration for the VBE catalog and wide framebuffer experiments.')
     parser.addoption('--djgpp-cc', default=os.environ.get('DJGPP_CC', 'i586-pc-msdosdjgpp-gcc'),
                      help='DJGPP cross compiler for optional standalone DPMI host tests.')
     parser.addoption('--cwsdpmi', type=Path, default=os.environ.get('CWSDPMI_EXE'),

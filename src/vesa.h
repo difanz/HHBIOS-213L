@@ -3,7 +3,7 @@
 #define HH_VESA_H
 typedef unsigned char u8;
 typedef unsigned short u16;
-#ifdef VESA_HOST
+#if defined(VESA_HOST) && !defined(__WATCOMC__)
 typedef unsigned int u32;
 #else
 typedef unsigned long u32;
