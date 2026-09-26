@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Cache magiblot/tvision r415 16-bit tvedit and a mixed GB2312/ASCII file.
+# The exe is not committed. A missing download skips the case.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+cd "$ROOT"
+make build/READ2.COM build/VGA.COM build/CMODE.COM
+mkdir -p build qa/guest qa/.cache/tvision/dos16
+unset JWASM
+jwasm -q -Zm -bin -Fo build/SHOTDLY.COM qa/input/shotdelay.asm
+
+python3 - << 'PY'
+from pathlib import Path
+# CRLF. Latin shares the line with GB2312 inside the editor frame.
+# 喃後 is E0 AB E1 E1, 岐徵 is E1 AA E1 E7. Those bytes sit outside
+# B0-DF, so the table-char scanner does not claim them.
+# A leading ASCII space stops the hanzi walk: the left frame byte is
+# still BA, and a walk through every byte above A0 would pair that
+# frame cell with the first hanzi byte.
+lines = [
+    b"ASCII LINE",
+    b" " + bytes([0xE0, 0xAB, 0xE1, 0xE1]) + b" Han",
+    b" " + bytes([0xE1, 0xAA, 0xE1, 0xE7]) + b" VGA",
+]
+Path("build/TVVIEW.TXT").write_bytes(b"\r\n".join(lines) + b"\r\n")
+PY
+
+cache="$ROOT/qa/.cache/tvision/dos16/tvedit.exe"
+zip="$ROOT/qa/.cache/tvision/tvedit-dos.zip"
+if [[ ! -f "$cache" ]]; then
+    if [[ ! -f "$zip" ]]; then
+        curl -fsSL -o "$zip" -L \
+            "https://github.com/magiblot/tvision/releases/download/r415/tvedit-dos.zip" \
+            || true
+    fi
+    if [[ -f "$zip" ]]; then
+        unzip -o -j "$zip" tvedit.exe -d "$ROOT/qa/.cache/tvision/dos16" || true
+    fi
+fi
+if [[ -f "$cache" ]]; then
+    cp "$cache" "$ROOT/qa/guest/tvedit.exe"
+fi

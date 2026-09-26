@@ -2,4 +2,5 @@ fonts/HZK16
 build/READ2.COM
 build/VGA.COM
 build/CMODE.COM
-build/TVFRAME.COM
+build/SHOTDLY.COM
+build/TVVIEW.TXT

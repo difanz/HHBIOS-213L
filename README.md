@@ -87,11 +87,11 @@ make qa-smoke-usage   # qa/smoke-usage/ 的使用冒烟
 
 `ckbd-help` 在同一套字符方式栈之后跑 `CKBD.COM /?`，再由 `CONOUT` 送进屏幕。日志里有 `1999.11.17`，画面上应有「汉字系统键盘模块」。`ckbd-already` 装入两次，第二次打印 `CKBD IS ALREADY!`。
 
-`tv-frame`：同一套栈之后，`TVFRAME.COM` 把一屏 TurboVision 式界面直接写进 B800（菜单条、双线窗框 ╔═╗║、单线列表框 ┌─┐│）。「中文」紧贴左边的 ║，「模块」夹在 │ 里面，标题行的 ═ 中间是「汉字」，旁边还有 File、Edit、Chinese、VGA。VGA 直接写屏把框线和汉字一起画出来，贴边的汉字仍是完整的 16 点阵。`archive.org/details/bcpp31` 的 `BCPP31.ZIP` 是 Borland C++ 3.1 编译器，包里没有 TurboVision 库和 TVDEMO，这些二进制不进版本库。
+`tv-edit`：同一套栈之后跑 magiblot/tvision r415 的 16 位 `tvedit.exe`，打开 `TVVIEW.TXT`。第一行是 `ASCII LINE`。后两行以一个 ASCII 空格开头，接着是「喃後 Han」和「岐徵 VGA」。这四个字的 GB2312 是 `E0AB`、`E1E1`、`E1AA`、`E1E7`，落在 `B0`–`DF` 以外。窗框左边的 ║ 在 B800 里仍是 `BA`。配汉字时会向左走过每个大于 `A0` 的字节，行首空格把这条链停住，两个汉字字节配成一对。程序在 `qa/.cache/tvision/`，由 `prep` 下载并拷到 `qa/guest/`，不进版本库；下不到就跳过。画面上左边仍是 ║，四个汉字是完整的 16 点阵，同一行的 Han、VGA 还能认出。
 
 `tv-west`：同一套栈之后，`TVWEST.COM` 只写 ASCII 和 CP437 制表符。菜单是 File、Edit、Search、Help，窗框是 ╔═╗║ 和 ┌─┐│，第 12 行在 `LINE` 后面连续放了 40 个字节 `CD`（═）。GB2312「屯」正是 `CD CD`。直接写屏若把每个高位字节都配成汉字，这一行会画成「屯屯屯」。画面上应是英文和双线、单线框。
 
-`tv-demo`：同一套栈之后跑 magiblot/tvision 发行包里的 16 位 `tvdemo.exe`。`prep` 从 `qa/.cache/tvision/dos16/` 拷到 `qa/guest/`，这个 exe 不进版本库；缓存里没有文件时用例跳过。`KEYSOCK` 在桌面起来之后送 Alt-W，再选菜单第一项。`SHOTDLY.COM` 驻留在 INT 1Ch 上，大约九秒后写 `SHOT.FLG`。画面上应有英文菜单（File、Windows、Options）和窗框。桌面底纹是 CP437 的阴影字符。
+`tv-demo`：同一套栈之后跑同一发行包里的 16 位 `tvdemo.exe`，同样只放在缓存里。`KEYSOCK` 在桌面起来之后送 Alt-W，再选菜单第一项。`SHOTDLY.COM` 驻留在 INT 1Ch 上，大约九秒后写 `SHOT.FLG`。画面上应有英文菜单（File、Windows、Options）和窗框。桌面底纹是 CP437 的阴影字符。
 
 `read2-glyph` 用 `READ2.COM` 从盘上的 `HZK16` 装 INT 7Fh，再取「中」（`D6 D0`）的前八字节 `0100010001047FFE`。`read2-unload` 调用 INT 2Fh `AX=4A06h SI=0` 卸下这组中断，之后 `SI=3` 不再返回 `BX=4A06h`。`hz-draw` 在驻留 `READ2` 和 `VGA.COM` 之后进入 12h，把「中」「文」两字按 3 倍放大画在屏幕上。
 

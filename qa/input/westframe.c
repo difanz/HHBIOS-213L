@@ -9,9 +9,8 @@
  * three or more ═ (and four or more of the other table bytes) before
  * that pairing.
  *
- * No GB2312 is stored on purpose. archive.org bcpp31 has no TVDEMO.
- * The magiblot 16-bit tvdemo is cached outside the tree when a run
- * needs the real demo; this COM is the fixture the suite always has.
+ * No GB2312 is stored on purpose. The mixed screen is magiblot
+ * tvedit (qa/tests/tv-edit). This COM is the long 0xCD run.
  */
 #include <dos.h>
 #include <i86.h>
