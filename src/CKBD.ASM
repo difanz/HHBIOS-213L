@@ -354,9 +354,9 @@ L_2701:
 
 INT_16		ENDP
 
-D_KX		DB	'ÉÍ»'                   ;¿òÏß
-		DB	'º º'
-		DB	'ÈÍ¼'
+D_KX		DB	0C9H,0CDH,0BBH                   ;¿òÏß
+		DB	0BAH,20H,0BAH
+		DB	0C8H,0CDH,0BCH
 D_MSG		DB	'2.13L ºº ×Ö Ïµ Í³',0
 D_MSG1		DB	'  ÑĞ ÖÆ ÈË: Îâ Ïş ¾ü   1999Äê11ÔÂ '
 
@@ -1337,7 +1337,7 @@ D_QWXS		DB	'ÇøÎ»',0
 D_SWXS		DB	'Ê×Î²',0
 D_PYXS		DB	'Æ´Òô',0
 D_PYTS		DB	' V-zh I-ch U-sh L-ai J-an H-ang K-ao'
-		DB	' F-en G-eng Y-ing S-ong V-',0
+		DB	' F-en G-eng Y-ing S-ong V-',81H,0
 D_SPXS		DB	'Ë«Æ´',0
 D_SPTS		DB	' Q-iu W-ua.ve R-ia T-ie D-ei P-ou'
 		DB	' Z-uan X-i.uang C-un B-ian N-in M-iao',0

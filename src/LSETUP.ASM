@@ -72,9 +72,9 @@ D_DX		DW	0			;ÎÄ¼þÃûÊ×
 D_CX		DW	0			;    ³¤¶È
 D_SX		DW	0			;    ÊôÐÔ
 
-D_B1		DB	'ÉÍ»',0
-D_B2		DB	'º º',0
-D_B3		DB	'ÈÍ¼',0
+D_B1		DB	0C9H,0CDH,0BBH,0
+D_B2		DB	0BAH,20H,0BAH,0
+D_B3		DB	0C8H,0CDH,0BCH,0
 
 ;Ö÷²Ëµ¥
 D_S1		DB	'ÉèÖÃ´æÅÌ²¢ÍË³ö    ',0

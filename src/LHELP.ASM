@@ -12,9 +12,9 @@ START:		JMP	BEGIN
 D_FILE		DW	0			;ÎÄ¼þÃûÊ×
 D_MODE		DB	0			;ÏÔÊ¾·½Ê½
 D_WIN		DB	0			;µ±Ç°´°¿ÚºÅ
-D_B1		DB	'ÉÍ»',0
-D_B2		DB	'º º',0
-D_B3		DB	'ÈÍ¼',0
+D_B1		DB	0C9H,0CDH,0BBH,0
+D_B2		DB	0BAH,20H,0BAH,0
+D_B3		DB	0C8H,0CDH,0BCH,0
 D_CDXZ		DB	4FH			;²Ëµ¥Ñ¡ÔñÉ«
 D_TS		DB	' ALT+×¨ÓÃ¼üÅÌ| ¹â±ê-ÒÆ¶¯,±³¾°:INS+,DEL-.Ç°¾°:HOME+,END-.±ß¿ò:PGUP+,PGDN-,´æÅÌ:+',0
 D_ALT		DB	0			;¼üÈëALT±êÖ¾
