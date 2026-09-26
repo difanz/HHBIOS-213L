@@ -105,30 +105,30 @@ D_XGA		DB	 80H, 8AH, 8BH, 8CH, 8FH, 91H
 D_XGB		DB	0FEH,0F9H,0AEH,0AFH,0F0H,0F7H
 
 D_ZBFA		DB	81H, 82H, 83H, 6,   0BH, 0B5H,9BH, 97H
-	;0B0H		°    ±	  ²    ³    ´	 µ    ¶    ·
+	; CP437		0B0H 0B1H 0B2H 0B3H 0B4H 0B5H 0B6H 0B7H
 		DB	93H, 7FH, 15H, 0FH, 14H, 99H, 95H, 2
-	;0B8H		·    ¹	  º    »    ¼	 ½    ¾    ¿
+	; CP437		0B8H 0B9H 0BAH 0BBH 0BCH 0BDH 0BEH 0BFH
 		DB	3,   9CH, 9DH, 8EH, 8,	 9,   0C6H,9AH
-	;0C0H		À    Á	  Â    Ã    Ä	 Å    Æ    Ç
+	; CP437		0C0H 0C1H 0C2H 0C3H 0C4H 0C5H 0C6H 0C7H
 		DB	13H, 90H, 9EH, 9FH, 1CH, 16H, 17H, 89H
-	;0C8H		È    É	  Ê    Ë    Ì	 Í    Î    Ï
+	; CP437		0C8H 0C9H 0CAH 0CBH 0CCH 0CDH 0CEH 0CFH
 		DB	0D0H,0D1H,0D2H,98H, 94H, 92H, 96H,0D7H
-	;0D0H		Ð    Ñ	  Ò    Ó    Ô	 Õ    Ö    ×
+	; CP437		0D0H 0D1H 0D2H 0D3H 0D4H 0D5H 0D6H 0D7H
 		DB	0DH, 5,   1,   84H, 85H, 86H, 87H, 88H
-	;0D8H		Ø    Ù	  Ú    Û    Ü	 Ý    Þ    ß
+	; CP437		0D8H 0D9H 0DAH 0DBH 0DCH 0DDH 0DEH 0DFH
 
 D_ZBFB		DB	80H, 81H, 82H, 14H, 83H, 84H, 85H,0B7H
-	;0B0H		°    ±	  ²    ³    ´	 µ    ¶    ·
+	; CP437		0B0H 0B1H 0B2H 0B3H 0B4H 0B5H 0B6H 0B7H
 		DB     0B8H, 86H, 15H, 87H, 88H,0BDH,0BEH, 89H
-	;0B8H		·    ¹	  º    »    ¼	 ½    ¾    ¿
+	; CP437		0B8H 0B9H 0BAH 0BBH 0BCH 0BDH 0BEH 0BFH
 		DB	8AH, 8BH, 8CH, 8DH, 12H, 8EH, 8FH, 90H
-	;0C0H		À    Á	  Â    Ã    Ä	 Å    Æ    Ç
+	; CP437		0C0H 0C1H 0C2H 0C3H 0C4H 0C5H 0C6H 0C7H
 		DB	91H, 92H, 93H, 94H, 95H, 13H, 96H, 97H
-	;0C8H		È    É	  Ê    Ë    Ì	 Í    Î    Ï
+	; CP437		0C8H 0C9H 0CAH 0CBH 0CCH 0CDH 0CEH 0CFH
 		DB	98H, 99H, 9AH,0D3H,0D4H,0D5H,0D6H, 9BH
-	;0D0H		Ð    Ñ	  Ò    Ó    Ô	 Õ    Ö    ×
+	; CP437		0D0H 0D1H 0D2H 0D3H 0D4H 0D5H 0D6H 0D7H
 		DB	9CH, 9DH, 9EH, 82H, 9FH, 82H, 82H,0A0H
-	;0D8H		Ø    Ù	  Ú    Û    Ü	 Ý    Þ    ß
+	; CP437		0D8H 0D9H 0DAH 0DBH 0DCH 0DDH 0DEH 0DFH
 
 ;×ª»»±í DB	  1, 0DAH,   2, 0BFH,	3, 0C0H,   5, 0D9H
 ;	DB	  6, 0B3H,   8, 0C4H,	9, 0C5H, 0BH, 0B4H
