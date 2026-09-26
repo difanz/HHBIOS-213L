@@ -55,7 +55,8 @@ def main():
                                                 ('qa/harness', ROOT / 'qa/harness'), ('qa/spec', ROOT / 'qa/spec')]
                           for p in folder.rglob('*') if p.is_file() and '__pycache__' not in p.parts}}
     for name in ('conftest.py', 'pytest.ini', 'qa/run.py', 'qa/mutate.py',
-                 'qa/requirements.txt', 'qa/dosbox.conf', 'tools/build-watcom-com.sh'):
+                 'qa/requirements.txt', 'qa/dosbox.conf', 'tools/build-watcom-com.sh',
+                 'tools/build-vesa.sh'):
         manifest['files'][name] = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assembler = shutil.which(os.environ.get('JWASM', 'jwasm'))
     if assembler is None and 'JWASM' not in os.environ:
@@ -66,7 +67,7 @@ def main():
     if os.environ.get('WATCOM'):
         prefix = Path(os.environ['WATCOM'])
         watcom_path = os.pathsep.join([str(prefix / 'binl64'), str(prefix / 'binl'), watcom_path])
-    for name in ('wcl', 'wcc', 'wcl386', 'wcc386', 'wlink', 'wasm'):
+    for name in ('wcl', 'wcc', 'wcl386', 'wcc386', 'wlink', 'wasm', 'cc'):
         record_tool(manifest, name, shutil.which(name, path=watcom_path))
     args = [sys.executable, '-m', 'pytest', '-q', '--tb=short',
             '--junitxml', str(out / 'junit.xml'), '--basetemp', str(out / 'work'),

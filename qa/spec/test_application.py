@@ -62,13 +62,15 @@ def tvedit_dir(pytestconfig, application_dir):
     return application_dir
 
 
-def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir):
+@pytest.mark.parametrize('display', ['VGA', 'VESA'])
+def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir, display):
     tmp_path = tvedit_dir
     lines = ['HHBIOS-QA', '中文测试 Han', '喃後岐徵 VGA']
     (tmp_path / 'VIEW.TXT').write_bytes(('\r\n'.join(lines)+'\r\n').encode('gb2312'))
     files = run_dos(dosbox_binary, tmp_path, ['SNAPSHOT font', 'READ2 > READ2.LOG',
-                                      'VGA > VGA.LOG', ('CMODE 3 > CMODE.LOG', 3),
-                                      'APPCAP install', 'TVEDIT VIEW.TXT', 'APPCAP dump'], timeout=45)
+                                      display+' > DISPLAY.LOG', ('CMODE 3 > CMODE.LOG', 3),
+                                      'APPCAP install', 'TVEDIT VIEW.TXT', 'APPCAP dump'], timeout=45,
+                        settings='\n[dosbox]\nmachine=svga_s3\n' if display=='VESA' else '')
     raw = files['APP.BIN'].read_bytes()
     assert len(raw) == 18416 and raw[:7] == b'\1HHAPP1'
     text, plane = raw[16:4016], raw[4016:]
@@ -122,7 +124,7 @@ def test_borland_dpmi_font_memory(pytestconfig, dosbox_binary, application_dir, 
     exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, True, 'movement', loader)
 
 
-def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario, loader=None):
+def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario, loader=None, display='VGA'):
     tmp_path = application_dir
     command = 'TVEDIT VIEW.TXT'
     if editor == 'tvedit':
@@ -201,10 +203,11 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
         loader = 'READ5' if editor in ('pct9', 'tc201') else 'READ2'
     assert (tmp_path / (loader+'.COM')).is_file(), f'missing font reader: {loader}'
     files = run_dos(dosbox_binary, tmp_path, setup+['SNAPSHOT font', 'CKBD > CKBD.LOG',
-                      f'{loader} > FONTLOAD.LOG', 'VGA > VGA.LOG', ('CMODE 3 > CMODE.LOG', 3),
+                      f'{loader} > FONTLOAD.LOG', display+' > DISPLAY.LOG', ('CMODE 3 > CMODE.LOG', 3),
                       f'CKBD {switch} > KEYMODE.LOG',
                       'APPCAP install', command, 'C:', 'APPCAP dump'], timeout=45,
-                      physical_keys=True)
+                      physical_keys=True,
+                      settings='\n[dosbox]\nmachine=svga_s3\n' if display=='VESA' else '')
     log = files['KEYLOG.BIN'].read_bytes()
     assert len(log) == 164*(len(keys)+1)
     records = [(struct.unpack_from('<HH', log, i), log[i+4:i+164])

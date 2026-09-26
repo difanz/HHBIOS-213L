@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static unsigned capture_seg, framebuffer, age, settle, finished;
+static unsigned capture_seg, framebuffer, pitch, vesa, age, settle, finished;
 static unsigned keys[64], key_count, step, records;
 static unsigned exit_keys[8] = {0x2d00}, exit_count = 1, exit_step;
 static unsigned release_alt;
@@ -18,6 +18,8 @@ static unsigned physical_keys, transmit, transmit_step;
 static unsigned start_keys[8], start_count, start_step, start_length;
 static char start_marker[64];
 static unsigned char scratch[256];
+/* app_poll runs on a foreign SS. Its addressable BIOS packet must live in DS. */
+static union REGPACK view;
 extern void install_app_tick(void);
 
 static int read_keys(const char *name, unsigned *buffer, unsigned limit, unsigned *count)
@@ -106,6 +108,14 @@ void app_poll(void)
         }
         return;
     }
+    /* The timer can interrupt a banked render. Observe text/cursor only when
+     * its B800 window is back; this also applies to individual key records. */
+    _disable();
+    if (vesa) {
+        memset(&view,0,sizeof(view)); view.x.ax=0x1412;
+        intr(0x10,&view);
+        if (view.x.ax) return;
+    }
     ++age;
     if (age >= 18*30) {
         *(unsigned char __far *)MK_FP(capture_seg, 0) = 2;
@@ -138,14 +148,25 @@ void app_poll(void)
             }
         }
         _fmemcpy(MK_FP(capture_seg, 16), text, 4000);
+        if (vesa) {
+            memset(&view,0,sizeof(view));
+            for (y=0; y<180; ++y) {
+                view.x.ax=0x1412; view.x.bx=1; view.x.cx=80;
+                view.x.si=y*pitch; view.x.es=capture_seg; view.x.di=4016+y*80;
+                intr(0x10,&view);
+                if (view.x.ax==2) { --settle; return; }
+                if (view.x.ax) { finished=1; return; }
+            }
+        } else {
         outp(0x3ce, 4); old4 = inp(0x3cf);
         outp(0x3ce, 5); old5 = inp(0x3cf);
         outpw(0x3ce, 5);
         outpw(0x3ce, 0x0104); /* green plane: white text on blue background */
         for (y = 0; y < 180; ++y)
-            _fmemcpy(MK_FP(capture_seg, 4016+y*80), MK_FP(framebuffer, y*80), 80);
+            _fmemcpy(MK_FP(capture_seg, 4016+y*80), MK_FP(framebuffer, y*pitch), 80);
         outpw(0x3ce, 4 | (old4 << 8));
         outpw(0x3ce, 5 | (old5 << 8));
+        }
         *(unsigned char __far *)MK_FP(capture_seg, 0) = 1;
         settle = 0;
         finished = 1;
@@ -210,7 +231,10 @@ int main(int argc, char **argv)
     r.x.ax = 0x1406;
     intr(0x10, &r);
     framebuffer = r.x.bp;
+    pitch = (r.x.si+1)/8;
+    if (pitch < 80 || pitch > 128) return 8;
     if (framebuffer < 0xa000 || framebuffer > 0xb000) return 8;
+    r.x.ax=0x1411; intr(0x10,&r); vesa=r.x.ax==0x5356;
     file = fopen("CAPSEG.BIN", "wb");
     if (!file || fwrite(&capture_seg, 2, 1, file) != 1) return 9;
     if (fclose(file)) return 10;

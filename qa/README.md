@@ -9,12 +9,14 @@ Read [DISPLAY-RULES.md](DISPLAY-RULES.md) for the mixed-text contract and the
 two-state Chinese-pairing FSM. Ambiguous GB2312/CP437 bytes require explicit
 policy to determine how they display.
 The [VBE contract](VBE-RULES.md) covers mode ownership, banked framebuffer tests,
-the API sequence and performance criteria for a future VBE renderer.
+the independent 800x600 VESA renderer, its interfaces and extension boundaries.
 
 ## Setup
 
 Use Python 3.10 or newer and the patched JWasm described in the root
 README. Install the dependencies for the selected layer before running it.
+The VESA unit cases also build the production COM with Open Watcom `wcc` and
+`wlink`, and compile the descriptor decoder with the host C compiler `cc`.
 Missing tools or required fixtures cause a test failure; tests do not download
 them. Optional proprietary application cases skip unless configured. A supplied
 but missing or unusable fixture fails.
@@ -138,7 +140,7 @@ saved file bytes through their 16-bit DPMI runtime.
 
 | Command | What it establishes |
 | --- | --- |
-| `make check` | All 51 COM modules assemble; this is not behavioral proof |
+| `make check` | The 51 assembly modules and the C/assembly VESA driver build; this is not behavioral proof |
 | `make qa-test` | Real 16-bit display and keyboard instructions, UMB allocation failures/state restoration, memory boundaries, FSM/geometry cases, transport failures |
 | `make qa-dos` | DOS memory ownership and reclamation, font storage, raw B800, four VGA planes, attributes, cursor, font API, mode changes, incremental updates, command-line behavior, VBE queries and GB2312 filenames |
 | `make qa-application` | tvedit glyphs/frames plus editor cursor movement, Delete, Backspace and saved bytes; configured optional editors run the same scenarios |
@@ -201,11 +203,22 @@ API failure injection separately executes the allocator procedures extracted fro
 all 15 production modules, including unsupported DOS versions and failed queries,
 linking, strategy changes, and allocation.
 
-The framebuffer address comes from HHBIOS's public `INT 10h AX=1406h` API.
-It may be AE02h, not A000h. CRTC registers are recorded for diagnosis, not used
+For legacy drivers the framebuffer address comes from HHBIOS's public
+`INT 10h AX=1406h` API. It may be AE02h, not A000h. VESA capture uses its
+bank-aware `AX=1412h` API; a framebuffer pointer is not permanently mapped
+while B800 holds the text pages. CRTC registers are recorded for diagnosis, not used
 as an unquestioned scanout oracle: DOSBox-X's [overflow-register write path](https://github.com/joncampbell123/dosbox-x/blob/master/src/hardware/vga_crtc.cpp)
 can update the live line comparator while leaving protected-register readback
 unchanged. These assertions prove framebuffer contents, not host compositing.
+
+`test_vesa_api.py` executes the linked C/assembly COM with a substituted BIOS:
+nested calls, foreign caller stacks, returned status, bank failures, initialization
+rollback, state-buffer overflow and DOS UMB allocation failures. Its host C cases
+check geometry, window permissions and RGB masks independently of renderer selection.
+`test_vesa.py` captures all 800x600 pixels in four planes under three VBE profiles,
+checks resident MCB ownership and `/N`, mode/state restoration, GC/SEQ preservation,
+bitmap/wide text, pixel bounds and independent text-page scrolling.
+`test_vesa_application.py` runs the same editing scenarios on VESA as on VGA.
 
 The application observer waits for its unique fixture marker and 24 guest
 ticks. It feeds keys individually, records cursor/row data after each action,
@@ -237,9 +250,10 @@ kill. This validates specific detection abilities, not total code coverage.
 ## Scope
 
 Unicorn is not cycle accurate. The DOS layer uses `VGA.COM` with
-`machine=vgaonly`; EGA/HGA share the assembly classifier and are built, but are
-not validated on physical hardware. VBE tests cover coexistence with the VGA
-resident driver; Chinese rendering inside VBE graphics modes is not implemented.
+`machine=vgaonly` and `VESA.COM` with SVGA profiles. EGA/HGA share the assembly
+classifier and are built, but are not validated on physical hardware. VBE tests
+cover coexistence with both resident drivers and VESA's 800x600 planar Chinese
+rendering. They do not establish arbitrary resolutions or high-color rendering.
 The full suite's executable provenance is in its manifest; font and emulator
 results cannot be generalized to every BIOS/font/card combination.
 

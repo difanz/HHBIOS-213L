@@ -72,7 +72,7 @@ int main(int argc, char **argv)
     union REGPACK display;
     char name[13];
     int mode, frame = 0, plane;
-    unsigned old4, old5, y, framebuffer;
+    unsigned old4, old5, y, framebuffer, pitch, vesa;
     unsigned char crtc[25];
     if (argc > 1 && strcmp(argv[1], "font") == 0) return font();
     if (argc > 1 && strcmp(argv[1], "api") == 0) return api();
@@ -80,6 +80,9 @@ int main(int argc, char **argv)
     r.x.ax = 0xff00;
     int86(0x10, &r, &r);
     if (r.x.ax != 0x56) return 3;
+    r.x.ax = 0x1411;
+    int86(0x10, &r, &r);
+    vesa = r.x.ax == 0x5356;
     /* Hide software cursor, keeping the default 80x25 / 8x18 layout. */
     r.x.ax = 0x0100; r.x.cx = 0x2000;
     int86(0x10, &r, &r);
@@ -111,15 +114,28 @@ int main(int argc, char **argv)
         display.x.ax = 0x1406;
         intr(0x10, &display);
         framebuffer = display.x.bp;
+        pitch = (display.x.si+1)/8;
+        if (pitch < 80 || pitch > 128) return 13;
         if (framebuffer < 0xa000 || framebuffer > 0xb000) return 12;
         for (plane = 0; plane < 4; ++plane) {
+            if (vesa) {
+                for (y=0; y<480; ++y) {
+                    display.x.ax=0x1412; display.x.bx=plane;
+                    display.x.si=y*pitch; display.x.cx=80;
+                    display.x.es=FP_SEG(buffer); display.x.di=FP_OFF(buffer)+y*80;
+                    intr(0x10,&display);
+                    if (display.x.ax) return 14;
+                }
+                if (fwrite(buffer,1,38400,out)!=38400) return 9;
+                continue;
+            }
             _disable();
             outp(0x3ce, 4); old4 = inp(0x3cf);
             outp(0x3ce, 5); old5 = inp(0x3cf);
             outpw(0x3ce, 5); /* read mode 0 */
             outpw(0x3ce, 4 | (plane << 8));
             for (y = 0; y < 480; ++y) {
-                _fmemcpy(buffer + y*80, MK_FP(framebuffer, y*80), 80);
+                _fmemcpy(buffer + y*80, MK_FP(framebuffer, y*pitch), 80);
             }
             outpw(0x3ce, 4 | (old4 << 8));
             outpw(0x3ce, 5 | (old5 << 8));

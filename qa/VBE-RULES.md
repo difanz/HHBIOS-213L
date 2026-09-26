@@ -1,30 +1,92 @@
 # VBE coexistence and rendering
 
-HHBIOS's current VGA renderer draws a fixed 640x480 planar display. An application
-that selects a VBE mode owns that mode's framebuffer and VGA register settings.
-The resident driver must stop applying its old planar drawing rules there.
-This coexistence contract is separate from drawing Chinese text inside a VBE
-mode, which needs a renderer for the advertised geometry and pixel format.
+`VGA.COM` retains its 640x480 renderer. The independent `VESA.COM`, built from
+`vesa.c` and `vesa.asm`, draws an 800x600, 16-color console. Load one display
+driver at a time, after a font reader and optionally CKBD. The logical screen
+remains 80x25 cells of 8x18 pixels; the input-method row starts at y=456.
+The remaining right/bottom area is unused by text and accessible to pixel APIs.
+
+VESA queries mode 102h, then a bounded BIOS mode list. It requires VGA-compatible
+800x600 planar 4-bpp graphics, pitch 100, and a readable/writable 64 KiB A000
+window. It rejects unsupported layouts without hooking interrupts. This is a
+specific backend requirement, not a claim that all VBE modes use VGA registers.
+The [VBE specification](https://www.phatcode.net/res/221/files/vbe20.pdf) defines
+the geometry, stride, window permissions/granularity and format fields used here.
 
 ## Mode ownership
 
-`VGA.COM` forwards VBE controller/mode queries and bank operations to the original
-BIOS. During `4F02h` (set mode), it suspends its timer renderer and lets nested
-BIOS INT 10h calls reach the original handler. It forwards the entire mode word
-and ES:DI without rewriting flags or buffer pointers. Only `AX=004Fh` is success.
+Both drivers forward VBE queries to the original BIOS. During `4F02h` (set mode),
+they suspend rendering and let nested BIOS INT 10h calls reach the original
+handler. They forward the mode word and ES:DI without rewriting flags or buffer
+pointers. Only `AX=004Fh` is success.
 
-After success, the BIOS owns the display: HHBIOS's old timer renderer and planar
-INT 10h drawing stay inactive, and CKBD is told this is an external display mode.
-On failure, HHBIOS restores the previous timer state and retains its display and
-keyboard state. Returning through legacy INT 10h AH=00h, AL=03h activates the
-existing Chinese display again.
+After a successful external graphics-mode selection, the BIOS owns the display:
+HHBIOS timer and INT 10h drawing stay inactive, and CKBD is told this is an
+external display. On failure, the previous display/keyboard ownership returns.
+Legacy BIOS mode 3 reactivates Chinese display. VESA also reactivates its 800x600
+console when a VBE caller selects native text mode 0..3. Applications may use
+their own bank/WinFuncPtr routines while HHBIOS is suspended.
 
-A mode selected with `4F02h`, including a native text mode, currently remains
-under BIOS control. Returning to the HHBIOS Chinese view through a saved VBE
-state or through `4F02h` text-mode selection is not implemented. Arbitrary
-`4F04h` hardware-state restoration while HHBIOS owns the display is not covered
-by the mode-set guard. These paths need their own state-transition design and
-tests; successful banked-mode coexistence does not establish full VBE support.
+VESA appends one 64-byte ownership record to the BIOS's `4F04h` state buffer and
+includes it in size queries. It validates size/segment bounds and returns native
+BIOS errors. Hardware restoration changes ownership only when the hardware-state
+mask is requested. A valid private record can restore the console; an unrelated
+or invalid record leaves rendering suspended. Saved state does not include pixel
+memory, just as the underlying VBE service does not save it. Successful external
+bank, stride or display-start changes also relinquish console ownership.
+
+These additional return/state paths belong to VESA. Legacy VGA's small mode-set
+guard still leaves VBE text-mode selection under BIOS control and does not
+integrate arbitrary `4F04h` restoration with its renderer.
+
+## Memory and interrupt boundary
+
+Where an extra image page and relocatable window are available, VESA keeps eight
+4 KiB text pages in spare VRAM beginning at offset 64 KiB per plane. B800 is
+mapped while applications run. Refresh copies only the active 4000-byte text page
+to a resident transfer buffer, switches to graphics bank zero, draws changed
+cells, and restores the text bank. Classification conversions are copied back
+to the text page. The original `ZJXP.INC` and `HZPOS.INC` are included unchanged.
+No full framebuffer copy or private font cache occupies conventional memory.
+
+On a one-image adapter, the backend probes the VGA 128 KiB aperture. It uses a
+line-aligned scanout wrap when that aperture aliases at 64 KiB, reserving B800
+page zero. Other text pages are unavailable on this fallback. A strict 64 KiB
+mapping without spare banked VRAM cannot expose B800 and is rejected. Failed
+installation restores the previous mode. A later failed bank selection disables
+rendering before further graphics access.
+
+The COM contains no CRT and both compiler and assembler target 8086. INT 10h and
+IRQ0 use a 2 KiB private stack with CS=DS=SS, preserving the interrupted stack,
+segment registers and interrupt/direction flags. A busy guard prevents nested
+rendering. Rendering restores all GC registers, the sequencer plane mask and
+selected register indexes. BIOS/font calls run on the resident stack; resident
+code performs no DOS allocation or file I/O.
+
+DOS 5 UMBs are preferred; `/N` forces conventional memory. Allocation strategy
+and UMB linkage are restored, and installer code/buffers and the DOS environment
+are released. The extra 4 KiB text transfer buffer is retained only by the
+banked backend. `AX=1411h` reports the actual resident byte count including PSP.
+
+Uncoordinated TSRs that directly touch B800 or VGA ports during another
+interrupt's rendering are outside this ownership contract. Bank-aware capture
+can use the interface below and retry when busy. As with the legacy renderer,
+direct hardware reprogramming without a BIOS mode transition cannot always be
+detected.
+
+## Public display interfaces
+
+VESA provides text/cursor/page/scroll, teletype, string, palette and pixel BIOS
+operations used by the console, plus HHBIOS font, prompt, bitmap, wide-text,
+redraw, policy and Chinese-boundary interfaces. Font reprogramming is unsupported;
+`AH=11h/AL=30h` still forwards the ROM font query. `AX=1406h` reports maximum pixel
+coordinates 799/599. Its framebuffer segment is diagnostic, not a promise of a
+permanently mapped graphics window.
+
+| VESA extension | Contract |
+| --- | --- |
+| `AX=1411h` | Returns AX=5356h, BX=ABI version 1, CX=descriptor size, ES:DI=read-only packed `struct surface` from `vesa.h`, SI=resident bytes, BP=banked-text flag, DX=framebuffer segment. Available while suspended. |
+| `AX=1412h` | Read plane BX=0..3, source byte offset SI, byte count CX, destination ES:DI. Returns AX=0 on success, 1 on invalid bounds/inactive/bank failure, 2 when busy (retry). Source is bounded by 60000 bytes; destination must not wrap. Zero count checks availability without bank changes. Caller serializes subsequent direct text reads against interrupts. |
 
 ## API sequence
 
@@ -33,19 +95,20 @@ distinguishes the interfaces below. Implement and validate them separately:
 
 | Interface generation | Work and validation |
 | --- | --- |
-| 1.0 core | Controller/mode query, set/get mode and bank control: current coexistence tests. Save/restore state still needs integration with HHBIOS ownership. |
-| 1.1 | Logical scanline length and display start; exercise padded strides, scrolling and pages. |
-| 1.2 | DAC width and direct-color formats; use returned masks. Extended mode-info fields become mandatory here; 1.0/1.1 callers must check their presence. |
-| 2.0 | Linear framebuffer, protected-mode bank/display/palette entry points, extended information buffers. Keep banked operation available. |
-| 3.0 | Additional protected-mode entry, refresh/CRTC controls, separate linear-mode layout fields and buffering operations. |
+| 1.0 core | Controller/mode query, set/get mode, bank control and state ownership. VESA uses optional geometry only when advertised. |
+| 1.1 | External scanline/display-start calls are forwarded; successful layout changes suspend rendering. |
+| 1.2 | Mandatory extended mode fields and image-page capacity used for banked text. Direct-color masks are decoded, but no high-color rasterizer is selected. |
+| 2.0 | LFB address retained in the descriptor when advertised. Protected-mode/LFB rendering is not enabled. |
+| 3.0 | Calls pass to BIOS. No CRTC refresh selection, linear-layout backend or protected entry is installed. |
 
-The resident coexistence handler does not parse optional mode fields or assume
-a VBE version. Actual DOSBox fixtures cover VBE 1.2 and later, not historical
-1.0/1.1 BIOS implementations.
+The descriptor decoder also accepts other dimensions, padded strides, packed
+8-bit and direct 15/16/24/32-bit formats with validated RGB masks. The console
+selector admits only the implemented planar layout. DOSBox runtime fixtures
+cover VBE 1.2 and later; 1.0/1.1 field handling has unit coverage only.
 
 ## Evidence
 
-`test_vbe.py` compares native BIOS operation with READ5 + CKBD + VGA resident.
+`test_vbe.py` compares native BIOS operation with READ5 + CKBD + VGA or VESA.
 It uses `vesa_oldvbe`, `vesa_nolfb` and `svga_s3`, observing the reported VBE
 version. Tests check controller/mode buffer guards, a bounded mode list, bank
 set/get and complete framebuffer readback at 640x480 and 800x600 in packed 8-bit
@@ -65,32 +128,36 @@ Before the mode-set guard, the native BIOS framebuffer matched the test pattern
 but the resident case corrupted it. The test therefore observes the original
 failure, rather than only checking for a success return code.
 
-These tests establish memory contents and driver behavior under emulated BIOSes.
-They do not establish physical scanout, every VBE application, or every card.
+`test_vesa.py` additionally checks exact Chinese pixels at 800x600, text pages,
+offscreen scrolling, prompt bitmaps, wide text, pixel bounds, GC/SEQ ownership,
+state round trips and UMB/conventional MCB ownership. `test_vesa_api.py` executes
+the linked C/ASM COM across foreign stacks with BIOS/allocator failure injection.
+Real editor movement, whole-character deletion and saved file contents are
+checked by `test_vesa_application.py`. The regular mixed-text pixel suite also
+runs against VESA. These establish framebuffer contents and behavior under
+emulated BIOSes, not physical scanout, every VBE application or every card.
+An additional guest shim hides only spare-image capacity: the one-image path
+must either render exact pixels or reject installation with the previous text
+mode restored. VGA memory mapping and ports remain the emulator's own.
 
 ## Rendering implementation and performance
 
-The planned VESA renderer is an independent `VESA.COM`, built from `vesa.c` and
-`vesa.asm`. These production files will be introduced with working rendering
-code, not empty placeholders. `VGA.ASM` retains its existing renderer and the
-small coexistence guard; adding VESA rendering does not require converting it
-to C or linking it with the new driver.
+`vesa.c` owns mode discovery, geometry validation, BIOS policy and ownership.
+`vesa.asm` owns interrupt entry, VGA/bank access and the planar rasterizer. The
+classifier supplies character/cell coordinates independently of framebuffer
+stride. Drawing batches changed text cells between bank selections, writes four
+planes directly and makes no per-pixel BIOS calls. `VGA.ASM` is unchanged by this
+implementation. Unreal mode and DPMI would add transition and residency costs
+without addressing a need of this 60,000-byte-per-plane backend.
+An instruction-level work-count test observes two bank calls per refresh for
+idle, single-cell edits and full redraws, and no framebuffer writes on idle
+refresh. This bounds work, not elapsed time on a particular graphics card.
+Software cursor blinking adds its own small draws outside that text-refresh test.
+Prompt clear/output and wide strings also share a bank transaction across all
+their glyphs; their work-count tests require just two bank calls per operation.
 
-`vesa.c` owns mode discovery, clipping, dirty-region management and pixel-format
-conversion. `vesa.asm` owns interrupt entry, bank calls, mode transitions and
-measured memory-copy bottlenecks. Their interface passes explicit buffers,
-geometry and update spans; it must specify segment/selector ownership, register
-preservation and interrupt/stack requirements. Access backends must not expose
-unreal-mode or DPMI assumptions to the character classifier.
-
-Load one display driver at a time. The VESA driver should reuse the existing
-font and keyboard service contracts, with separate tests for those public
-interfaces, rather than stacking two competing renderers on INT 10h and IRQ0.
-Build and test each driver independently. A 16-bit C implementation can retain
-the 8086 baseline; optional wider-memory backends can state their own CPU
-requirements without changing the legacy VGA target.
-
-Compare these access paths using the same pixels and update regions:
+Wider-memory backends can be added without changing the classifier, but must be
+compared using the same pixels and update regions:
 
 | Path | Intended environment | Costs and lifetime to verify |
 | --- | --- | --- |

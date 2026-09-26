@@ -1,6 +1,6 @@
 # HHBIOS 2.13L
 
-CCDOS 2.13L（HHBIOS）的汇编源码。`make` 用打过补丁的 JWasm 把 `src/` 编成 `build/*.COM`。
+CCDOS 2.13L（HHBIOS）源码，包含原有汇编模块和独立的 VESA 显示驱动。`make` 将 `src/` 编成 `build/*.COM`。
 
 ## 编译
 
@@ -15,15 +15,15 @@ make -f GccUnix.mak
 export PATH="$PWD/build/GccUnixR:$PATH"
 ```
 
-回到本仓库：
+`VESA.COM` 还需要 [Open Watcom](https://openwatcom.org/) 的 16 位 C 编译器 `wcc` 和链接器 `wlink`。将它们加入 `PATH`，或设置 `WATCOM` 为工具链目录。回到本仓库：
 
 ```bash
-make          # src/*.ASM → build/*.COM
+make          # 汇编模块及独立的 VESA.COM
 make check    # 每个模块都生成了 COM
 make clean
 ```
 
-单个文件：
+单独编译原有模块不需要 C 工具链，例如 `make build/VGA.COM`。也可以直接汇编：
 
 ```text
 jwasm -q -Zm -bin -Isrc -Fo=build/FOO.COM src/FOO.ASM
@@ -34,6 +34,21 @@ jwasm -q -Zm -bin -Isrc -Fo=build/FOO.COM src/FOO.ASM
 ## 编码
 
 `src/` 里的 `.ASM`、`.INC` 是 GB2312/GBK。按字节编辑，别另存成 UTF-8。
+小写的 `vesa.c`、`vesa.h`、`vesa.asm` 使用 ASCII。
+
+## VESA 显示
+
+`VESA.COM` 使用 VGA 兼容的 VBE **800×600、16 色**模式，保持 80×25 字符网格和输入法提示行。先装字库和键盘模块，再装显示驱动，例如：
+
+```text
+READ5
+CKBD /E
+VESA
+```
+
+每次只加载一个显示驱动；`VESA` 与 `VGA`、`EGA`、`HGA` 分别使用。`VESA /N` 强制驻留常规内存，默认优先使用 DOS UMB。该驱动仍按 8086 编译，不依赖 DOS extender、DPMI 或 unreal mode。需要可用的 VGA 兼容 VBE 模式及 B800 映射；不满足条件时拒绝安装。
+
+像素尺寸、扫描线跨度、窗口参数和颜色格式由独立描述符表示，为其他分辨率及高彩色后端提供接口。目前启用的是 800×600 的四平面绘制；高彩色和 LFB 绘制尚未启用。接口、显示页及兼容边界见 [VBE 说明](qa/VBE-RULES.md)。
 
 ## 内存使用
 
@@ -49,9 +64,9 @@ jwasm -q -Zm -bin -Isrc -Fo=build/FOO.COM src/FOO.ASM
 
 直接写屏路径通过纵向扫描、连续字符和邻格笔画识别 CP437 框线，并用转换表中的代码标记已识别的框线。显示时按行用 FSM 配对 GB2312 字节；内容变化会重绘受影响的行，模式切换会刷新画面。规则、歧义和兼容边界见 [混排规则](qa/DISPLAY-RULES.md)。
 
-VBE 应用成功设置模式后，`VGA` 暂停原来的平面显存绘制，避免干扰应用的银行式显存；失败时保留原显示状态。通过传统 BIOS 模式 3 返回时恢复中文显示。VBE 图形模式内的中文绘制尚未实现，接口范围和后续方案见 [VBE 兼容性](qa/VBE-RULES.md)。
+VBE 应用成功设置模式后，`VGA`、`VESA` 暂停各自的中文绘制，失败时保留原显示状态。通过传统 BIOS 模式 3 返回时恢复中文显示。`VESA` 还支持 VBE 文本模式回切和带有驱动状态记录的 VBE 状态保存、恢复。
 
-`CKBD /E` 为使用 BIOS 键盘接口的逐字节编辑器启用整字移动和删除；`CKBD /B` 恢复默认的逐字节操作，适用于十六进制编辑。两条命令也能切换已驻留的 CKBD。需要配套的 VGA/EGA/HGA 驱动和直接写屏中文模式。处理流程、应用范围及限制见 [键盘规则](qa/KEYBOARD-RULES.md)。
+`CKBD /E` 为使用 BIOS 键盘接口的逐字节编辑器启用整字移动和删除；`CKBD /B` 恢复默认的逐字节操作，适用于十六进制编辑。两条命令也能切换已驻留的 CKBD。需要配套的 VGA/EGA/HGA/VESA 驱动和直接写屏中文模式。处理流程、应用范围及限制见 [键盘规则](qa/KEYBOARD-RULES.md)。
 
 测试使用 pytest，覆盖真实 16 位汇编执行、DOSBox 显存与像素、真实编辑器中的中文混排和保存结果。运行前需安装所选测试层的依赖；工具位置通过 `PATH`、环境变量或参数指定。
 
@@ -65,11 +80,11 @@ make qa-mutate       # 验证测试能捕获故意引入的汇编错误
 
 依赖安装、运行方式、失败诊断和测试范围见 [测试说明](qa/README.md)。每次运行使用独立目录，保存测试报告和调试数据。
 
-`fonts/HZK16` 是原盘标签 `original-import` 中 `H16F.EXE` 的 ARJ 成员 `HZK16F`，261696 字节。中文像素期望直接从该字库读取。Open Watcom 用于编译 DOS 探针；`make` / `make check` 编译汇编模块。
+`fonts/HZK16` 是原盘标签 `original-import` 中 `H16F.EXE` 的 ARJ 成员 `HZK16F`，261696 字节。中文像素期望直接从该字库读取。Open Watcom 用于编译 VESA 驱动和 DOS 探针。
 
 ## 目录
 
-- `src/`：汇编源码和包含文件
+- `src/`：汇编源码、包含文件和 VESA 驱动的 C/汇编源码
 - `fonts/`：字库，`HZK16` 在版本库里
 - `qa/`：`spec/` 测试、`harness/` 客机探针、测试运行与变异工具
 - `tools/`：JWasm 补丁、拼接 `R16` 的脚本、`make check`、Watcom 编 COM

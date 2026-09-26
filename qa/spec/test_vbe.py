@@ -22,7 +22,7 @@ def vbe_binary(tmp_path_factory):
     return out
 
 
-def prepare(directory, guest_build, vbe_binary, resident):
+def prepare(directory, guest_build, vbe_binary, resident, display='VGA'):
     directory.mkdir()
     for file in (*guest_build.glob('*.COM'), vbe_binary):
         shutil.copy2(file, directory)
@@ -31,7 +31,7 @@ def prepare(directory, guest_build, vbe_binary, resident):
     screen = blank()
     put(screen, 2, 10, '中文'.encode('gb2312'))
     (directory / 'INPUT.BIN').write_bytes(bytes([3])+bytes(screen))
-    return ['READ5', 'CKBD', 'VGA'] if resident else []
+    return ['READ5', 'CKBD', display] if resident else []
 
 
 def assert_chinese(files):
@@ -45,13 +45,14 @@ def assert_chinese(files):
 
 
 @pytest.mark.parametrize('adapter', ['vesa_oldvbe', 'vesa_nolfb', 'svga_s3'])
+@pytest.mark.parametrize('display', ['VGA', 'VESA'])
 @pytest.mark.parametrize('number', [0x101, 0x103], ids=['640x480', '800x600'])
 @pytest.mark.parametrize('method', ['banked', 'far'], ids=['int10', 'WinFuncPtr'])
-def test_vbe_banked_coexistence(dosbox_binary, guest_build, vbe_binary, tmp_path, adapter, number, method):
+def test_vbe_banked_coexistence(dosbox_binary, guest_build, vbe_binary, tmp_path, adapter, number, method, display):
     observed = []
     for resident in (False, True):
         directory = tmp_path / str(resident)
-        commands = prepare(directory, guest_build, vbe_binary, resident)
+        commands = prepare(directory, guest_build, vbe_binary, resident, display)
         commands += [f'VBE {method} {number:x}']
         if resident:
             commands += ['SNAPSHOT']
@@ -79,9 +80,10 @@ def test_vbe_banked_coexistence(dosbox_binary, guest_build, vbe_binary, tmp_path
     assert observed[0] == observed[1], 'resident driver changed VBE capability results'
 
 
-def test_vbe_failed_mode_keeps_chinese(dosbox_binary, guest_build, vbe_binary, tmp_path):
+@pytest.mark.parametrize('display', ['VGA', 'VESA'])
+def test_vbe_failed_mode_keeps_chinese(dosbox_binary, guest_build, vbe_binary, tmp_path, display):
     directory = tmp_path / 'invalid'
-    commands = prepare(directory, guest_build, vbe_binary, True)
+    commands = prepare(directory, guest_build, vbe_binary, True, display)
     files = run_dos(dosbox_binary, directory, commands+['VBE invalid 1ff', 'SNAPSHOT'],
                     settings='\n[dosbox]\nmachine=svga_s3\n')
     assert_chinese(files)

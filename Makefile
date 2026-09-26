@@ -20,7 +20,10 @@ COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 .PHONY: all clean check qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
 QA_PYTHON ?= python3
 
-all: $(COMS)
+all: $(COMS) $(BUILD)/VESA.COM
+
+$(BUILD)/VESA.COM: $(SRC)/vesa.c $(SRC)/vesa.asm $(SRC)/vesa.h $(INCS) tools/build-vesa.sh | $(BUILD)
+	JWASM="$(JWASM)" bash tools/build-vesa.sh "$@" "$(SRC)"
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -38,6 +41,7 @@ $(BUILD)/%.COM: $(SRC)/%.ASM $(INCS) | $(BUILD)
 # Confirm every src/*.ASM produced a non-empty build/*.COM.
 check: all
 	@python3 tools/cmpcoms.py
+	@test -s $(BUILD)/VESA.COM
 
 clean:
 	rm -rf $(BUILD)

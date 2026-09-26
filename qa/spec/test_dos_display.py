@@ -25,11 +25,14 @@ def guest_build(assembler, source_dir, tmp_path_factory):
                             'qa/harness/snapshot.c', str(out / 'SNAPSHOT.COM')],
                            cwd=ROOT, env=env, capture_output=True, text=True)
     assert build.returncode == 0, build.stdout + build.stderr
+    build = subprocess.run(['bash', 'tools/build-vesa.sh', str(out / 'VESA.COM'), str(source_dir)],
+                           cwd=ROOT, env=dict(env, JWASM=assembler), capture_output=True, text=True)
+    assert build.returncode == 0, build.stdout + build.stderr
     return out
 
 
-@pytest.fixture
-def capture(dosbox_binary, guest_build, tmp_path):
+@pytest.fixture(params=['VGA', 'VESA'])
+def capture(dosbox_binary, guest_build, tmp_path, request):
     for file in guest_build.glob('*.COM'):
         shutil.copy2(file, tmp_path)
     shutil.copy2(ROOT / 'fonts/HZK16', tmp_path)
@@ -40,8 +43,9 @@ def capture(dosbox_binary, guest_build, tmp_path):
         data = b''.join(bytes((mode,)) + bytes(screen) for mode, screen in frames)
         (tmp_path / 'INPUT.BIN').write_bytes(data)
         files = run_dos(dosbox_binary, tmp_path, ['SNAPSHOT font', 'READ2 > READ2.LOG',
-                                          'VGA > VGA.LOG', ('CMODE 3 > CMODE.LOG', 3),
-                                          'SNAPSHOT api', 'SNAPSHOT > PROBE.LOG'], timeout=30 + 4*len(frames))
+                                          request.param+' > DISPLAY.LOG', ('CMODE 3 > CMODE.LOG', 3),
+                                          'SNAPSHOT api', 'SNAPSHOT > PROBE.LOG'], timeout=30 + 4*len(frames),
+                        settings='\n[dosbox]\nmachine=svga_s3\n' if request.param=='VESA' else '')
         capture_frames.api = files['API.BIN'].read_bytes()
         snapshots = []
         for index in range(len(frames)):
