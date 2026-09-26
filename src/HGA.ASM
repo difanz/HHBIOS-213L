@@ -1105,6 +1105,15 @@ S_DWZ		ENDP
 ;	AL=14 取西文制表符转换表地址 BX:AX				1.18
 ;	AL=15 在指定位置DX显示加宽字符串DS:SI(属性BL)
 L_AH14:
+		CMP	AL,10H
+		JNE	L_HKOLD
+		CALL	S_HZPOS
+		POP	BP
+		POP	BP
+		MOV	BP,SP
+		MOV	[BP],CX
+		JMP	L_RET3
+L_HKOLD:
 		OR	AL,AL			;<清提示行>
 		JNZ	L_1410
 		MOV	CS:D_0058,AL		;提示行定位在左端
@@ -1738,6 +1747,7 @@ S_SETB8 	ENDP
 
 	INCLUDE INT8.INC
 	INCLUDE ZJXP.INC
+	INCLUDE HZPOS.INC
 
 D_XPQ		DB	25*80*2 DUP(0)		;虚屏区
 D_TUXBC 	DB	16*80 DUP(0)		;提示行覆盖区保存

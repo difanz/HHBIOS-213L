@@ -9,7 +9,7 @@ from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE, UC_HOOK_MEM_READ,
 from unicorn import x86_const as reg
 
 NAMES = ('scan', 'char', 'hanzi', 'shadow', 'mode', 'hanzi_switch',
-         'teletype', 'return', 'pending', 'direct', 'stroke')
+         'teletype', 'return', 'pending', 'direct', 'stroke', 'keypos')
 CODE, SCREEN, STACK = 0x10000, 0x20000, 0x30000
 
 # Public CP437 conversion codes, shared with DOS programs through INT 10h.

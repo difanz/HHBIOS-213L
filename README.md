@@ -39,12 +39,14 @@ jwasm -q -Zm -bin -Isrc -Fo=build/FOO.COM src/FOO.ASM
 
 直接写屏路径通过纵向扫描、连续字符和邻格笔画识别 CP437 框线，并用转换表中的代码标记已识别的框线。显示时按行用 FSM 配对 GB2312 字节；内容变化会重绘受影响的行，模式切换会刷新画面。规则、歧义和兼容边界见 [混排规则](qa/DISPLAY-RULES.md)。
 
-测试使用 pytest，覆盖真实 16 位汇编执行、DOSBox 显存与像素、tvedit 应用中的中文混排。运行前需安装所选测试层的依赖；工具位置通过 `PATH`、环境变量或参数指定。
+`CKBD /E` 为使用 BIOS 键盘接口的逐字节编辑器启用整字移动和删除；`CKBD /B` 恢复默认的逐字节操作，适用于十六进制编辑。两条命令也能切换已驻留的 CKBD。需要配套的 VGA/EGA/HGA 驱动和直接写屏中文模式。处理流程、应用范围及限制见 [键盘规则](qa/KEYBOARD-RULES.md)。
+
+测试使用 pytest，覆盖真实 16 位汇编执行、DOSBox 显存与像素、真实编辑器中的中文混排和保存结果。运行前需安装所选测试层的依赖；工具位置通过 `PATH`、环境变量或参数指定。
 
 ```sh
 make qa-test         # 汇编行为与测试传输层
 make qa-dos          # DOSBox 驻留模块、VGA 四平面像素及 API
-make qa-application  # 真实 tvedit 中文混排
+make qa-application  # tvedit 混排、编辑；可配置其他应用样本
 make qa-all          # 全部必需测试层
 make qa-mutate       # 验证测试能捕获故意引入的汇编错误
 ```

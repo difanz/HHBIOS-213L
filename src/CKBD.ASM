@@ -131,7 +131,7 @@ D_AH20		DW	OFFSET L_AH20		;<装入词组联想库预选>
 		DW	OFFSET L_AH29		;<重显提示行>
 		DW	OFFSET L_AH2A		;<帮助模块地址>
 		DW	OFFSET L_AH2B		;<调ROM BIOS>
-		DW	OFFSET L_INT16		;AH=2CH
+		DW	OFFSET L_AH2C		;AH=2CH
 		DW	OFFSET L_INT16		;AH=2DH
 		DW	OFFSET L_INT16		;AH=2EH
 		DW	OFFSET L_AH2F		;<取本模块中断向量>
@@ -162,6 +162,8 @@ INT_16		PROC	FAR
 		PUSH	CS
 		POP	DS
 		MOV	D_AH,AH
+		CALL	S_EDIT
+		JC	L_0010
 
 		CMP	AH,4			;<置扩展键状态>
 		JNZ	L_02
@@ -234,6 +236,21 @@ L_AH25:
 L_AH29:
 		CALL	S_CXTUX
 		JMP	SHORT L_RET
+
+;AH=2CH *** AL=0 byte editing, 1 pair editing, other query; AX='HK', BX=mode
+L_AH2C:
+		CMP	AL,1
+		JA	L_EQUERY
+		MOV	D_EDIT,AL
+		MOV	D_ESTATE,0
+L_EQUERY:
+		XOR	BX,BX
+		MOV	BL,D_EDIT
+		MOV	AX,4B48H
+		; Return BX through the saved-register slot.
+		MOV	BP,SP
+		MOV	[BP+10],BX
+		JMP	L_RET
 
 ;AH=2FH *** 取本模块中断向量BP:SI、词参数区地址BP:DI和2.13安装路径BP:DX
 L_AH2F:
@@ -3981,6 +3998,8 @@ S_XSSW:
 S_JRCL		ENDP
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+		INCLUDE	KEYEDIT.INC
+
 A_BUF		DW	0			;公用缓冲区指针
 D_959D		EQU	$			;返回码区(容量256)
 D_BUF		EQU	$+256			;公用缓冲区(512字节)
@@ -4390,10 +4409,13 @@ S_NOFOUND	ENDP
 D_NAME		DB	'CKBD',0                ;模块名
 F_S		DB	40 DUP(0)		;源文件名
 A_S		DW	0			;写入地址
-MSG		DB	'2.13L 汉字系统键盘模块 ',DATE,13,10,'$'
+MSG		DB	'2.13L 汉字系统键盘模块 ',DATE,13,10
+		DB	'  /E  Enable whole-Hanzi editing (INT 16h applications)',13,10
+		DB	'  /B  Byte editing (default); /E and /B also change a resident CKBD',13,10,'$'
 
 ;****************************************************************************
 ;【本模块开始执行】
+D_EDITREQ	DB	0FFH
 BEGIN:
 		MOV	SP,0D0H
 
@@ -4416,11 +4438,28 @@ L_S1:
 		INT	20H
 L_S2:
 		AND	AL,5FH
+		CMP	AL,'E'
+		JNE	L_EOFF
+		MOV	D_EDIT,1
+		MOV	D_EDITREQ,1
+		JMP	SHORT L_S1
+L_EOFF:
+		CMP	AL,'B'
+		JNE	L_EOTHER
+		MOV	D_EDIT,0
+		MOV	D_EDITREQ,0
+		JMP	SHORT L_S1
+L_EOTHER:
 		CMP	AL,'N'                  ;/N:驻留基本内存
 		JNZ	L_S1
 		MOV	D_RAM,AL
 		JMP	SHORT L_S1
 L_S10:
+		; Resident mode changes must not drain queued keyboard input.
+		MOV	AH,2FH
+		INT	16H
+		CMP	AX,44H
+		JE	L_EINSTALLED
 		MOV	CX,-1
 		MOV	AH,5			;向键盘缓冲区送0FFFFH
 		INT	16H
@@ -4441,6 +4480,17 @@ L_S15:
 		INT	16H
 		CMP	AX,44H			;判CKBD已驻留?		2.10
 		JNZ	L_S20
+L_EINSTALLED:
+		CMP	D_EDITREQ,0FFH
+		JE	L_EALREADY
+		MOV	AL,D_EDITREQ
+		MOV	AH,2CH
+		INT	16H
+		CMP	AX,4B48H
+		JNE	L_EALREADY
+		MOV	AX,4C00H
+		INT	21H
+L_EALREADY:
 		MOV	DX,OFFSET ALREADY
 L_ERR:
 		MOV	AH,9

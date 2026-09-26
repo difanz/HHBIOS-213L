@@ -17,6 +17,11 @@ MUTANTS = [
     ('skip-dirty-row', 'ZJXP.INC', b'CALL\tS_XRROW', b'NOP', 'partial_update'),
     ('allow-ff-dbcs', 'ZJXP.INC', b'CMP\tBYTE PTR DS:[SI],0FEH', b'CMP\tBYTE PTR DS:[SI],0FFH', 'invalid_dbcs'),
     ('backspace-two-columns', 'AH0E.INC', b'DEC\tDL', b'SUB\tDL,2', 'teletype_backspace'),
+    ('eager-companion-key', 'KEYEDIT.INC', b'MOV D_ESTATE,1',
+     b'MOV D_ESTATE,2', 'no_extra_key_for_other_application_updates'),
+    ('inconsistent-peek-key', 'KEYEDIT.INC', b'CALL S_EPEEK', b'NOP', 'trail_delete_has_same_value'),
+    ('discard-preupdate-poll', 'KEYEDIT.INC', b'JC EV_DONE', b'JC EV_CANCEL',
+     'peek_before_application_update'),
 ]
 
 

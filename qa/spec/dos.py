@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import time
+from contextlib import nullcontext
 
 ROOT = Path(__file__).resolve().parents[2]
 PLANE = 80 * 480
@@ -15,13 +17,19 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def run_process(args, directory, timeout, env=None):
+def run_process(args, directory, timeout, env=None, keyboard=None):
     """Kill the process group on timeout/interrupt; retain stdout either way."""
     with (directory / 'dosbox.log').open('wb') as log:
         process = subprocess.Popen(args, cwd=directory, env=env, stdout=log,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            status = process.wait(timeout=timeout)
+            if keyboard is None:
+                status = process.wait(timeout=timeout)
+            else:
+                deadline = time.monotonic()+timeout
+                while process.poll() is None and time.monotonic() < deadline:
+                    keyboard.poll()
+                status = process.wait(timeout=max(.01, deadline-time.monotonic()))
         finally:
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
@@ -29,7 +37,7 @@ def run_process(args, directory, timeout, env=None):
     assert status == 0, f'DOSBox exited {status}; see {directory}/dosbox.log'
 
 
-def run_dos(binary, directory, commands, timeout=60):
+def run_dos(binary, directory, commands, timeout=60, physical_keys=False):
     assert not any(p.name.upper() in ('DONE.TXT', 'FAIL.TXT') for p in directory.iterdir()), (
         f'refusing stale guest results in {directory}; use a fresh case directory')
     # Batch commands are explicit. Do not rewrite their redirections.
@@ -49,14 +57,19 @@ def run_dos(binary, directory, commands, timeout=60):
     config = directory / 'dosbox.conf'
     # A private working directory and config keep the user's DOSBox settings
     # out of the test. Only the common -conf / [autoexec] interface is needed.
-    config.write_text((ROOT / 'qa/dosbox.conf').read_text() +
-                      '\n[autoexec]\n@echo off\nmount c .\nc:\ncall RUN.BAT\nexit\n')
     args = [str(binary), '-conf', str(config)]
     (directory / 'invocation.json').write_text(json.dumps(args, indent=2) + '\n')
     (directory / 'emulator.json').write_text(json.dumps({
         'path': str(binary), 'sha256': digest(binary),
     }, indent=2) + '\n')
-    run_process(args, directory, timeout, env)
+    from qa.spec.physical_keyboard import PhysicalKeyboard
+    with PhysicalKeyboard(directory) if physical_keys else nullcontext() as keyboard:
+        config.write_text((ROOT / 'qa/dosbox.conf').read_text() +
+                          (keyboard.config if keyboard else '') +
+                          '\n[autoexec]\n@echo off\nmount c .\nc:\ncall C:\\RUN.BAT\nexit\n')
+        if keyboard:
+            env.update(DISPLAY=keyboard.name, SDL_VIDEODRIVER='x11')
+        run_process(args, directory, timeout, env, keyboard)
     files = {p.name.upper(): p for p in directory.iterdir()}
     step = files['STEP.TXT'].read_text().strip() if 'STEP.TXT' in files else '?'
     assert 'FAIL.TXT' not in files, f'guest command {step} failed; artifacts: {directory}'

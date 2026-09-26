@@ -19,6 +19,16 @@ def pytest_addoption(parser):
     parser.addoption('--tvedit', type=Path,
                      default=Path(os.environ.get('TVEDIT_ARCHIVE', ROOT / 'qa/.cache/tvision/tvedit-dos.zip')),
                      help='Path to the tvedit regression fixture archive.')
+    parser.addoption('--borland-bin', type=Path, default=os.environ.get('BORLAND_BIN'),
+                     help='Optional Borland C++ DOS BIN directory for the licensed application test.')
+    parser.addoption('--qbasic', type=Path, default=os.environ.get('QBASIC_EXE'),
+                     help='Optional QBASIC.EXE for the classic MS-DOS EDIT application test.')
+    parser.addoption('--msedit2', type=Path, default=os.environ.get('MSEDIT2_COM'),
+                     help='Optional standalone MS-DOS Editor 2.x EDIT.COM.')
+    parser.addoption('--dos-apps', type=Path, default=os.environ.get('DOS_APPS'),
+                     help='Optional unpacked application fixtures: tc201/, tc30/.')
+    parser.addoption('--pctools', type=Path, default=os.environ.get('PCTOOLS_DIR'),
+                     help='Optional PC Tools 9 directory; needs DOSBox absolute disk reads and mtools.')
 
 
 @pytest.fixture(scope='session')
