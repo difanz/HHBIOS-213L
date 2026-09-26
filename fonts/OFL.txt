@@ -1,7 +1,11 @@
 HH Console 20 is derived from the following SIL OFL fonts:
 
-Noto Sans Mono CJK SC, Version 2.004
-Copyright 2014-2021 Adobe (http://www.adobe.com/).
+GNU Unifont, Version 18.0.01, original 16-pixel bitmaps
+Copyright (C) 1998-2026 Roman Czyborra, Paul Hardy, Qianqian Fang,
+Andrew Miller, Johnnie Weaver, David Corbett, Ælla Chiana Moskopp,
+Rebecca Bettencourt, Minseo Lee, Ho-Seok Ee, et al.
+https://unifoundry.com/unifont/index.html
+Unifont is dual licensed; this derivative uses its SIL OFL 1.1 option.
 
 Terminus Font, normal 10x20 bitmap
 Copyright (c) 2010-2014 Dimitar Toshkov Zhekov.

@@ -205,7 +205,9 @@ def test_native_font_storage_banks_and_cursor(dosbox_binary,vesa_build,tmp_path,
     raw=files['FONT20.BIN'].read_bytes()
     assert len(raw)==20+4*4*2300
     regs=struct.unpack_from('<10H',raw)
-    assert (regs[0],regs[1],regs[2],regs[3],regs[5],regs[6])==(0x4632,1 if storage=='xms' else 2,716,0,10,23)
+    payload = len((ROOT/'fonts/HH20.FNT').read_bytes())-32
+    assert (regs[0],regs[1],regs[2],regs[3],regs[5],regs[6]) == (
+        0x4632, 1 if storage=='xms' else 2, (payload+1023)//1024, 0, 10, 23)
     frames=[raw[20+i*9200:20+(i+1)*9200] for i in range(4)]
     for traditional in (False,True):
         frame=frames[int(traditional)]

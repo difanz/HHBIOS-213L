@@ -28,6 +28,7 @@ TITLES = {
     'test_vesa_prompt_bitmap_wide_text_and_pixels': 'Prompt row, wide glyph clipping and bottom-right pixel',
     'test_native_font_storage_banks_and_cursor': 'Simplified / traditional / cursor XOR / restored',
     'test_tvedit_tabs_and_long_lines': 'Turbo Vision document: tabs and right-edge clipping',
+    'test_native_text_geometry': 'Native BIOS text mode, without HHBIOS',
 }
 
 
@@ -87,6 +88,7 @@ def main():
             base, _, parameters = title.partition('[')
             parameters = parameters.rstrip(']')
             app = read_json(directory / 'application.json', {})
+            grid = read_json(directory / 'grid.json')
             if base in TITLES:
                 title = TITLES[base]+' / '+parameters
             elif app:
@@ -99,6 +101,7 @@ def main():
             links, figures, images = [], [], []
             for name in ('APP.BIN', 'KEYLOG.BIN', 'INPUT.BIN', 'FONT20.BIN', 'DRAW.BIN',
                          'VIEW.TXT', 'SAVED.TXT', 'application.json', 'emulator.json',
+                         'TEXTMODE.BIN', 'TEXT.BIN', 'GRID.BIN', 'grid.json',
                          'physical-keys.json', 'screenshots.json', 'provenance.json', 'dosbox.conf'):
                 if (directory / name).is_file():
                     shutil.copy2(directory / name, dest / name)
@@ -126,16 +129,19 @@ def main():
                     cursor, = struct.unpack_from('<H', records, record*164+2)
                     caption += f' · BIOS cursor ({cursor >> 8}, {cursor & 255}), zero based'
                 caption += f' · {shot["width"]}×{shot["height"]}'
+                if grid:
+                    caption = ('Native mode before application' if index==0 else
+                               'Application running' if index==1 else 'Before exit key') + caption[caption.index(' · '):]
                 url = f'{case_id}/{name}'
                 figures.append(f'<figure><a href="{url}"><img loading="lazy" src="{url}" '
                                f'alt="{html.escape(caption, quote=True)}"></a>'
                                f'<figcaption>{html.escape(caption)}</figcaption></figure>')
                 images.append(dict(shot, file=url, caption=caption,
                                    sha256=hashlib.sha256(source.read_bytes()).hexdigest()))
-            cover = min(initial, len(figures)-1)
+            cover = min(1 if grid else initial, len(figures)-1)
             emulator = read_json(directory / 'emulator.json', {})
             metadata = dict(case, title=title, run=run.name, directory=directory.name,
-                            emulator=emulator, images=images,
+                            emulator=emulator, images=images, native_grid=grid,
                             drivers={name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
                                      for name in ('VGA.COM', 'VESA.COM', 'CKBD.COM')
                                      if (directory / name).is_file()})
@@ -145,12 +151,15 @@ def main():
             navigation.append(f'<li><a href="#{case_id}">{escaped}</a> · {case["outcome"]}</li>')
             failure = ('<details open><summary>Assertion failure — retained evidence</summary><pre>'
                        +html.escape(case['failure'])+'</pre></details>') if case['failure'] else ''
+            geometry = (f'<p>Native BIOS observation, without HHBIOS: '
+                        f'{grid["before"][0]}×{grid["before"][1]} before launch → '
+                        f'{grid["during"][0]}×{grid["during"][1]} while running.</p>') if grid else ''
             rest = ''.join(figure for index, figure in enumerate(figures) if index != cover)
             sections.append(f'<section id="{case_id}"><h2>{escaped}</h2>'
                             f'<p>Assertions: <strong>{case["outcome"]}</strong> · '
                             f'{html.escape(Path(emulator.get("path", "unknown")).name)} · '
                             f'<a href="run-{run_number:02d}/manifest.json">Source/tool hashes</a> · '
-                            f'<a href="{case_id}/case.json">Case metadata</a></p>{failure}'
+                            f'<a href="{case_id}/case.json">Case metadata</a></p>{failure}{geometry}'
                             +figures[cover]+(f'<details><summary>All {len(figures)} frames, in order</summary>'
                                             f'<div class="frames">{"".join(figures)}</div></details>' if rest else '')
                             +f'<details><summary>Raw observations</summary><p>{" · ".join(links)}</p></details></section>')
@@ -169,7 +178,9 @@ figcaption{font-size:14px;margin-top:8px}summary{cursor:pointer;padding:10px 0}p
 </style><h1>HHBIOS · DOS display screenshots</h1>
 <p>Actual SDL window pixels, captured after the guest requests its next action.
 No screenshot hotkeys, redraws or replacement glyphs. Click an image for the original PNG.
-The logical console is 80×25 cells: VGA 640×480, VESA 800×600.</p>
+The HHBIOS console is 80×25 cells: VGA 640×480, VESA 800×600.
+Cases labeled native BIOS run without HHBIOS and study existing text modes;
+they do not demonstrate Chinese rendering in larger grids.</p>
 <p>“Passed” describes the test assertions, not every visual detail. Framebuffer checks,
 saved file bytes and cursor observations accompany the pictures. Capturing pauses key
 delivery; these runs are not latency measurements. Failures are retained.</p>

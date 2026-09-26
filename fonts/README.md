@@ -1,22 +1,25 @@
 # HH Console 20
 
-`HH20.FNT` supplies the VESA console with native 20-pixel Chinese and 10x20
-Western glyphs, in 10x23 cells. The 80x25 text area occupies 800x575 pixels;
+`HH20.FNT` supplies the VESA console with native 16x16 Chinese and 10x20
+Western bitmaps, in 10x23 cells. The 80x25 text area occupies 800x575 pixels;
 the input-method row occupies y=575..597. Frame strokes extend through the
 row spacing so adjacent boxes join. This is a monochrome font for the
 16-color renderer; no antialiasing or runtime font rasterizer is needed.
 
-Chinese glyphs come from **Noto Sans Mono CJK SC Regular 2.004**, rasterized
-with FreeType's monochrome hinting at 20 pixels. Western CP437 glyphs and
+Chinese glyphs come from **GNU Unifont 18.0.01**, using the original HEX
+bitmaps. A 16x16 glyph is placed at (2,2) inside its 20x23 fullwidth slot;
+its strokes are neither rasterized from outlines nor stretched to 20 pixels.
+The baseline is aligned with the Western font. Western CP437 glyphs and
 available box-drawing characters come from **Terminus Font 10x20**, using
 its original bitmap strike. GB2312 box characters available in Terminus
-use the same strokes, with doubled horizontal pixels. Other CJK glyphs
-come directly from Noto outlines. Proportional symbols are centered in their
-fullwidth GB2312 slots. Accents are positioned inside the cell
-without clipping or shrinking their bitmap.
+use the same strokes, with doubled horizontal pixels. Unifont's narrow
+symbols are centered without scaling in their fullwidth GB2312 slots.
+The filename and format retain the 20-pixel fullwidth slot; this does not
+mean that the Chinese source has a native 20-pixel strike.
 
 Both fonts use [SIL OFL 1.1](OFL.txt). Redistribute that file with HH20.FNT.
-Upstreams: [Noto CJK](https://github.com/notofonts/noto-cjk),
+Unifont's dual license is used under its OFL option.
+Upstreams: [GNU Unifont](https://unifoundry.com/unifont/index.html),
 [Terminus Font](https://terminus-font.sourceforge.net/).
 The bitmap is named **HH Console 20** to distinguish this derivative from
 the upstream fonts. Original source-file hashes and output hash are in
@@ -27,18 +30,19 @@ the upstream fonts. Original source-file hashes and output hash are in
 The binary font is checked in; ordinary builds and DOS installations do not
 need Python font libraries or host-installed fonts. To regenerate it, install
 the optional dependencies from `tools/font-requirements.txt`, obtain the
-upstream fonts (Linux packages `fonts-noto-cjk` and `fonts-terminus-otb` are
-one source), and pass their paths explicitly:
+upstream [Unifont HEX bitmap](https://unifoundry.com/pub/unifont/unifont-18.0.01/font-builds/unifont-18.0.01.hex.gz)
+and Terminus OTB (`fonts-terminus-otb` on Debian/Ubuntu), and pass their paths
+explicitly:
 
 ```sh
-python tools/build-font20.py --cjk /path/to/NotoSansCJK-Regular.ttc \
-    --face 7 --terminal /path/to/terminus-normal.otb --output fonts/HH20.FNT
+python tools/build-font20.py --cjk /path/to/unifont-18.0.01.hex.gz \
+    --terminal /path/to/terminus-normal.otb --output fonts/HH20.FNT
 ```
 
-Face 7 is the SC monospace face in the regular Noto collection. FreeType
-2.13.2 produced the committed output; other rasterizer/font versions can
-change pixels. The generator records its inputs and rejects missing or
-oversized glyphs. It never substitutes a font from the host's font search.
+FreeType 2.13.2 reads the Terminus bitmap strike in the committed build.
+Chinese pixels are copied directly from HEX; FreeType is not involved.
+The generator records its inputs and rejects missing, malformed or oversized
+glyphs. It never substitutes a font from the host's font search.
 
 The traditional bank uses OpenCC's `s2t` single-character conversion,
 matching the legacy one-GB2312-code/one-glyph bank interface. This is not
@@ -70,7 +74,7 @@ even-length XMS moves. Chinese occupies the first 20 bits; Western occupies
 the first 10 bits. Identical records, including blanks and unchanged
 traditional forms, share one index.
 
-The committed payload is 733106 bytes: 716 KiB of XMS allocation, or 45 EMS
+The committed payload is 733176 bytes: 716 KiB of XMS allocation, or 45 EMS
 pages (720 KiB). The 16-entry resident cache uses 1120 bytes of glyph data
 plus keys and validity words. No DOS or file calls occur while drawing.
 

@@ -5,20 +5,30 @@
     10,
     23
   ],
-  "em": 20,
-  "records": 9991,
-  "payload_bytes": 733106,
+  "cjk_bitmap": [
+    16,
+    16
+  ],
+  "cjk_origin": [
+    2,
+    2
+  ],
+  "terminal_bitmap": [
+    10,
+    20
+  ],
+  "records": 9992,
+  "payload_bytes": 733176,
   "freetype": "2.13.2",
   "inputs": [
     {
-      "file": "NotoSansCJK-Regular.ttc",
-      "sha256": "b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a"
+      "file": "unifont-18.0.01.hex.gz",
+      "sha256": "e66385c79a0b8b24a466f3129930e08a966a935b4bf3b28c6bb17a9df9bf791d"
     },
     {
       "file": "terminus-normal.otb",
       "sha256": "482219650d82b9db6330626adf085313fd609086fefa77ad3539b3afb508f06a"
     }
   ],
-  "cjk_face": 7,
-  "sha256": "de42dae9e120631226adf5505f076a149135ab5ac24b1ccb70e7c57d77cdb19d"
+  "sha256": "001bd2153b374e0101c34fce35ce57f8885b175c7cf877fe4f8be7978322343c"
 }

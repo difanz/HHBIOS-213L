@@ -10,6 +10,10 @@ two-state Chinese-pairing FSM. Ambiguous GB2312/CP437 bytes require explicit
 policy to determine how they display.
 The [VBE contract](VBE-RULES.md) covers mode ownership, banked framebuffer tests,
 the independent 800x600 VESA renderer, its interfaces and extension boundaries.
+The [text-mode study](TEXT-MODES.md) records native BIOS and application behavior
+for 80x43/50/60 and 132x25/43/50/60, and the design for rendering existing text
+modes on larger graphics surfaces. These native observations do not imply that
+the Chinese driver already supports those grids.
 
 ## Setup
 

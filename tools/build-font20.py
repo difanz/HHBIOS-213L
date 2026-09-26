@@ -5,6 +5,7 @@ Requires freetype-py and opencc-python-reimplemented. Font files are inputs,
 never looked up through the host's font configuration. See fonts/README.md.
 """
 import argparse
+import gzip
 import hashlib
 import json
 import struct
@@ -19,6 +20,32 @@ RECORD = 70
 CONTROLS = '\0☺☻♥♦♣♠•◘○◙♂♀♪♫☼►◄↕‼¶§▬↨↑↓→←∟↔▲▼'
 
 
+def read_hex(path):
+    """Read original Unifont pixels, without passing CJK through a rasterizer."""
+    opener = gzip.open if path.suffix == '.gz' else open
+    glyphs = {}
+    with opener(path, 'rt', encoding='ascii') as source:
+        for line in source:
+            code, pixels = line.strip().split(':')
+            code, pixels = int(code, 16), bytes.fromhex(pixels)
+            if code in glyphs or len(pixels) not in (16, 32):
+                raise ValueError(f'invalid or duplicate Unifont glyph U+{code:04X}')
+            glyphs[code] = pixels
+    return glyphs
+
+
+def bitmap_rows(glyphs, char):
+    pixels = glyphs.get(ord(char))
+    if pixels is None:
+        raise ValueError(f'Unifont lacks U+{ord(char):04X}')
+    stride = len(pixels) // 16
+    # Native 16-pixel body, ascent 14: align its baseline with Terminus at 16.
+    # Center 8- or 16-pixel ink in the 20-pixel fullwidth slot; never resample.
+    shift = (20 - stride * 8) // 2
+    return [0, 0] + [int.from_bytes(pixels[y*stride:(y+1)*stride], 'big') << shift
+                     for y in range(16)] + [0] * (ROWS - 18)
+
+
 def raster(face, char, width, baseline):
     if not face.get_char_index(char):
         raise ValueError(f'{face.family_name!r} lacks U+{ord(char):04X}')
@@ -26,8 +53,7 @@ def raster(face, char, width, baseline):
     glyph = face.glyph
     bitmap = glyph.bitmap
     assert bitmap.pixel_mode == freetype.FT_PIXEL_MODE_MONO
-    # Some fullwidth accents extend above the CJK baseline. Keep their whole
-    # bitmap in the cell, without shrinking strokes or silently clipping.
+    # Keep the complete terminal bitmap in the cell without clipping strokes.
     advance = glyph.advance.x // 64
     left = max(0, min(glyph.bitmap_left + (width-advance)//2, width-bitmap.width))
     top = max(0, min(baseline-glyph.bitmap_top, ROWS-bitmap.rows))
@@ -45,14 +71,12 @@ def raster(face, char, width, baseline):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cjk', type=Path, required=True)
-    parser.add_argument('--face', type=int, default=7, help='Noto Sans Mono CJK SC in the regular TTC')
+    parser.add_argument('--cjk', type=Path, required=True, help='Unifont .hex or .hex.gz bitmap')
     parser.add_argument('--terminal', type=Path, required=True)
     parser.add_argument('--output', type=Path, default=Path('fonts/HH20.FNT'))
     args = parser.parse_args()
-    cjk = freetype.Face(str(args.cjk), index=args.face)
+    cjk = read_hex(args.cjk)
     terminal = freetype.Face(str(args.terminal))
-    cjk.set_pixel_sizes(0, 20)
     terminal.set_pixel_sizes(0, 20)
     convert = OpenCC('s2t').convert
     records, ids, banks = [], {}, []
@@ -68,7 +92,7 @@ def main():
             if width == 20:
                 rows = [sum((3 << (18-2*x)) for x in range(10) if r & (512 >> x)) for r in rows]
         else:
-            rows = raster(cjk, char, 20, 18)
+            rows = bitmap_rows(cjk, char)
         data = b''.join((r << (24-width)).to_bytes(3, 'big') for r in rows) + b'\0'
         if data not in ids:
             ids[data] = len(records)
@@ -98,11 +122,12 @@ def main():
     header = struct.pack('<8s4HI12x', b'HH20F01\n', 10, ROWS, SLOTS, len(records), len(payload))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(header + payload)
-    metadata = dict(name='HH Console 20', format=1, cell=[10, ROWS], em=20,
+    metadata = dict(name='HH Console 20', format=1, cell=[10, ROWS],
+                    cjk_bitmap=[16, 16], cjk_origin=[2, 2], terminal_bitmap=[10, 20],
                     records=len(records), payload_bytes=len(payload),
                     freetype='.'.join(map(str, freetype.version())),
                     inputs=[dict(file=p.name, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
-                            for p in (args.cjk, args.terminal)], cjk_face=args.face,
+                            for p in (args.cjk, args.terminal)],
                     sha256=hashlib.sha256(header + payload).hexdigest())
     args.output.with_suffix('.json').write_text(json.dumps(metadata, indent=2) + '\n')
     print(json.dumps(metadata, indent=2))

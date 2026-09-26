@@ -53,6 +53,7 @@ class PhysicalKeyboard:
             self.x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
             self.x.XGetInputFocus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong),
                                              ctypes.POINTER(ctypes.c_int)]
+            self.x.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
             self.t.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
             r, w = os.pipe()
             self.log = (self.directory / 'xvfb.log').open('wb')
@@ -91,6 +92,10 @@ class PhysicalKeyboard:
         window, revert = ctypes.c_ulong(), ctypes.c_int()
         self.x.XGetInputFocus(self.display, ctypes.byref(window), ctypes.byref(revert))
         assert window.value > 1, 'DOSBox has no focused window to capture'
+        # A 132-column mode can grow past the root when the old 80-column
+        # window keeps its centered origin. Move it before observing scanout.
+        self.x.XMoveWindow(self.display, window.value, 0, 0)
+        self.x.XSync(self.display, 0)
         relative = f'screenshots/step-{len(self.captures):03d}.png'
         subprocess.run(['import', '-display', self.name, '-window', str(window.value),
                         str(self.directory / relative)], check=True, timeout=5,

@@ -4,8 +4,8 @@
 `vesa.c` and `vesa.asm`, draws an 800x600, 16-color console. Load one display
 driver at a time, after a font reader and optionally CKBD. The logical screen
 remains 80x25 cells of 10x23 pixels; the input-method row starts at y=575.
-Chinese uses native 20-pixel Noto CJK glyphs, and Western/CP437 uses Terminus
-10x20 bitmaps. Box strokes extend through the row spacing. Font generation,
+Chinese uses native 16x16 Unifont bitmaps centered in fullwidth 20x23 slots;
+Western/CP437 uses Terminus 10x20 bitmaps. Box strokes extend through the row spacing. Font generation,
 licenses, traditional mapping and file format are in [fonts/README.md](../fonts/README.md).
 The final two scanlines remain available to pixel APIs.
 
