@@ -66,7 +66,7 @@ def main():
     if os.environ.get('WATCOM'):
         prefix = Path(os.environ['WATCOM'])
         watcom_path = os.pathsep.join([str(prefix / 'binl64'), str(prefix / 'binl'), watcom_path])
-    for name in ('wcl', 'wcc', 'wlink', 'wasm'):
+    for name in ('wcl', 'wcc', 'wcl386', 'wcc386', 'wlink', 'wasm'):
         record_tool(manifest, name, shutil.which(name, path=watcom_path))
     args = [sys.executable, '-m', 'pytest', '-q', '--tb=short',
             '--junitxml', str(out / 'junit.xml'), '--basetemp', str(out / 'work'),

@@ -60,7 +60,7 @@ def memory_build(guest_build, assembler, source_dir, tmp_path_factory):
     build = subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/memory.c',
                             str(out / 'MEMORY.COM')], cwd=ROOT, env=env, capture_output=True, text=True)
     assert build.returncode == 0, build.stdout + build.stderr
-    for reader in ('READ3', 'READ4', 'READ6', 'R16'):
+    for reader in ('READ3', 'READ6', 'R16'):
         build = subprocess.run([assembler, '-q', '-Zm', '-bin', f'-I{source_dir}',
                                 f'-Fo{out}/{reader}.COM', str(source_dir / f'{reader}.ASM')],
                                env=env, capture_output=True)

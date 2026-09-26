@@ -113,6 +113,16 @@ def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir):
 @pytest.mark.parametrize('enabled', [False, True], ids=['byte-mode', 'hanzi-mode'])
 @pytest.mark.parametrize('scenario', ['movement', 'trail-delete', 'trail-backspace'])
 def test_editor_edits_saved_bytes(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario):
+    exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario)
+
+
+@pytest.mark.parametrize('editor', ['borland', 'tc30'])
+@pytest.mark.parametrize('loader', ['READ4', 'READ5'])
+def test_borland_dpmi_font_memory(pytestconfig, dosbox_binary, application_dir, editor, loader):
+    exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, True, 'movement', loader)
+
+
+def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario, loader=None):
     tmp_path = application_dir
     command = 'TVEDIT VIEW.TXT'
     if editor == 'tvedit':
@@ -187,7 +197,9 @@ def test_editor_edits_saved_bytes(pytestconfig, dosbox_binary, application_dir, 
     keyboard_config(tmp_path)
     switch = '/E' if enabled else '/B'
     setup = ['imgmount d DATA.IMG -t floppy'] if editor == 'pct9' else []
-    loader = 'READ5' if editor in ('pct9', 'tc201') else 'READ2'
+    if loader is None:
+        loader = 'READ5' if editor in ('pct9', 'tc201') else 'READ2'
+    assert (tmp_path / (loader+'.COM')).is_file(), f'missing font reader: {loader}'
     files = run_dos(dosbox_binary, tmp_path, setup+['SNAPSHOT font', 'CKBD > CKBD.LOG',
                       f'{loader} > FONTLOAD.LOG', 'VGA > VGA.LOG', ('CMODE 3 > CMODE.LOG', 3),
                       f'CKBD {switch} > KEYMODE.LOG',

@@ -29,6 +29,12 @@ def pytest_addoption(parser):
                      help='Optional unpacked application fixtures: tc201/, tc30/.')
     parser.addoption('--pctools', type=Path, default=os.environ.get('PCTOOLS_DIR'),
                      help='Optional PC Tools 9 directory; needs DOSBox absolute disk reads and mtools.')
+    parser.addoption('--djgpp-cc', default=os.environ.get('DJGPP_CC', 'i586-pc-msdosdjgpp-gcc'),
+                     help='DJGPP cross compiler for optional standalone DPMI host tests.')
+    parser.addoption('--cwsdpmi', type=Path, default=os.environ.get('CWSDPMI_EXE'),
+                     help='Optional CWSDPMI.EXE fixture (any supported release).')
+    parser.addoption('--hdpmi32', type=Path, default=os.environ.get('HDPMI32_EXE'),
+                     help='Optional HDPMI32.EXE fixture.')
 
 
 @pytest.fixture(scope='session')

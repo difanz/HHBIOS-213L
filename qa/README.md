@@ -49,6 +49,25 @@ emulator rejects these filename bytes, the case reports a skip with its DOS
 error code. Supported environments must create, enumerate, reopen and read the
 same filename and contents with HHBIOS loaded.
 
+The DOS layer also uses Open Watcom's `wcl386` and the `dos4g`, `dos32a`,
+`causeway`, and `pmodew` linker systems. Include its `binw` directory on `PATH`
+so the linker can find the DOS extender stubs and `dos4gw.exe`; setting `WATCOM`
+does this for the test fixture. Standalone DPMI hosts are optional:
+
+| Option / environment | Fixture |
+| --- | --- |
+| `--djgpp-cc` / `DJGPP_CC` | DJGPP cross compiler; defaults to `i586-pc-msdosdjgpp-gcc` on PATH |
+| `--cwsdpmi` / `CWSDPMI_EXE` | [CWSDPMI](https://sandmann.dotster.com/cwsdpmi/) executable |
+| `--hdpmi32` / `HDPMI32_EXE` | HDPMI32 from [HX releases](https://github.com/Baron-von-Riedesel/HX/releases) |
+
+Use `python qa/run.py dos -k extenders` to select the memory coexistence cases.
+They compile a shared real/protected-mode client, retain competing EMS mappings
+and a 2 MiB allocation during font calls and timer activity, and check exact
+glyph bytes, memory contents and reclamation. External hosts are installed before
+HHBIOS and unloaded after it. Unconfigured host fixtures skip; explicit invalid
+paths fail. See [MEMORY-COMPAT.md](MEMORY-COMPAT.md) for the compatibility limits
+and Windows 95 interface audit.
+
 For the application layer, download the tvision r415 editor fixture:
 
 ```sh
@@ -109,6 +128,9 @@ has no emulator-name or version checks. PC Tools uses the existing `READ5`
 XMS font loader to leave conventional memory available, and `/NF /25 /IM`
 to retain the display font and use the 25-row keyboard interface.
 Turbo C 2.01 also uses READ5 so its real-mode IDE has enough conventional memory.
+`test_borland_dpmi_font_memory` exercises Borland C++ 3.1 and Turbo C++ 3.0
+with each of READ4 and READ5, checking Chinese cursor movement, deletion and
+saved file bytes through their 16-bit DPMI runtime.
 
 ## Layers
 

@@ -46,10 +46,12 @@ def run_dos(binary, directory, commands, timeout=60, physical_keys=False, settin
         expected = 0
         if isinstance(command, tuple):
             command, expected = command
+        low, high = expected if isinstance(expected, tuple) else (expected, expected)
+        assert 0 <= low <= high <= 255
         lines += [f'echo {step}>STEP.TXT', command,
-                  f'if errorlevel {expected+1} goto failed']
-        if expected:
-            lines += [f'if not errorlevel {expected} goto failed']
+                  f'if errorlevel {high+1} goto failed']
+        if low:
+            lines += [f'if not errorlevel {low} goto failed']
     lines += ['echo complete>DONE.TXT', 'goto end', ':failed',
               'echo failed>FAIL.TXT', ':end']
     (directory / 'RUN.BAT').write_bytes(('\r\n'.join(lines) + '\r\n').encode('ascii'))

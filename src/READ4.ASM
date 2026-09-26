@@ -75,13 +75,27 @@ L_10:
 
 		CMP	BX,BP			;判字库最后页号?
 		JA	L_20
+		PUSHF
+		CLI
+		MOV	DX,DI
+		MOV	AH,47H			; save caller page frame on our handle
+		INT	67H
+		OR	AH,AH
+		JNZ	L_MAPDONE
 		MOV	DX,DI			;申请的描述字
 		MOV	AX,4400H		;AH映射,AL物理页号
 		INT	67H
+		OR	AH,AH
+		JNZ	L_MAPRESTORE
 		MOV	DS,D_SEG		;物理窗口段
 		MOV	CX,20H
 		XOR	DI,DI			;存放地址
 		REP	MOVSB			;传送
+L_MAPRESTORE:
+		MOV	AH,48H			; restore even if the font map failed
+		INT	67H
+L_MAPDONE:
+		POPF
 L_20:
 		PUSH	CS
 		POP	DX
@@ -372,11 +386,18 @@ L_R1:
 		OR	AH,AH
 		JZ	L_R3
 L_R2:
+		MOV	BX,D_HANDLE
+		MOV	AH,3EH
+		INT	21H
 		MOV	DX,OFFSET D_EMSERR
 		STC
 		RET
 L_R3:
 		MOV	D_HAN,DX		;描述字
+		MOV	AH,47H			; preserve the installing caller's maps
+		INT	67H
+		OR	AH,AH
+		JNZ	L_RFREE
 
 		MOV	DS,D_SEG		;物理窗口段
 		XOR	CX,CX
@@ -388,7 +409,7 @@ L_R4:
 		MOV	AX,4400H		;AH映射,AL物理页号
 		INT	67H
 		OR	AH,AH
-		JNZ	L_R2
+		JNZ	L_RMAPERR
 		INC	CX
 		CMP	CX,10H
 		JZ	L_R5
@@ -396,7 +417,7 @@ L_R4:
 		MOV	AX,4401H		;AH映射,AL物理页号
 		INT	67H
 		OR	AH,AH
-		JNZ	L_R2
+		JNZ	L_RMAPERR
 		INC	CX
 L_R5:
 		PUSH	CX
@@ -415,9 +436,27 @@ L_R6:
 		PUSH	CS
 		POP	DS
 		MOV	D_PAG,CX		 ;最后逻辑页号
+		MOV	DX,D_HAN
+		MOV	AH,48H
+		INT	67H
+		OR	AH,AH
+		JNZ	L_RFREE
+		MOV	BX,D_HANDLE
 		MOV	AH,3EH
 		INT	21H
+		CLC
 		RET
+L_RMAPERR:
+		PUSH	CS
+		POP	DS
+		MOV	DX,D_HAN
+		MOV	AH,48H
+		INT	67H
+L_RFREE:
+		MOV	DX,D_HAN
+		MOV	AH,45H
+		INT	67H
+		JMP	L_R2
 S_PATH: ;查找本程序路径
 		MOV	DS,DS:[2CH]		;环境段
 		XOR	SI,SI
