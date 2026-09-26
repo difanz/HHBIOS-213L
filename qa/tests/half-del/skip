@@ -1,2 +1,0 @@
-Idle CKBD returns one backspace, AH=0E steps one column, and a one-cell B800 delete leaves a partner above A0 for the next S_PVHZ pass.
-# CKBD INT_9 keeps D_95D5=1 when the input count is 0. KEY.ASM is the ANSI key file. AH=0E is L_0E06 in src/AH0E.INC. The pending lead latch is D_0050 in src/VGA.ASM.

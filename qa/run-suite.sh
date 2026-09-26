@@ -521,6 +521,14 @@ run_one() {
         return 0
     fi
 
+    if [[ -f "$dir/check" ]]; then
+        if ! bash "$dir/check"; then
+            echo "FAIL $name: check failed" >&2
+            failed=$((failed + 1))
+            return 0
+        fi
+    fi
+
     echo "PASS $name ($log)"
     passed=$((passed + 1))
 }

@@ -1,2 +1,0 @@
-tv-edit top-left is GB C9CD (CP437 C9 plus CD) and bottom-left is C0C4. S_QTZF leaves a one-cell bar above A0, then S_PVHZ pairs it with the corner. A plain attribute match also accepts D6D0, so the next change should require a corner byte, the matching bar, and a line byte on the other axis.
-# S_QTZF / S_PVHZ in src/ZJXP.INC. Row 22 col 0 of tv-edit is still BA (double vertical) over the single corner C0, so thickness alone does not separate them.

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+cd "$ROOT"
+make build/READ2.COM build/VGA.COM build/CMODE.COM
+mkdir -p build
+jwasm -q -Zm -bin -Fo build/CORNER.COM qa/input/corner.asm

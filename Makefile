@@ -14,6 +14,7 @@ SRC := src
 BUILD := build
 
 ASMS := $(wildcard $(SRC)/*.ASM)
+INCS := $(wildcard $(SRC)/*.INC)
 COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 
 .PHONY: all clean check vbeprobe qa-smoke qa-test qa-smoke-usage
@@ -29,7 +30,7 @@ $(BUILD)/R16.COM: $(SRC)/R16.ASM $(BUILD)/READ3.COM $(BUILD)/READ4.COM $(BUILD)/
 	rm -f $(BUILD)/R16.err
 	python3 tools/joinr16.py $(BUILD)/R16.stub $(BUILD)/READ3.COM $(BUILD)/READ4.COM $(BUILD)/READ5.COM $(BUILD)/READ6.COM $@
 
-$(BUILD)/%.COM: $(SRC)/%.ASM | $(BUILD)
+$(BUILD)/%.COM: $(SRC)/%.ASM $(INCS) | $(BUILD)
 	$(JWASM) $(JWFLAGS) -I$(SRC) -Fo$@ -Fw$(BUILD)/$*.err $<
 	rm -f $(BUILD)/$*.err
 
