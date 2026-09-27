@@ -17,6 +17,9 @@ the Chinese driver already supports those grids.
 The [wide rendering study](WIDE-RENDERING.md) adds standalone DOS framebuffer
 experiments for larger and widescreen surfaces, with exact memory and scanout
 checks. Optional emulator profiles are confined to those experiments.
+The [direct-video checks](DIRECT-VIDEO.md) verify foreground B800 writes with
+interrupts enabled and timer-only refresh, including the legacy VGA high-page
+overlap that remains an explicit expected failure.
 
 ## Setup
 
