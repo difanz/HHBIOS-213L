@@ -362,7 +362,6 @@ u16 CALL font_text(u16 saving) {
   return 1;
 }
 
-#pragma code_seg("INIT_TEXT", "INIT")
 void CALL font_close(void) {
   struct BiosRegisters bios_registers;
   ClearBytes(&bios_registers, sizeof(bios_registers));
@@ -374,6 +373,7 @@ void CALL font_close(void) {
   font_kind = font_handle = 0;
 }
 
+#pragma code_seg("INIT_TEXT", "INIT")
 static int AllocateFontStorage(u16 kb) {
   struct BiosRegisters bios_registers;
   u8 FAR* name;

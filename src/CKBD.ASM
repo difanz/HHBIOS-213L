@@ -494,8 +494,16 @@ L_9040:
 		CALL	S_101K			;101扩展键处理
 L_9042:
 		STI
+		MOV	T_FAULT,0
 		CALL	S_JRCL			;键入字符处理
 		CLI
+		CMP	T_FAULT,0
+		JE	L_9043
+		MOV	D_95D5,0		;discard input after a failed table read
+		MOV	D_2BB0,0
+		MOV	D_2BD2,0
+		MOV	D_959B,0FFH
+L_9043:
 
 		MOV	BX,40H
 		MOV	ES,BX
@@ -2133,7 +2141,8 @@ L_9E48:
 		ADD	BX,AX
 		SHL	BX,1
 		ADD	BX,D_DB 		;加电报码表首址
-		MOV	BX,[BX] 		;取汉字
+		CALL	S_TABLE_WORD		;取汉字
+		MOV	BX,AX
 		JMP	SHORT L_9E46
 
 ;子程序:显示区号或位号
@@ -2840,7 +2849,12 @@ L_A28F:
 		MOV	CX,22			;每键11字
 		MUL	CX
 		ADD	SI,AX			;高频表该字母项
-		REP	MOVSB			;写入重码区
+		MOV	CX,11
+L_A28_COPY:
+		CALL	S_TABLE_SI
+		STOSW
+		ADD	SI,2
+		LOOP	L_A28_COPY
 		MOV	D_2BD2,11		;重码数
 		OR	D_2BB9,1		;置一键高频位
 		RET
@@ -2849,12 +2863,12 @@ L_A290:
 L_A295:
 		CMP	SI,DI			;查完?
 		JZ	L_A2AF
-		MOV	AL,[SI] 		;取首尾表项
+		CALL	S_TABLE_SI		;取首尾表项
 		AND	AL,1FH			;取出一键码
 		CMP	AL,BL			;判
 		JZ	L_A2C7
 L_A2AB:
-		LODSW				;转下一表项
+		CALL	S_TABLE_NEXT		;转下一表项
 		JMP	SHORT L_A295
 L_A2AF:
 		OR	CX,CX			;重码数=0?
@@ -2895,12 +2909,12 @@ L_A301:
 L_A31F:
 		CMP	SI,DI			;查完?
 		JZ	L_A338
-		MOV	AX,[SI] 		;取表项
+		CALL	S_TABLE_SI		;取表项
 		AND	AX,3FFH 		;取10位
 		CMP	AX,BX			;判
 		JZ	L_A33A
 L_A336:
-		LODSW				;转下一表项
+		CALL	S_TABLE_NEXT		;转下一表项
 		JMP	SHORT L_A31F
 L_A338:
 		JMP	L_A2AF
@@ -2909,7 +2923,8 @@ L_A33A:
 		JNZ	L_A33C
 		TEST	D_2BB9,2		;二键高频?
 		JNZ	L_A33C
-		TEST	BYTE PTR DS:[SI+1],80H
+		CALL	S_TABLE_SI
+		TEST	AH,80H
 		JZ	L_A336
 L_A33C:
 		CALL	S_A2D9			;重码处理
@@ -2934,13 +2949,13 @@ L_A351:
 L_A361:
 		CMP	SI,DI			;查完?
 		JZ	L_A38B
-		MOV	AX,[SI] 		;取表项
+		CALL	S_TABLE_SI		;取表项
 		AND	AX,7FFFH
 L_A383:
 		CMP	AX,BX			;判
 		JZ	L_A38E
 L_A387:
-		LODSW				;转下一表项
+		CALL	S_TABLE_NEXT		;转下一表项
 		JMP	SHORT L_A361
 L_A38B:
 		JMP	L_A2AF			;查完处理
@@ -3252,7 +3267,9 @@ L_A596:
 		MOV	DX,BP			;取返回汉字
 L_A597:
 		ADD	DI,2
-		MOV	AX,[DI]
+		CMP	DI,CX
+		JAE	L_A599
+		CALL	S_TABLE_DI
 		CMP	AX,DX
 		JNZ	L_A598
 		MOV	AX,DI
@@ -3955,7 +3972,7 @@ S_A9C0:
 		SHL	AX,1
 		ADD	AX,CS:D_PY
 		MOV	BX,AX
-		MOV	AX,CS:[BX]
+		CALL	S_TABLE_WORD
 		POP	BX
 		RET
 
@@ -3989,7 +4006,7 @@ S_XSSW:
 		SHL	AX,1
 		ADD	AX,CS:D_SW
 		MOV	BX,AX
-		MOV	AX,CS:[BX]
+		CALL	S_TABLE_WORD
 		CALL	S_A9A1
 		CALL	S_XSAX
 		MOV	DL,' '
@@ -4000,6 +4017,7 @@ S_JRCL		ENDP
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 		INCLUDE	KEYEDIT.INC
+		INCLUDE	KEYTABLE.INC
 
 D_EXIT		DB	0
 D_INT28		DD	0
@@ -4105,6 +4123,7 @@ L_S82:
 		MOV	SI,OFFSET F_DBMB	;'DBMB', 0
 		CALL	S_NOFOUND
 L_S90:
+		CALL	S_TABLE_OPEN
 		MOV	DX,OFFSET F_YX		;'YX0.DAT'
 		CALL	S_HF			;写入文件名并打开
 		JB	L_S92
@@ -4318,6 +4337,16 @@ L_GX1:
 S_GETXMS	ENDP
 
 S_SETINT	PROC	NEAR
+		CMP	T_HANDLE,0
+		JE	L_SI_TABLE
+		MOV	AX,352FH
+		INT	21H
+		MOV	WORD PTR T_INT2F,BX
+		MOV	WORD PTR T_INT2F+2,ES
+		MOV	DX,OFFSET TABLE_INT2F
+		MOV	AX,252FH
+		INT	21H
+L_SI_TABLE:
 		MOV	DX,OFFSET INT_16
 		MOV	AX,2516H		;建中断16H
 		INT	21H
@@ -4411,7 +4440,8 @@ F_S		DB	40 DUP(0)		;源文件名
 A_S		DW	0			;写入地址
 MSG		DB	'2.13L 汉字系统键盘模块 ',DATE,13,10
 		DB	'  /E  Enable whole-Hanzi editing (INT 16h applications)',13,10
-		DB	'  /B  Byte editing (default); /E and /B also change a resident CKBD',13,10,'$'
+		DB	'  /B  Byte editing (default); /E and /B also change a resident CKBD',13,10
+		DB	'  /C  Keep input tables in conventional/upper memory instead of XMS',13,10,'$'
 
 ;****************************************************************************
 ;【本模块开始执行】
@@ -4450,6 +4480,11 @@ L_EOFF:
 		MOV	D_EDITREQ,0
 		JMP	SHORT L_S1
 L_EOTHER:
+		CMP	AL,'C'
+		JNE	L_ETABLE
+		MOV	T_LOCAL,1
+		JMP	L_S1
+L_ETABLE:
 		CMP	AL,'N'                  ;/N:驻留基本内存
 		JNZ	L_S1
 		MOV	D_RAM,AL
@@ -4618,6 +4653,7 @@ L_S50:
 		MOV	D_9680,CS
 
 		MOV	BP,OFFSET D_BUF+768	;空768字节
+		MOV	T_BASE,BP
 		JMP	L_S60
 
 ;子程序:取INI一参数->AL

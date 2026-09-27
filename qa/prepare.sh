@@ -73,6 +73,7 @@ if $build; then
 APPCAP appcap appcap
 COMPAT compat
 GRIDCAP gridcap appcap
+IMETABLE imetable
 KEYAPI keyapi
 MEMCLI memclient
 MEMTEST memory

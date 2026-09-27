@@ -7,6 +7,29 @@ READ2 provides conventional-memory storage when these managers are unavailable.
 
 ## Memory ownership
 
+CKBD keeps PYMB, SWMB and DBMB in one XMS block when allocation and the
+initial copy succeed. A 1 KiB cache serves sequential candidate searches;
+reverse searches preserve DF. A nested lookup during a refill uses its own
+two-byte destination and move descriptor on the caller's stack. Failed fills
+are not published, and input affected by a transfer failure is discarded.
+No cache space is retained when using resident tables (`CKBD /C`, no XMS, or
+initial allocation/copy failure). SPCZ.DAT remains writable resident storage.
+
+VESA owns its font allocation and relocated DOS block. Full HHBIOS unload
+detaches its native mouse callback, restores its interrupt hooks, and releases
+both allocations before passing control to the font reader's unloader. Partial
+printer unloads leave the display and input tables loaded.
+
+`test_keytable.py` executes CKBD's production table code with cache misses,
+nested calls, allocation/copy failures, frequency filtering, forward/reverse
+candidate searches and table boundaries. DOS cases query all 6768 Hanzi and
+compare memory and vectors across repeated unload/reload, with XMS, EMS-only,
+forced conventional residency and forced resident tables. Physical keyboard
+cases exercise IRQ1, candidate selection and forward/backward paging against
+the same input tables in both storage modes. Supplying
+`--msdos-image` also runs against the installed distribution's actual PYMB and
+SPCZ under MS-DOS, comparing the cached and resident configurations.
+
 | Reader | Storage and interfaces | Constraint |
 | --- | --- | --- |
 | READ4 | EMS allocation/free (INT 67h AH=43h/45h), page mapping (44h), save/restore map (47h/48h) | 16 pages, or 256 KiB, per distinct font; needs a page frame |

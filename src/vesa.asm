@@ -22,7 +22,7 @@ extrn mode_selected:byte
 extrn text_rows:word, text_cells:word, page_bytes:word, last_row:byte
 extrn raster_cell:near
 extrn old33:dword, int33_handler:far
-extrn mouse_resume:near
+extrn mouse_resume:near, mouse_suspend:near
 extrn mouse_native:byte
 extrn font_segment:word, font_offset:word, active:byte, busy:byte, traditional:byte
 extrn direct:byte
@@ -37,6 +37,7 @@ start: jmp install
 
 old10 dd 0
 old8 dd 0
+old2f dd 0
 saved_ss dw 0
 saved_sp dw 0
 handled dw 0
@@ -255,6 +256,64 @@ timer_done:
     popf
     iret
 int8_handler endp
+
+; The relocated UMB image exits its loader normally, so the font reader's
+; INT 21h/AH=31h registry does not own it. Release our resources before chaining
+; the full HHBIOS unload. Partial printer unloads leave this driver intact.
+int2f_handler proc far
+    pushf
+    cmp ax,4a06h
+    jne chain2f
+    or si,si
+    jne chain2f
+    cmp cs:busy,0
+    jne unload_busy
+    mov cs:busy,1
+    pushad
+    push ds
+    push es
+    mov cs:saved_ss,ss
+    mov cs:saved_sp,sp
+    mov ax,cs
+    mov ss,ax
+    mov sp,offset stack_top
+    mov ds,ax
+    cld
+    call mouse_suspend
+    mov active,0
+    call font_close
+    cli
+    mov ss,cs:saved_ss
+    mov sp,cs:saved_sp
+    lds dx,cs:old33
+    mov ax,2533h
+    int 21h
+    lds dx,cs:old10
+    mov ax,2510h
+    int 21h
+    lds dx,cs:old8
+    mov ax,2508h
+    int 21h
+    lds dx,cs:old2f
+    mov ax,252fh
+    int 21h
+    push cs
+    pop es
+    mov ah,49h
+    int 21h
+    ; DOS frees the block without changing its contents. Keep interrupts off
+    ; until the next handler, just as the reader's own unload path does.
+    cli
+    pop es
+    pop ds
+    popad
+chain2f:
+    popf
+    jmp cs:old2f
+unload_busy:
+    popf
+    iret
+int2f_handler endp
 
 public bios
 bios proc near
@@ -1878,6 +1937,10 @@ options_done:
     int 21h
     mov word ptr old33,bx
     mov word ptr old33+2,es
+    mov ax,352fh
+    int 21h
+    mov word ptr old2f,bx
+    mov word ptr old2f+2,es
     xor bp,bp
     mov ah,2fh
     int 16h
@@ -1923,6 +1986,9 @@ install_vectors:
     int 21h
     mov dx,offset int33_handler
     mov ax,2533h
+    int 21h
+    mov dx,offset int2f_handler
+    mov ax,252fh
     int 21h
     call mouse_resume
     mov busy,0

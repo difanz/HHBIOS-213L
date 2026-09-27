@@ -177,7 +177,9 @@ class PhysicalKeyboard:
                      0x4b: 'Left', 0x4d: 'Right', 0x53: 'Delete', 0x0e: 'BackSpace',
                      0x3c: 'F2', 0x3d: 'F3', 0x1c: 'Return', 0x01: 'Escape',
                      0x21: 'f', 0x2d: 'x', 0x22: 'g', 0x12: 'e',
-                     0x18: 'o', 0x20: 'd', 0x0f: 'Tab'}
+                     0x18: 'o', 0x20: 'd', 0x0f: 'Tab',
+                     0x1e: 'a', 0x30: 'b', 0x2e: 'c', 0x39: 'space',
+                     0x1a: 'bracketleft', 0x1b: 'bracketright'}
             name = names[key >> 8]
             alt = key in (0x2100, 0x2d00, 0x1800)
             if alt:
