@@ -5,6 +5,7 @@ import subprocess
 import struct
 
 import pytest
+from qa.spec.build import source_file, asm_includes
 
 from qa.spec.dos import ROOT, Snapshot, digest, run_dos
 from qa.spec.machine import FRAME_ALIASES, blank, put
@@ -18,8 +19,8 @@ def guest_build(assembler, source_dir, tmp_path_factory):
     out = tmp_path_factory.mktemp('guest-build')
     env = {k: v for k, v in os.environ.items() if k != 'JWASM'}
     for name in ('VGA', 'READ2', 'READ4', 'READ5', 'CMODE', 'CKBD'):
-        result = subprocess.run([assembler, '-q', '-Zm', '-bin', f'-I{source_dir}',
-                                 f'-Fo{out}/{name}.COM', str(source_dir / f'{name}.ASM')],
+        result = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
+                                 f'-Fo{out}/{name}.COM', str(source_file(source_dir, f'{name}.ASM'))],
                                 env=env, capture_output=True, text=True)
         assert result.returncode == 0 and 'Error A' not in result.stdout + result.stderr, result.stdout + result.stderr
     build = subprocess.run(['bash', 'tools/build-watcom-com.sh',

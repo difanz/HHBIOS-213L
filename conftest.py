@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from qa.spec.machine import DisplayMachine
+from qa.spec.build import asm_includes
 
 ROOT = Path(__file__).resolve().parent
 
@@ -79,7 +80,7 @@ def source_dir(pytestconfig):
 @pytest.fixture(scope='session')
 def display_binary(assembler, source_dir, tmp_path_factory):
     out = tmp_path_factory.mktemp('assembly') / 'display.com'
-    result = subprocess.run([assembler, '-q', '-Zm', '-bin', f'-I{source_dir}',
+    result = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
                     f'-Fo{out}', str(ROOT / 'qa/harness/display.asm')],
                    capture_output=True,
                    env={k: v for k, v in os.environ.items() if k != 'JWASM'})

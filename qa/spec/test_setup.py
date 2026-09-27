@@ -32,8 +32,8 @@ class Choices(C.Structure):
 def setup_policy(tmp_path_factory,source_dir):
     out=tmp_path_factory.mktemp('setup-host')/'setup.so'
     result=subprocess.run(['c++','-std=c++98','-shared','-fPIC','-Wall','-Wextra','-Werror','-DVESA_HOST',
-        '-I'+str(source_dir/'setup'), '-I'+str(source_dir), str(source_dir/'setup/config.c'),
-        str(source_dir/'setup/display.c'), str(source_dir/'vesa.c'),
+        '-I'+str(source_dir/'setup'), '-I'+str(source_dir/'video/vesa'), str(source_dir/'setup/config.c'),
+        str(source_dir/'setup/display.c'), str(source_dir/'video/vesa/vesa.c'),
         str(ROOT/'qa/harness/setup_host.cpp'),'-o',str(out)],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     lib=C.CDLL(str(out))

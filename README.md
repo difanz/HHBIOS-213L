@@ -26,10 +26,10 @@ make clean
 单独编译原有模块不需要 C 工具链，例如 `make build/VGA.COM`。也可以直接汇编：
 
 ```text
-jwasm -q -Zm -bin -Isrc -Fo=build/FOO.COM src/FOO.ASM
+jwasm -q -Zm -bin -Isrc/common -Isrc/font -Fo=build/VGA.COM src/video/VGA.ASM
 ```
 
-`INCLUDE` 从 `src/` 读入包含文件。`R16.COM` 由 `tools/joinr16.py` 把 `READ3` 到 `READ6` 接在桩后面。`PMZB.ASM` 和 `INT10V.ASM` 汇编时会提示 `A4073`，操作数按字处理。
+构建脚本从各模块目录读入 `INCLUDE` 文件。`R16.COM` 由 `tools/joinr16.py` 把 `READ3` 到 `READ6` 接在桩后面。`PMZB.ASM` 和 `INT10V.ASM` 汇编时会提示 `A4073`，操作数按字处理。
 
 ## 编码
 
@@ -106,7 +106,12 @@ make qa-mutate       # 验证测试能捕获故意引入的汇编错误
 
 ## 目录
 
-- `src/`：汇编源码、包含文件和 VESA 驱动的 C/汇编源码
+- `src/common/`：公共显示逻辑和驻留接口
+- `src/video/`：传统显卡驱动；`vesa/` 为 VESA 的 C/汇编实现
+- `src/input/`：键盘、输入法、码表查询和整字编辑
+- `src/font/`：字库加载模块与原有点阵数据
+- `src/printer/`：打印驱动；`src/commands/`：独立命令与工具
+- `src/setup/`：硬件检测和安装配置程序
 - `fonts/`：原有 `HZK16`、VESA 用的 `HH20.FNT`、字体许可和来源记录
 - `qa/`：`spec/` 测试、`harness/` 客机探针、测试运行与变异工具
 - `tools/`：JWasm 补丁、拼接 `R16` 的脚本、`make check`、Watcom 编 COM

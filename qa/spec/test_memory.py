@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import pytest
+from qa.spec.build import source_file, asm_includes
 
 from qa.spec.dos import ROOT, run_dos
 from qa.spec.test_application import keyboard_config
@@ -61,8 +62,8 @@ def memory_build(guest_build, assembler, source_dir, tmp_path_factory):
                             str(out / 'MEMORY.COM')], cwd=ROOT, env=env, capture_output=True, text=True)
     assert build.returncode == 0, build.stdout + build.stderr
     for reader in ('READ3', 'READ6', 'R16'):
-        build = subprocess.run([assembler, '-q', '-Zm', '-bin', f'-I{source_dir}',
-                                f'-Fo{out}/{reader}.COM', str(source_dir / f'{reader}.ASM')],
+        build = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
+                                f'-Fo{out}/{reader}.COM', str(source_file(source_dir, f'{reader}.ASM'))],
                                env=env, capture_output=True)
         assert build.returncode == 0, build.stdout + build.stderr
     build = subprocess.run([sys.executable, str(ROOT / 'tools/joinr16.py'), str(out / 'R16.COM'),

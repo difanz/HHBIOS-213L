@@ -97,11 +97,11 @@ PROBES
 fi
 modules=("$run/VESA.COM")
 cp "$root/build/VESA.COM" "$root/fonts/HH20.FNT" "$run/"
-for source in "$root"/src/*.ASM; do
+while IFS= read -r -d '' source; do
     name=$(basename "$source" .ASM)
     cp "$root/build/$name.COM" "$run/"
     modules+=("$run/$name.COM")
-done
+done < <(find "$root/src" -name '*.ASM' -print0 | LC_ALL=C sort -z)
 [[ ! -f $root/build/SETUP.EXE ]] || cp "$root/build/SETUP.EXE" "$run/"
 [[ ! -f $root/build/SETUP.LIC ]] || cp "$root/build/SETUP.LIC" "$run/"
 

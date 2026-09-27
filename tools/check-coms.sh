@@ -5,7 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 source_dir=${1:-"$root/src"}
 build=${2:-"$root/build"}
 missing=(); empty=(); built=()
-for source in "$source_dir"/*.ASM; do
+while IFS= read -r -d '' source; do
     name=$(basename "$source" .ASM)
     if [[ ! -f $build/$name.COM ]]; then
         missing+=("$name")
@@ -14,7 +14,7 @@ for source in "$source_dir"/*.ASM; do
     else
         built+=("$name")
     fi
-done
+done < <(find "$source_dir" -name '*.ASM' -print0 | LC_ALL=C sort -z)
 printf 'assembled %s  missing %s  empty %s\n' "${#built[@]}" "${#missing[@]}" "${#empty[@]}"
 for name in "${built[@]}"; do printf '%-10s %7s\n' "$name" "$(wc -c < "$build/$name.COM")"; done
 for name in "${missing[@]}"; do echo "missing $name"; done

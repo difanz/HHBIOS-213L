@@ -5,7 +5,7 @@
  * The first 256 glyphs are replaced by the BIOS ROM 8x16 font before drawing.
  */
 #define VESA_HOST
-#include "../../src/vesa.c"
+#include "../../src/video/vesa/vesa.c"
 #include <dos.h>
 #include <i86.h>
 #include <conio.h>

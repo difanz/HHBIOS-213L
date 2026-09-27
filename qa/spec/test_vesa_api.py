@@ -79,7 +79,7 @@ class Surface(ctypes.Structure):
 @pytest.fixture(scope='session')
 def layout_library(source_dir,tmp_path_factory):
     out=tmp_path_factory.mktemp('vesa-layout')/'layout.so'
-    p=subprocess.run(['cc','-shared','-fPIC','-Wall','-Wextra','-Werror','-DVESA_HOST',str(source_dir/'vesa.c'),'-o',str(out)],capture_output=True,text=True)
+    p=subprocess.run(['cc','-shared','-fPIC','-Wall','-Wextra','-Werror','-DVESA_HOST',str(source_dir/'video/vesa/vesa.c'),'-o',str(out)],capture_output=True,text=True)
     assert p.returncode==0,p.stdout+p.stderr
     lib=ctypes.CDLL(str(out))
     for fn in (lib.DecodeConsoleModeInfo,lib.DecodeVbeModeInfo):

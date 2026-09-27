@@ -5,6 +5,7 @@ import struct
 import subprocess
 
 import pytest
+from qa.spec.build import source_file
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
 from unicorn import x86_const as reg
 
@@ -16,7 +17,7 @@ MODULES = ('CGA', 'CKBD', 'EGA', 'HGA', 'INT10K', 'INT10V', 'PRNT', 'PRTH',
 @pytest.fixture(scope='session', params=MODULES)
 def allocator(request, source_dir, assembler, tmp_path_factory):
     name = request.param
-    source = (source_dir / f'{name}.ASM').read_bytes()
+    source = source_file(source_dir, f'{name}.ASM').read_bytes()
     routines = []
     for symbol in ('S_GETUMB', 'S_UMB', 'S_GETXMS'):
         match = re.search(rb'^'+symbol.encode()+rb'\s+PROC\b.*?^'+symbol.encode()+rb'\s+ENDP',

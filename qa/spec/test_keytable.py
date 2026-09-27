@@ -6,6 +6,7 @@ import struct
 import subprocess
 
 import pytest
+from qa.spec.build import source_file, asm_includes
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
 from unicorn import x86_const as reg
 
@@ -27,13 +28,13 @@ SYMBOLS = ('S_TABLE_WORD', 'S_TABLE_NEXT', 'S_TABLE_OPEN', 'T_XMS', 'T_HANDLE',
 @pytest.fixture(scope='session')
 def table_binary(assembler, source_dir, tmp_path_factory):
     out = tmp_path_factory.mktemp('keytable')
-    source = (source_dir / 'CKBD.ASM').read_bytes()
+    source = source_file(source_dir, 'CKBD.ASM').read_bytes()
     footer = b"DB 'HHTABLE1'\r\nDW " + ', '.join(SYMBOLS).encode() + b'\r\nSEG_A ENDS'
     source, count = re.subn(rb'SEG_A\s+ENDS', lambda _: footer, source)
     assert count == 1
     path = out / 'ckbd.asm'
     path.write_bytes(source)
-    result = subprocess.run([assembler, '-q', '-Zm', '-bin', '-I'+str(source_dir),
+    result = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
                              '-Fo'+str(out/'CKBD.COM'), str(path)], capture_output=True,
                             env={k: v for k, v in os.environ.items() if k != 'JWASM'})
     assert result.returncode == 0, result.stdout + result.stderr

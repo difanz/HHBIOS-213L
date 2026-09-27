@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from qa.spec.build import source_file
 
 ROOT = Path(__file__).resolve().parent.parent
 MUTANTS = [
@@ -33,7 +34,7 @@ def main():
         directory = Path(tempfile.mkdtemp(prefix=name+'-', dir=base))
         source = directory / 'src'
         shutil.copytree(ROOT / 'src', source)
-        path = source / file
+        path = source_file(source, file)
         raw = path.read_bytes()
         assert old in raw, f'mutant no longer applies: {name}'
         path.write_bytes(raw.replace(old, new))

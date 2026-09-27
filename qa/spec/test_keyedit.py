@@ -7,6 +7,7 @@ import struct
 import subprocess
 
 import pytest
+from qa.spec.build import asm_includes
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_MEM_READ
 from unicorn import x86_const as reg
 
@@ -19,7 +20,7 @@ BS, DEL, LEFT, RIGHT = 0x0e08, 0x5300, 0x4b00, 0x4d00
 @pytest.fixture(scope='session')
 def key_binary(assembler, source_dir, tmp_path_factory):
     out = tmp_path_factory.mktemp('key-assembly') / 'key.com'
-    p = subprocess.run([assembler, '-q', '-Zm', '-bin', f'-I{source_dir}',
+    p = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
                         f'-Fo{out}', 'qa/harness/keyedit.asm'], capture_output=True,
                        env={k: v for k, v in os.environ.items() if k != 'JWASM'})
     assert p.returncode == 0, p.stdout + p.stderr

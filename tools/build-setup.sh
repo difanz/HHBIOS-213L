@@ -83,11 +83,11 @@ for source in "$root"/src/setup/*.c; do
     name=$(basename "$source" .c)
     # Source stays UTF-8 in Git; the standalone DOS UI displays GB2312 glyphs.
     iconv -f UTF-8 -t GB2312 "$source" > "$work/$name.c"
-    wcc "${flags[@]}" -za99 -zt=4096 -i="$root/src/setup" -i="$root/src" \
+    wcc "${flags[@]}" -za99 -zt=4096 -i="$root/src/setup" -i="$root/src/video/vesa" \
         -fo="$work/$name.obj" "$work/$name.c"
     app_objects+=("$work/$name.obj")
 done
-wcc "${flags[@]}" -dVESA_HOST -fo="$work/vlayout.obj" "$root/src/vesa.c"
+wcc "${flags[@]}" -dVESA_HOST -fo="$work/vlayout.obj" "$root/src/video/vesa/vesa.c"
 {
     printf '%s\n' 'system dos' 'option quiet' 'option stack=32768'
     printf "name '%s'\noption map='%s/setup.map'\n" "$output" "$work"

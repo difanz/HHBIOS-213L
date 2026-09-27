@@ -5,6 +5,7 @@ import struct
 import subprocess
 
 import pytest
+from qa.spec.build import source_file, asm_includes
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
 from unicorn import x86_const as reg
 
@@ -15,13 +16,13 @@ SYMBOLS = ('INT_7F', 'S_READ', 'D_HJ', 'D_HF', 'D_PMJ', 'D_PMF', 'D_SEG')
 @pytest.fixture(scope='session')
 def ems_binary(assembler, source_dir, tmp_path_factory):
     out = tmp_path_factory.mktemp('ems-api')
-    source = (source_dir / 'READ4.ASM').read_bytes()
+    source = source_file(source_dir, 'READ4.ASM').read_bytes()
     footer = b"DB 'HHEMS1'\r\nDW "+', '.join(SYMBOLS).encode()+b'\r\nCSEG ENDS'
     source, count = re.subn(rb'CSEG\s+ENDS', lambda _: footer, source)
     assert count == 1
     path = out / 'reader.asm'
     path.write_bytes(source)
-    p = subprocess.run([assembler, '-q', '-Zm', '-bin', '-I'+str(source_dir),
+    p = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
                         '-Fo'+str(out / 'reader.com'), str(path)], capture_output=True,
                        env={k: v for k, v in os.environ.items() if k != 'JWASM'})
     assert p.returncode == 0, p.stdout + p.stderr
