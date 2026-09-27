@@ -177,9 +177,9 @@ static void ProbeExtendedMemory(MachineCapabilities* machine) {
 static void ProbeVideo(MachineCapabilities* machine) {
   static unsigned char controller[512];
   static unsigned char info[256];
-  unsigned modes[3] = {0x102, 0x104, 0x106}, i, j;
-  unsigned far* list;
-  struct VbeSurface layout;
+  static unsigned char edid[128];
+  unsigned i, number;
+  unsigned long address;
   CallInterrupt(0x11, 0);
   machine->adapter =
       (bios_registers.x.ax & 0x30) == 0x30 ? kAdapterMda : kAdapterCga;
@@ -203,35 +203,80 @@ static void ProbeVideo(MachineCapabilities* machine) {
   segments.es = FP_SEG(controller);
   bios_registers.x.di = FP_OFF(controller);
   CallInterrupt(0x10, 0x4f00);
-  if (bios_registers.x.ax != 0x4f || memcmp(controller, "VESA", 4) ||
-      (controller[10] & 2)) {
+  if (bios_registers.x.ax != 0x4f || memcmp(controller, "VESA", 4)) {
     return;
   }
   machine->vbe_version = *(unsigned*)(controller + 4);
-  list = *(unsigned far**)(controller + 14);
-  if (!list) {
-    return;
+  address = (unsigned long)*(unsigned*)(controller + 16) * 16 +
+            *(unsigned*)(controller + 14);
+  memset(edid, 0, sizeof(edid));
+  memset(&bios_registers, 0, sizeof(bios_registers));
+  bios_registers.x.bx = 1;
+  segments.es = FP_SEG(edid);
+  bios_registers.x.di = FP_OFF(edid);
+  CallInterrupt(0x10, 0x4f15); /* primary controller, EDID base block */
+  if (bios_registers.x.ax == 0x004f) {
+    DecodePreferredTiming(machine, edid);
   }
-  for (i = 0; i < 512 && FP_OFF(list) <= 65533U; ++i, ++list) {
-    if (*list == 0xffff) {
+  /* Normalize every far address; a BIOS list can cross a segment boundary. */
+  for (i = 0; address && address <= 0xffffeUL && i < 512; ++i, address += 2) {
+    number = *(unsigned far*)MK_FP((unsigned)(address >> 4),
+                                   (unsigned)(address & 15));
+    if (number == 0xffff) {
       break;
     }
-    for (j = 0; j < 3; ++j) {
-      if (*list == modes[j]) {
-        memset(info, 0, sizeof(info));
-        segments.es = FP_SEG(info);
-        bios_registers.x.di = FP_OFF(info);
-        bios_registers.x.cx = modes[j];
-        CallInterrupt(0x10, 0x4f01);
-        if (bios_registers.x.ax == 0x4f &&
-            DecodeConsoleModeInfo(&layout, info, machine->vbe_version,
-                                  modes[j]) &&
-            (j == 0 || (machine->vbe_version >= 0x102 && info[29]))) {
-          machine->modes |= 1U << j;
-        }
+    if (number < 0x100 || number > 0x3fff) {
+      continue;
+    }
+    memset(info, 0, sizeof(info));
+    memset(&bios_registers, 0, sizeof(bios_registers));
+    segments.es = FP_SEG(info);
+    bios_registers.x.di = FP_OFF(info);
+    bios_registers.x.cx = number;
+    CallInterrupt(0x10, 0x4f01);
+    if (bios_registers.x.ax == 0x4f) {
+      if (controller[10] & 2) {
+        info[0] |= 0x20; /* Controller-wide non-VGA restriction. */
       }
+      AddDisplayMode(machine, number, info);
     }
   }
+  if (i == 512 || address > 0xffffeUL) {
+    machine->display_truncated = 1;
+  }
+}
+
+int SwitchTextRows(unsigned rows) {
+  unsigned char far* bda = (unsigned char far*)MK_FP(0x40, 0);
+  unsigned previous_rows = bda[0x84] + 1;
+  unsigned previous_height = *(unsigned far*)(bda + 0x85);
+  unsigned previous_scan = bda[0x89] & 0x10 ? 2 : bda[0x89] & 0x80 ? 0 : 1;
+  if (!TextRowsMask(rows) || bda[0x49] > 3 ||
+      *(unsigned far*)(bda + 0x4a) != 80) {
+    return 0;
+  }
+  CallInterrupt(0x10, 0x1411);
+  if (bios_registers.x.ax != 0x5356) {
+    return 0;
+  }
+  bios_registers.x.bx = 0x30;
+  CallInterrupt(0x10, rows == 43 ? 0x1201 : 0x1202);
+  bios_registers.x.bx = 0;
+  CallInterrupt(0x10, rows == 25 ? 0x1114 : 0x1112);
+  if (bda[0x84] + 1 == rows &&
+      *(unsigned far*)(bda + 0x85) == (rows == 25 ? 16 : 8)) {
+    return 1;
+  }
+  /* Rejected geometry must not leave a changed scan-line selection. */
+  bios_registers.x.bx = 0x30;
+  CallInterrupt(0x10, 0x1200 | previous_scan);
+  if (bda[0x84] + 1 != previous_rows) {
+    bios_registers.x.bx = 0;
+    CallInterrupt(0x10, previous_height == 8    ? 0x1112
+                        : previous_height == 14 ? 0x1111
+                                                : 0x1114);
+  }
+  return 0;
 }
 
 void ProbeMachine(MachineCapabilities* machine) {

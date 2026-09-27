@@ -48,11 +48,20 @@ By default VESA queries mode 102h, then a bounded BIOS mode list. An explicit
 `/M` requests exactly that mode. It requires VGA-compatible planar 4-bpp
 graphics, 800x600 through 4096x2160, an even pitch up to 512 bytes, and a
 readable/writable 64 KiB A000 window whose granularity divides 64 KiB.
+Physical widths need not be byte aligned: 1366 pixels require at least 171
+bytes per plane row, rounded up to an even BIOS pitch of at least 172.
 Larger surfaces require isolated banked text storage. It rejects unsupported
 layouts without hooking interrupts. This is a
 specific backend requirement, not a claim that all VBE modes use VGA registers.
 The [VBE specification](https://www.phatcode.net/res/221/files/vbe20.pdf) defines
 the geometry, stride, window permissions/granularity and format fields used here.
+
+SETUP enumerates the BIOS mode list, filters it through the same decoder, and
+offers physical modes separately from 80x25/43/50 text layouts. Its VBE/DDC
+probe validates the EDID base block before using a progressive preferred
+detailed timing. Monitor preference, BIOS availability and renderer support
+are distinct results; see [SETUP](../src/setup/README.md). Mode numbers are
+never inferred from dimensions or copied from another card.
 
 ## Mode ownership
 
@@ -185,6 +194,10 @@ redraw, policy and Chinese-boundary interfaces. `AH=12h/BL=30h` selects
 The resident limit is 50 rows and 80 columns. More than 25 rows requires banked
 text storage. A taller physical mode is selected when necessary to fit native
 glyphs and the prompt row; failed selection retains the previous grid.
+`VESA /R:25`, `/R:43` and `/R:50` select the initial grid; installation rejects
+a requested physical mode that cannot contain every glyph and the IME row.
+`SETUP /TEXT:80x25`, `/TEXT:80x43` and `/TEXT:80x50` invoke the standard BIOS
+row interfaces in an active VESA console without reloading resident modules.
 `AX=1130h` forwards the ROM font pointer while returning logical height and last
 row. Custom uploaded fonts are unsupported. The compatible `AH=16h`
 bitmap query uses the existing 16-pixel reader; the 8x16 input bitmap API
@@ -294,7 +307,7 @@ mode restored. VGA memory mapping and ports remain the emulator's own.
 The classifier supplies character/cell coordinates independently of framebuffer
 stride. Drawing batches changed text cells between bank selections, writes four
 planes directly and makes no per-pixel BIOS calls. `VGA.ASM` is unchanged by this
-implementation. Both rasterizers use 8086 arithmetic and banked access;
+implementation. Both rasterizers use 386 instructions and banked access;
 larger planes do not themselves require unreal mode or DPMI.
 At 800x600, an instruction-level work-count test observes two bank calls per refresh for
 idle, single-cell edits and full redraws, and no framebuffer writes on idle

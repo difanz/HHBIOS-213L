@@ -119,7 +119,7 @@ class Snapshot:
             assert 1<=cols<=255 and 1<=rows<=255 and cols*rows*2<=32768
             assert 1<=scale<=4 and ox+cols*cw*scale<=width<=4096
             assert oy+rows*ch*scale<=height<=2160
-            assert width//8 <= pitch <= 512 and width % 8 == 0
+            assert (width+7)//8 <= pitch <= 512
             raw=raw[:8]+raw[8+count*2:]
         raw = raw[8:]
         size=geometry[1]*geometry[2]

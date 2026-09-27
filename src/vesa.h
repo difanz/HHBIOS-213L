@@ -92,6 +92,7 @@ extern u16 CALL display_start;
 extern u16 CALL split_line;
 extern u16 CALL text_bank;
 extern u16 CALL requested_mode;
+extern u16 CALL requested_rows;
 extern u16 CALL viewport_x;
 extern u16 CALL viewport_y;
 extern u16 CALL pixel_scale;

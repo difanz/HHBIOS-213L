@@ -19,6 +19,11 @@ The [wide rendering study](WIDE-RENDERING.md) adds standalone DOS framebuffer
 experiments for larger and widescreen surfaces, with exact memory and scanout
 checks. Optional emulator profiles are confined to QA; they also allow resident
 1080p tests when the emulator would otherwise hide those BIOS modes.
+`test_setup_display.py` covers EDID and mode selection; `test_setup_widescreen.py`
+checks generated wide-mode startup, live text-row changes, window pixels and
+MS-DOS mouse input. Its DDC fixture supplies only EDID replies, leaving the
+BIOS mode list and framebuffer operations intact. See [SETUP](../src/setup/README.md)
+for probe limits and test options.
 The [direct-video checks](DIRECT-VIDEO.md) verify foreground B800 writes with
 interrupts enabled and timer-only refresh, including the legacy VGA high-page
 overlap that remains an explicit expected failure.

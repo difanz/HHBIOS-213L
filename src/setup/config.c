@@ -12,10 +12,10 @@ const char* const kFontNames[kFontCount] = {"XMS (READ5)", "EMS 4.0 (READ4)",
                                             "Conventional (READ2)"};
 const char* const kVideoNames[kVideoCount] = {
     "VGA 640x480", "VESA 800x600",      "VESA 1024x768", "VESA 1280x1024",
-    "EGA 640x350", "Hercules (manual)", "CGA 640x200"};
+    "EGA 640x350", "Hercules (manual)", "CGA 640x200",   "VESA (BIOS mode)"};
 const char* const kVideoCommands[kVideoCount] = {
     "VGA.COM", "VESA.COM /M:102", "VESA.COM /M:104", "VESA.COM /M:106",
-    "EGA.COM", "HGA.COM",         "CGA.COM"};
+    "EGA.COM", "HGA.COM",         "CGA.COM",         "VESA.COM"};
 
 void ScanFiles(InstallationFiles* files) {
   unsigned i;
@@ -94,10 +94,16 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
       64; /* keyboard, display, stacks and load margin */
   unsigned long tables = 0;
   unsigned i;
-  static const unsigned drivers[kVideoCount] = {
-      kFileVga, kFileVesa, kFileVesa, kFileVesa, kFileEga, kFileHga, kFileCga};
+  unsigned mode_number = SelectedVbeMode(choices);
+  unsigned rows_mask = TextRowsMask(choices->rows);
+  static const unsigned drivers[kVideoCount] = {kFileVga,  kFileVesa, kFileVesa,
+                                                kFileVesa, kFileEga,  kFileHga,
+                                                kFileCga,  kFileVesa};
   if (choices->font >= kFontCount || choices->video >= kVideoCount ||
-      choices->low > 1 || choices->paired > 1 || choices->ime > 15) {
+      choices->low > 1 || choices->paired > 1 || choices->ime > 15 ||
+      !rows_mask ||
+      (choices->video == kVideoDetected &&
+       (mode_number < 0x100 || mode_number > 0x3fff))) {
     return "Invalid configuration values.";
   }
   if (machine->dos_major < 3) {
@@ -141,12 +147,24 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
     return "Hercules requires a monochrome adapter. Confirm the hardware "
            "manually.";
   }
-  if (choices->video >= kVideo102 && choices->video <= kVideo106) {
+  if (!mode_number && rows_mask != 1) {
+    return "80x43 and 80x50 require the VESA driver.";
+  }
+  if (mode_number) {
+    const DisplayMode* mode = FindDisplayMode(machine, mode_number);
     if (machine->cpu < 386) {
       return "VESA requires a 386 or newer CPU. Select VGA on older machines.";
     }
-    if (!(machine->modes & (1U << (choices->video - kVideo102)))) {
+    if (!mode && (choices->video == kVideoDetected ||
+                  !(machine->modes & (1U << (choices->video - kVideo102))))) {
       return "BIOS does not report a compatible planar VBE mode.";
+    }
+    if (!((mode                          ? mode->rows
+           : choices->video == kVideo106 ? 7
+                                         : 1) &
+          rows_mask)) {
+      return "The selected display mode cannot fit this text layout and IME "
+             "row.";
     }
     if (!files->size[kFileFont20]) {
       return "Missing or invalid HH20.FNT for VESA.";
@@ -200,6 +218,26 @@ void RecommendConfiguration(const MachineCapabilities* machine,
   /* Probe recommendations never infer Hercules from an MDA equipment bit. */
   /* Preserve conventional memory before choosing a larger framebuffer. */
   for (font_index = 0; font_index < kFontCount; ++font_index) {
+    for (video_index = 0; video_index < machine->display_count; ++video_index) {
+      const DisplayMode* mode = &machine->display_modes[video_index];
+      SetupChoices trial = *choices;
+      if (machine->edid_status != kEdidPreferred ||
+          mode->width != machine->preferred_width ||
+          mode->height != machine->preferred_height) {
+        continue;
+      }
+      trial.font = font_index;
+      trial.video = kVideoDetected;
+      trial.mode = mode->number;
+      if (!ValidateConfiguration(machine, files, &trial)) {
+        *choices = trial;
+        trial.ime = files->size[kFilePy] ? kImePinyin : 0;
+        if (!ValidateConfiguration(machine, files, &trial)) {
+          *choices = trial;
+        }
+        return;
+      }
+    }
     for (video_index = 0;
          video_index < sizeof(preference) / sizeof(preference[0]);
          ++video_index) {
@@ -223,9 +261,20 @@ void RecommendConfiguration(const MachineCapabilities* machine,
 int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
   const char* low = choices->low ? " /N" : "";
   char* output_cursor = out;
+  char display[80];
+  unsigned mode = SelectedVbeMode(choices);
   if (!IsSafeDirectory(path) || choices->font >= kFontCount ||
-      choices->video >= kVideoCount) {
+      choices->video >= kVideoCount || !TextRowsMask(choices->rows) ||
+      (!mode && choices->rows > 25) ||
+      (choices->video == kVideoDetected && (mode < 0x100 || mode > 0x3fff))) {
     return 0;
+  }
+  strcpy(display, kVideoCommands[choices->video]);
+  if (choices->video == kVideoDetected) {
+    sprintf(display, "VESA.COM /M:%X", mode);
+  }
+  if (mode && choices->rows > 25) {
+    sprintf(display + strlen(display), " /R:%u", choices->rows);
   }
   output_cursor += sprintf(
       output_cursor,
@@ -235,13 +284,13 @@ int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
       path[0], path + 2);
   /* Explicit current-directory paths avoid accidentally loading a different
    * copy from PATH. The directory also supplies VESA's HH20.FNT. */
-  output_cursor += sprintf(
-      output_cursor,
-      ".\\%s%s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n"
-      ".\\CKBD.COM /%c%s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n"
-      ".\\%s%s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n",
-      kFileNames[choices->font], choices->font == kFontLow ? "" : low,
-      choices->paired ? 'E' : 'B', low, kVideoCommands[choices->video], low);
+  output_cursor +=
+      sprintf(output_cursor,
+              ".\\%s%s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n"
+              ".\\CKBD.COM /%c%s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n"
+              ".\\%s%s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n",
+              kFileNames[choices->font], choices->font == kFontLow ? "" : low,
+              choices->paired ? 'E' : 'B', low, display, low);
   /* WBX uses INT 27h, does not implement /N or internal UMB relocation. */
   if (choices->ime & kImeWubi) {
     output_cursor += sprintf(output_cursor, ".\\WBX.COM\r\n");
@@ -396,6 +445,18 @@ void ReportMachine(FILE* out, const MachineCapabilities* machine,
           machine->ems_pages, machine->ems_frame, machine->dpmi,
           machine->adapter, machine->vbe_version, machine->modes,
           machine->loaded, machine->alloc_strategy, machine->umb_link);
+  fprintf(out,
+          "EDID_STATUS=%u\nEDID_PREFERRED=%ux%u\nEDID_BIOS_MODE=%u\n"
+          "VBE_CATALOG_TRUNCATED=%u\n",
+          machine->edid_status, machine->preferred_width,
+          machine->preferred_height, machine->preferred_bios,
+          machine->display_truncated);
+  for (i = 0; i < machine->display_count; ++i) {
+    const DisplayMode* mode = &machine->display_modes[i];
+    fprintf(out, "VBE_MODE_%04X=%ux%u;80x25%s%s\n", mode->number, mode->width,
+            mode->height, mode->rows & 2 ? ",80x43" : "",
+            mode->rows & 4 ? ",80x50" : "");
+  }
   for (i = 0; i < kFileCount; ++i) {
     fprintf(out, "%s=%lu\n", kFileNames[i], files->size[i]);
   }

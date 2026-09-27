@@ -18,4 +18,10 @@ int hh_ini(const char* input, SetupChoices* choices, char* out) {
 const char* hh_save(const char* batch, const char* ini) {
   return SaveConfigurationFiles(batch, ini);
 }
+void hh_edid(MachineCapabilities* machine, const unsigned char* edid) {
+  DecodePreferredTiming(machine, edid);
+}
+void hh_mode(MachineCapabilities* machine, unsigned number, const unsigned char* info) {
+  AddDisplayMode(machine, number, info);
+}
 }

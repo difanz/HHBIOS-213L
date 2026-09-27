@@ -12,8 +12,17 @@ enum {
   kVideoEga,
   kVideoHga,
   kVideoCga,
+  kVideoDetected,
   kVideoCount
 };
+enum { kMaxDisplayModes = 64 };
+enum { kEdidUnavailable, kEdidInvalid, kEdidNoPreferred, kEdidPreferred };
+typedef struct DisplayMode {
+  unsigned number;
+  unsigned width;
+  unsigned height;
+  unsigned rows; /* bits 0..2: 80x25, 80x43, 80x50 with HH20.FNT */
+} DisplayMode;
 enum { kImePinyin = 1, kImeShouwei = 2, kImeTelegraph = 4, kImeWubi = 8 };
 enum { kAdapterUnknown, kAdapterMda, kAdapterCga, kAdapterEga, kAdapterVga };
 enum {
@@ -55,6 +64,13 @@ typedef struct MachineCapabilities {
   unsigned loaded;
   unsigned alloc_strategy;
   unsigned umb_link;
+  unsigned edid_status;
+  unsigned preferred_width;
+  unsigned preferred_height;
+  unsigned preferred_bios;
+  unsigned display_count;
+  unsigned display_truncated;
+  DisplayMode display_modes[kMaxDisplayModes];
 } MachineCapabilities;
 typedef struct InstallationFiles {
   unsigned long size[kFileCount];
@@ -65,7 +81,18 @@ typedef struct SetupChoices {
   unsigned video;
   unsigned ime;
   unsigned paired;
+  unsigned mode;
+  unsigned rows; /* zero retains the default 25 rows */
 } SetupChoices;
+void DecodePreferredTiming(MachineCapabilities* machine,
+                           const unsigned char* edid);
+void AddDisplayMode(MachineCapabilities* machine, unsigned number,
+                    const unsigned char* info);
+const DisplayMode* FindDisplayMode(const MachineCapabilities* machine,
+                                   unsigned number);
+unsigned TextRowsMask(unsigned rows);
+unsigned SelectedVbeMode(const SetupChoices* choices);
+int SwitchTextRows(unsigned rows);
 extern const char* const kFileNames[kFileCount];
 extern const char* const kFontNames[kFontCount];
 extern const char* const kVideoNames[kVideoCount];

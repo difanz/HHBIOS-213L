@@ -8,10 +8,16 @@ import pytest
 from qa.spec.dos import ROOT, run_dos
 
 
+class DisplayMode(C.Structure):
+    _fields_=[(s,C.c_uint) for s in 'number width height rows'.split()]
+
+
 class Machine(C.Structure):
     _fields_=[(s,C.c_uint) for s in ('dos_major dos_minor conventional_kb free_kb umb_kb cpu '
         'xms_version xms_largest xms_total ems_version ems_pages ems_frame dpmi adapter '
-        'vbe_version modes loaded alloc_strategy umb_link').split()]
+        'vbe_version modes loaded alloc_strategy umb_link edid_status preferred_width '
+        'preferred_height preferred_bios display_count display_truncated').split()] + [
+        ('display_modes',DisplayMode*64)]
 
 
 class Files(C.Structure):
@@ -19,14 +25,15 @@ class Files(C.Structure):
 
 
 class Choices(C.Structure):
-    _fields_=[(s,C.c_uint) for s in 'font low video ime paired'.split()]
+    _fields_=[(s,C.c_uint) for s in 'font low video ime paired mode rows'.split()]
 
 
 @pytest.fixture(scope='module')
 def setup_policy(tmp_path_factory,source_dir):
     out=tmp_path_factory.mktemp('setup-host')/'setup.so'
-    result=subprocess.run(['c++','-std=c++98','-shared','-fPIC','-Wall','-Wextra','-Werror',
-        '-I'+str(source_dir/'setup'), str(source_dir/'setup/config.c'),
+    result=subprocess.run(['c++','-std=c++98','-shared','-fPIC','-Wall','-Wextra','-Werror','-DVESA_HOST',
+        '-I'+str(source_dir/'setup'), '-I'+str(source_dir), str(source_dir/'setup/config.c'),
+        str(source_dir/'setup/display.c'), str(source_dir/'vesa.c'),
         str(ROOT/'qa/harness/setup_host.cpp'),'-o',str(out)],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     lib=C.CDLL(str(out))

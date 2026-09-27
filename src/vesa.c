@@ -118,7 +118,6 @@ int DecodeConsoleModeInfo(struct VbeSurface* output, const u8* mode_info,
       ReadLittleEndianWord(mode_info + 20) < 600 ||
       ReadLittleEndianWord(mode_info + 18) > 4096 ||
       ReadLittleEndianWord(mode_info + 20) > 2160 ||
-      (ReadLittleEndianWord(mode_info + 18) & 7) ||
       ReadLittleEndianWord(mode_info + 16) > 512 ||
       (ReadLittleEndianWord(mode_info + 16) & 1) ||
       mode_info[27] != FORMAT_PLANAR4 ||
@@ -152,6 +151,7 @@ u16 CALL display_start;
 u16 CALL split_line;
 u16 CALL text_bank;
 u16 CALL requested_mode = 0x102;
+u16 CALL requested_rows = 25;
 u16 CALL viewport_x;
 u16 CALL viewport_y;
 u16 CALL pixel_scale = 1;
@@ -398,11 +398,11 @@ static void SetTextGeometry(u16 rows, u16 height) {
 }
 
 static int IsSavedSurfaceValid(const struct VbeSurface* saved, u16 rows) {
-  return saved->width >= 800 && saved->width <= 4096 && !(saved->width & 7) &&
-         saved->height >= 600 && saved->height <= 2160 &&
+  return saved->width >= 800 && saved->width <= 4096 && saved->height >= 600 &&
+         saved->height <= 2160 &&
          saved->height >= font_body_height * (rows + 1) &&
          saved->width >= TEXT_COLS * font_width &&
-         saved->pitch >= saved->width / 8 && saved->pitch <= 512 &&
+         saved->pitch >= (saved->width + 7) / 8 && saved->pitch <= 512 &&
          !(saved->pitch & 1) && saved->segment == 0xa000 &&
          saved->window_kb == 64 && saved->granularity_kb &&
          saved->granularity_kb <= 64 && !(64 % saved->granularity_kb) &&
@@ -623,7 +623,7 @@ u16 CALL initialize(void) {
     if (bios_registers.ax == 0x004f &&
         DecodeConsoleModeInfo(&screen, mode_info, version, number) &&
         screen.width >= TEXT_COLS * font_width &&
-        screen.height >= font_body_height * (TEXT_ROWS + 1)) {
+        screen.height >= font_body_height * (requested_rows + 1)) {
       vbe_mode = 1;
       break;
     }
@@ -632,7 +632,11 @@ u16 CALL initialize(void) {
     return 1;
   }
   preferred = screen;
-  SetTextGeometry(25, 16);
+  scan_lines = requested_rows == 43 ? 350 : 400;
+  SetTextGeometry(requested_rows, requested_rows == 25 ? 16 : 8);
+  if (requested_rows > 25) {
+    cursor_shape = 0x0607;
+  }
   banked_text_allowed =
       (u8)(version >= 0x102 && mode_info[29] > 0 &&
            (mode_info[2 + screen.window] & 1) && !(64 % screen.granularity_kb));
@@ -644,7 +648,7 @@ u16 CALL initialize(void) {
   /* Put all eight logical text pages in spare VRAM where available. This
    * also avoids page 1..7 aliasing visible pixels on 64 KiB VGA mappings. */
   banked_text = banked_text_allowed;
-  page_count = banked_text ? 8 : 1;
+  page_count = banked_text ? 32768U / page_bytes : 1;
   /* On a 64 KiB aliasing aperture, reserve B800's first 4 KiB and place
    * scanout across a line-aligned wrap. The CPU start must be paragraph
    * aligned too. Geometry is kept out of the character classifier. */

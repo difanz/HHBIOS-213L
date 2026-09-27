@@ -16,7 +16,8 @@ extrn framebuffer:word, display_pitch:word, active_page:word
 extrn resident_bytes:word
 extrn display_start:word, split_line:word
 extrn text_bank:word, banked_text_allowed:byte
-extrn requested_mode:word, plane_bytes:dword, bank_step:word, large_surface:byte
+extrn requested_mode:word, requested_rows:word
+extrn plane_bytes:dword, bank_step:word, large_surface:byte
 extrn mode_selected:byte
 extrn text_rows:word, text_cells:word, page_bytes:word, last_row:byte
 extrn raster_cell:near
@@ -1722,6 +1723,8 @@ parse_option:
     mov force_low,1
     jmp short parse_option
 parse_mode:
+    cmp al,'R'
+    je parse_rows
     cmp al,'F'
     je parse_font
     cmp al,'M'
@@ -1798,6 +1801,30 @@ parse_font_done:
     or bx,bx
     jz bad_option
     mov byte ptr [di],0
+    jmp parse_option
+parse_rows:
+    cmp cx,3
+    jb bad_option
+    lodsb
+    cmp al,':'
+    jne bad_option
+    lodsw
+    sub cx,3
+    mov bx,25
+    cmp ax,3532h               ; decimal "25"
+    je parse_rows_done
+    mov bx,43
+    cmp ax,3334h               ; decimal "43"
+    je parse_rows_done
+    mov bx,50
+    cmp ax,3035h               ; decimal "50"
+    jne bad_option
+parse_rows_done:
+    jcxz parse_rows_store
+    cmp byte ptr [si],' '
+    jne bad_option
+parse_rows_store:
+    mov requested_rows,bx
     jmp parse_option
 options_done:
     ; A VBE BIOS alone does not identify the CPU. Reject an 8086/286 before
@@ -2016,7 +2043,8 @@ msg_cpu db 'VESA requires a 386 or newer CPU. Use VGA on older machines.',13,10,
 msg_font db 'Load a HHBIOS font reader before VESA.',13,10,'$'
 msg_font20 db 'Cannot load font file into XMS or EMS 4.0 memory.',13,10,'$'
 msg_vbe db 'VESA needs a supported planar VBE mode and isolated text memory.',13,10,'$'
-msg_usage db 'VESA [/N] [/M:hex] [/F:file]  VBE mode and font (102, HH20.FNT).',13,10
+msg_usage db 'VESA [/N] [/M:hex] [/F:file] [/R:25|43|50]',13,10
+          db 'Defaults: mode 102, HH20.FNT, 80x25 text.',13,10
           db '/N keeps the driver in conventional memory.',13,10,'$'
 INIT_TEXT ends
 

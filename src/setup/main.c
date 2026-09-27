@@ -24,6 +24,36 @@ static const char* LocalizedText(const char* en, const char* zh) {
   return chinese ? EncodeScreenText(zh) : en;
 }
 
+static void DescribeDisplay(char* out, const SetupChoices* selected) {
+  const DisplayMode* mode =
+      FindDisplayMode(&machine, SelectedVbeMode(selected));
+  if (mode) {
+    sprintf(out, "VESA %ux%u (%03Xh), 80x%u", mode->width, mode->height,
+            mode->number, selected->rows ? selected->rows : 25);
+  } else {
+    sprintf(out, "%s, 80x%u", kVideoNames[selected->video],
+            selected->rows ? selected->rows : 25);
+  }
+}
+
+static void DescribeMonitor(char* out) {
+  if (machine.edid_status == kEdidPreferred) {
+    sprintf(out, LocalizedText("Screen preferred: %ux%u", "屏幕首选：%ux%u"),
+            machine.preferred_width, machine.preferred_height);
+    for (unsigned i = 0; i < machine.display_count; ++i) {
+      if (machine.display_modes[i].width == machine.preferred_width &&
+          machine.display_modes[i].height == machine.preferred_height) {
+        return;
+      }
+    }
+    strcat(out,
+           LocalizedText(" (no compatible VBE mode)", "（无兼容 VBE 模式）"));
+  } else {
+    strcpy(out, LocalizedText("Screen preferred: unknown (EDID unavailable)",
+                              "屏幕首选：未知（无可用 EDID 首选时序）"));
+  }
+}
+
 enum {
   kCmdProbe = EV_FIRST_UNUSED,
   kCmdMemory,
@@ -200,6 +230,8 @@ static ui_event ShowHome(void) {
   Form form;
   memset(&form, 0, sizeof(form));
   char text[1800];
+  char display[96];
+  DescribeDisplay(display, &choices);
   const char* issue = PrepareConfiguration();
   sprintf(
       text,
@@ -221,9 +253,9 @@ static ui_event ShowHome(void) {
       choices.low ? LocalizedText("Conventional only", "仅常规内存")
                   : LocalizedText("Prefer UMB, fall back to conventional",
                                   "优先 UMB，不足时用常规内存"),
-      kVideoNames[choices.video], choices.ime & 1 ? "Y" : "N",
-      choices.ime & 2 ? "Y" : "N", choices.ime & 4 ? "Y" : "N",
-      choices.ime & 8 ? "Y" : "N", choices.paired ? "Y" : "N");
+      display, choices.ime & 1 ? "Y" : "N", choices.ime & 2 ? "Y" : "N",
+      choices.ime & 4 ? "Y" : "N", choices.ime & 8 ? "Y" : "N",
+      choices.paired ? "Y" : "N");
 
   AddParagraph(&form, 1, 2, 70, text);
   if (issue) {
@@ -282,15 +314,65 @@ static void ShowMemoryDialog(void) {
 static void ShowVideoDialog(void) {
   Form form;
   memset(&form, 0, sizeof(form));
-  a_radio_group video = {0};
-  video.value = video.def = choices.video;
-  for (unsigned i = 0; i < kVideoCount; ++i) {
-    AddRadio(&form, i + 2, kVideoNames[i], &video, i);
+  a_list video = {0};
+  a_radio_group rows = {0};
+  char monitor[96];
+  char labels[kMaxDisplayModes][64];
+  const char* items[kMaxDisplayModes + 5];
+  unsigned count = 1;
+  unsigned mode_number = SelectedVbeMode(&choices);
+  items[0] = kVideoNames[kVideoVga];
+  for (unsigned i = 0; i < machine.display_count; ++i) {
+    const DisplayMode* mode = &machine.display_modes[i];
+    sprintf(labels[i], "VESA %ux%u (%03Xh)%s", mode->width, mode->height,
+            mode->number,
+            machine.edid_status == kEdidPreferred &&
+                    mode->width == machine.preferred_width &&
+                    mode->height == machine.preferred_height
+                ? LocalizedText(" - screen preferred", " - 屏幕首选")
+                : "");
+    items[count] = labels[i];
+    if (mode_number == mode->number) {
+      video.choice = count;
+    }
+    ++count;
   }
-  AddDialogButtons(&form, 10);
-  if (RunForm(&form, LocalizedText("Display driver", "显示驱动"), 12, 60, 0) ==
+  for (unsigned i = kVideoEga; i <= kVideoCga; ++i) {
+    if (choices.video == i) {
+      video.choice = count;
+    }
+    items[count++] = kVideoNames[i];
+  }
+  items[count] = NULL;
+  video.data = items;
+  rows.value = rows.def = choices.rows ? choices.rows : 25;
+  DescribeMonitor(monitor);
+  AddParagraph(&form, 1, 2, 64, monitor);
+  AddField(&form, 3, 2, 8, 62, FLD_LISTBOX, &video);
+  AddParagraph(&form, 12, 2, 60, LocalizedText("Text layout:", "文本布局："));
+  AddRadio(&form, 13, "80x25", &rows, 25);
+  AddRadio(&form, 14, "80x43", &rows, 43);
+  AddRadio(&form, 15, "80x50", &rows, 50);
+  AddDialogButtons(&form, 17);
+  if (RunForm(&form, LocalizedText("Display", "显示设置"), 19, 68, 0) ==
       kCmdAccept) {
-    choices.video = video.value;
+    SetupChoices trial = choices;
+    trial.rows = rows.value;
+    trial.mode = 0;
+    if (!video.choice) {
+      trial.video = kVideoVga;
+    } else if (video.choice <= machine.display_count) {
+      trial.video = kVideoDetected;
+      trial.mode = machine.display_modes[video.choice - 1].number;
+    } else {
+      trial.video = kVideoEga + video.choice - machine.display_count - 1;
+    }
+    const char* error = ValidateConfiguration(&machine, &files, &trial);
+    if (error) {
+      ShowMessage(error);
+    } else {
+      choices = trial;
+    }
   }
 }
 
@@ -327,6 +409,8 @@ static void ShowCapabilities(void) {
   Form form;
   memset(&form, 0, sizeof(form));
   char text[1600];
+  char monitor[96];
+  DescribeMonitor(monitor);
   sprintf(
       text,
       LocalizedText(
@@ -336,26 +420,25 @@ static void ShowCapabilities(void) {
           "XMS version %X: largest %u KiB, total %u KiB\nEMS version %X: %u "
           "free pages, frame %04X\n"
           "DPMI: %s\nVBE version: %X\n"
-          "Planar modes: 102=%s 104=%s 106=%s",
+          "%s\nCompatible VBE modes: %u%s",
           "DOS %u.%u    CPU %u\n"
           "常规内存：%u KiB\n安装程序退出后最大空闲块：约 %u KiB\n最大空闲 "
           "DOS UMB：%u KiB\n\n"
           "XMS 版本 %X：最大块 %u KiB，合计 %u KiB\nEMS 版本 %X：空闲 %u "
           "页，页框 %04X\n"
           "DPMI：%s\nVBE 版本：%X\n"
-          "平面模式：102=%s 104=%s 106=%s"),
+          "%s\n可用 VBE 模式：%u%s"),
       machine.dos_major, machine.dos_minor, machine.cpu,
       machine.conventional_kb, machine.free_kb, machine.umb_kb,
       machine.xms_version, machine.xms_largest, machine.xms_total,
       machine.ems_version, machine.ems_pages, machine.ems_frame,
-      machine.dpmi ? "Y" : "N", machine.vbe_version,
-      machine.modes & 1 ? "Y" : "N", machine.modes & 2 ? "Y" : "N",
-      machine.modes & 4 ? "Y" : "N");
+      machine.dpmi ? "Y" : "N", machine.vbe_version, monitor,
+      machine.display_count, machine.display_truncated ? "+" : "");
 
   AddParagraph(&form, 1, 2, 62, text);
-  AddButton(&form, 12, 23, 18, LocalizedText("&OK", "确定 (&O)"), kCmdAccept,
+  AddButton(&form, 14, 23, 18, LocalizedText("&OK", "确定 (&O)"), kCmdAccept,
             1);
-  RunForm(&form, LocalizedText("Detected capabilities", "机器能力检测"), 14, 66,
+  RunForm(&form, LocalizedText("Detected capabilities", "机器能力检测"), 16, 66,
           0);
 }
 
@@ -446,12 +529,56 @@ static void RunApplication(void) {
   }
 }
 
+static int SelectVideoOption(const char* value) {
+  static const char* const names[] = {"VGA", "102", "104", "106",
+                                      "EGA", "HGA", "CGA"};
+  unsigned i;
+  unsigned width = 0, height = 0;
+  char separator, extra, *end;
+  unsigned long number;
+  for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+    if (!stricmp(value, names[i])) {
+      choices.video = i;
+      choices.mode = 0;
+      return 1;
+    }
+  }
+  if (!stricmp(value, "NATIVE")) {
+    if (machine.edid_status != kEdidPreferred) {
+      return 0;
+    }
+    width = machine.preferred_width;
+    height = machine.preferred_height;
+  } else if (sscanf(value, "%u%c%u%c", &width, &separator, &height, &extra) !=
+                 3 ||
+             (separator != 'x' && separator != 'X')) {
+    number = strtoul(value, &end, 16);
+    if (end == value || *end || number < 0x100 || number > 0x3fff ||
+        !FindDisplayMode(&machine, (unsigned)number)) {
+      return 0;
+    }
+    choices.video = kVideoDetected;
+    choices.mode = (unsigned)number;
+    return 1;
+  }
+  for (i = 0; i < machine.display_count; ++i) {
+    if (machine.display_modes[i].width == width &&
+        machine.display_modes[i].height == height) {
+      choices.video = kVideoDetected;
+      choices.mode = machine.display_modes[i].number;
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
   int i;
   int automatic = 0;
   int report = 0;
   int language = -1;
   int ime_seen = 0;
+  int text_seen = 0;
   char path[80], *slash;
   /* Keep the executable and all modules together; never embed a host path. */
   if (strlen(argv[0]) < sizeof(path)) {
@@ -506,18 +633,21 @@ int main(int argc, char** argv) {
     } else if (!stricmp(argv[i], "/FONT:LOW")) {
       choices.font = kFontLow;
     } else if (!strnicmp(argv[i], "/VIDEO:", 7)) {
-      const char* names[] = {"VGA", "102", "104", "106", "EGA", "HGA", "CGA"};
-      unsigned v;
-      for (v = 0; v < kVideoCount; ++v) {
-        if (!stricmp(argv[i] + 7, names[v])) {
-          break;
-        }
-      }
-      if (v == kVideoCount) {
-        puts("Unknown /VIDEO choice.");
+      if (!SelectVideoOption(argv[i] + 7)) {
+        puts("No compatible BIOS mode for this /VIDEO choice.");
         return 1;
       }
-      choices.video = v;
+    } else if (!strnicmp(argv[i], "/TEXT:", 6)) {
+      const char* value = argv[i] + 6;
+      choices.rows = !stricmp(value, "80x25")   ? 25
+                     : !stricmp(value, "80x43") ? 43
+                     : !stricmp(value, "80x50") ? 50
+                                                : 0;
+      if (!choices.rows) {
+        puts("Use /TEXT:80x25, /TEXT:80x43 or /TEXT:80x50.");
+        return 1;
+      }
+      text_seen = 1;
     } else if (!strnicmp(argv[i], "/IME:", 5)) {
       if (!ime_seen++) {
         choices.ime = 0;
@@ -538,6 +668,7 @@ int main(int argc, char** argv) {
       puts(
           "SETUP [/EN|/ZH] [/REPORT|/AUTO] [/LOW] [/BYTE]\n"
           "      [/FONT:XMS|EMS|LOW] [/VIDEO:VGA|102|104|106|EGA|HGA|CGA]\n"
+          "      [/VIDEO:NATIVE|WIDTHxHEIGHT|hex] [/TEXT:80x25|80x43|80x50]\n"
           "      [/IME:NONE|PY|SW|DB|WB] (repeat /IME to combine)\n"
           "/REPORT queries only; /AUTO explicitly saves without a dialog.");
       return !stricmp(argv[i], "/?") ? 0 : 1;
@@ -546,6 +677,12 @@ int main(int argc, char** argv) {
   if (report) {
     ReportMachine(stdout, &machine, &files);
     return 0;
+  }
+  if (machine.loaded && argc == 2 && text_seen) {
+    int ok = SwitchTextRows(choices.rows);
+    puts(ok ? "Text layout selected."
+            : "Cannot select this text layout in the current VESA console.");
+    return ok ? 0 : 1;
   }
   ini_ok = LoadIni();
   if (automatic) {
