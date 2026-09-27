@@ -13,7 +13,7 @@ D_LASTHZ		DB	0
 D_COL		DB	0
 D_ROW		DB	0
 D_PAIR		DB	0
-		INCLUDE	FRM.INC
+		INCLUDE frame.inc
 
 ;子程序:处理直接写屏
 S_XR		PROC	NEAR

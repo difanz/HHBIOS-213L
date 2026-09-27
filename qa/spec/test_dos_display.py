@@ -5,7 +5,7 @@ import subprocess
 import struct
 
 import pytest
-from qa.spec.build import source_file, asm_includes
+from qa.spec.build import source_file, asm_includes, build_mixed
 
 from qa.spec.dos import ROOT, Snapshot, digest, run_dos
 from qa.spec.machine import FRAME_ALIASES, blank, put
@@ -19,6 +19,10 @@ def guest_build(assembler, source_dir, tmp_path_factory):
     out = tmp_path_factory.mktemp('guest-build')
     env = {k: v for k, v in os.environ.items() if k != 'JWASM'}
     for name in ('VGA', 'READ2', 'READ4', 'READ5', 'CMODE', 'CKBD'):
+        if name in ('VGA', 'CKBD'):
+            build_mixed(source_file(source_dir, f'{name}.ASM'), out/f'{name}.COM',
+                        source_dir, assembler)
+            continue
         result = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
                                  f'-Fo{out}/{name}.COM', str(source_file(source_dir, f'{name}.ASM'))],
                                 env=env, capture_output=True, text=True)

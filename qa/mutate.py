@@ -9,11 +9,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from qa.spec.build import source_file
 
 ROOT = Path(__file__).resolve().parent.parent
 MUTANTS = [
-    ('right-edge-read', 'FRM.INC', b'CMP\tDL,79', b'CMP\tDL,80', 'screen_edges'),
+    ('right-edge-read', 'frame.c', b'column < 79', b'column < 80', 'screen_edges'),
     ('wrong-single-vertical', 'ZJXP.INC', b'D_ZBF\t\tDB\t01000100B', b'D_ZBF\t\tDB\t10001000B', 'frame_stroke_properties'),
     ('skip-dirty-row', 'ZJXP.INC', b'CALL\tS_XRROW', b'NOP', 'partial_update'),
     ('allow-ff-dbcs', 'ZJXP.INC', b'CMP\tBYTE PTR DS:[SI],0FEH', b'CMP\tBYTE PTR DS:[SI],0FFH', 'invalid_dbcs'),
@@ -34,7 +33,9 @@ def main():
         directory = Path(tempfile.mkdtemp(prefix=name+'-', dir=base))
         source = directory / 'src'
         shutil.copytree(ROOT / 'src', source)
-        path = source_file(source, file)
+        matches = list(source.rglob(file))
+        assert len(matches) == 1, (file, matches)
+        path, = matches
         raw = path.read_bytes()
         assert old in raw, f'mutant no longer applies: {name}'
         path.write_bytes(raw.replace(old, new))

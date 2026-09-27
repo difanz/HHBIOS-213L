@@ -5,7 +5,7 @@ import struct
 import subprocess
 
 import pytest
-from qa.spec.build import source_file, asm_includes
+from qa.spec.build import source_file, build_mixed
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
 from unicorn import x86_const as reg
 
@@ -13,8 +13,8 @@ pytestmark = pytest.mark.unit
 NAMES = ('INT_10', 'D_INT10', 'D_INT16', 'K_INT8', 'D_VBEBUSY', 'QA_BIOS', 'QA_ENTRY')
 
 
-@pytest.fixture(scope='session')
-def vbe_driver(assembler, source_dir, tmp_path_factory):
+@pytest.fixture(scope='session', params=['8086', '386', '586'])
+def vbe_driver(assembler, source_dir, tmp_path_factory, request):
     out = tmp_path_factory.mktemp('vbe-api')
     source = source_file(source_dir, 'VGA.ASM').read_bytes()
     # A nested query models a BIOS re-entering INT 10h during its mode set.
@@ -30,16 +30,12 @@ QA_RET: INT 0F1H
         IRET
 QA_ENTRY DW INT_10,0
         DB 'HHVBE1'
-        DW ''' + ','.join(NAMES).encode() + b'\nSEG_A ENDS'
-    source, n = re.subn(rb'SEG_A\s+ENDS', lambda _: footer, source)
+        DW ''' + ','.join(NAMES).encode() + b'\nSEG_TAIL ENDS'
+    source, n = re.subn(rb'SEG_TAIL\s+ENDS', lambda _: footer, source)
     assert n == 1
     path = out / 'vga.asm'
     path.write_bytes(source)
-    p = subprocess.run([assembler, '-q', '-Zm', '-0', '-bin', *asm_includes(source_dir),
-                        '-Fo'+str(out / 'vga.com'), str(path)], capture_output=True,
-                       env={k: v for k, v in os.environ.items() if k != 'JWASM'})
-    assert p.returncode == 0, p.stdout+p.stderr
-    raw = (out / 'vga.com').read_bytes()
+    raw = build_mixed(path, out/'vga.com', source_dir, assembler, request.param)
     return raw, dict(zip(NAMES, struct.unpack_from('<7H', raw, raw.rindex(b'HHVBE1')+6)))
 
 

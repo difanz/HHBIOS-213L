@@ -56,7 +56,8 @@ def main():
                           for p in folder.rglob('*') if p.is_file() and '__pycache__' not in p.parts}}
     for name in ('conftest.py', 'pytest.ini', 'qa/run.py', 'qa/mutate.py',
                  'qa/requirements.txt', 'qa/dosbox.conf', 'tools/build-watcom-com.sh',
-                 'tools/build-vesa.sh'):
+                 'tools/build-vesa.sh', 'tools/build-module.sh',
+                 'tools/cpu-target.sh', 'tools/source-tree.sh'):
         manifest['files'][name] = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assembler = shutil.which(os.environ.get('JWASM', 'jwasm'))
     if assembler is None and 'JWASM' not in os.environ:

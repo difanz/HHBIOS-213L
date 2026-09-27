@@ -109,7 +109,7 @@ mapped while applications run. Each outer drawing transaction snapshots the
 active text page (up to 8000 bytes) in the resident transfer buffer before
 switching to graphics bank zero. Refresh draws changed
 cells, and restores the text bank. Classification conversions are copied back
-to the text page. The shared `ZJXP.INC`, `FRM.INC` and `HZPOS.INC` use overridable
+to the text page. The shared `ZJXP.INC`, `frame.inc` and `HZPOS.INC` use overridable
 row bounds; their legacy defaults and classification rules are retained.
 The installer starts beyond the complete visible plane and tests up to four candidate banks by
 writing distinct words across all 32 KiB of B800 and clearing the complete

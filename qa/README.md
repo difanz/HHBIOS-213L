@@ -1,7 +1,7 @@
 # HHBIOS tests
 
 The pytest suite checks display and editing behavior at three levels: production
-assembly instructions, DOS framebuffer and BIOS state, and real editors. Host
+linked C/assembly instructions, DOS framebuffer and BIOS state, and real editors. Host
 assertions compare observed state with expected character roles, font pixels,
 API results, cursor movement and saved document bytes.
 
@@ -32,8 +32,8 @@ overlap that remains an explicit expected failure.
 
 Use Python 3.10 or newer and the patched JWasm described in the root
 README. Install the dependencies for the selected layer before running it.
-The VESA unit cases also build the production COM with Open Watcom `wcc` and
-`wlink`, and compile the descriptor decoder with the host C compiler `cc`.
+The shared text and VESA unit cases build production code with Open Watcom
+`wcc` and `wlink`; descriptor checks also use the host C compiler `cc`.
 Missing tools or required fixtures cause a test failure; tests do not download
 them. Optional proprietary application cases skip unless configured. A supplied
 but missing or unusable fixture fails.
@@ -290,7 +290,7 @@ arbitrary application-supplied glyph shapes are not installed in its renderer.
 
 | Command | What it establishes |
 | --- | --- |
-| `make check` | The 51 assembly modules and the C/assembly VESA driver build; this is not behavioral proof |
+| `make check` | All DOS modules build, including the C/assembly keyboard and display drivers; this is not behavioral proof |
 | `make qa-test` | Real 16-bit display and keyboard instructions, UMB allocation failures/state restoration, memory boundaries, FSM/geometry cases, transport failures |
 | `make qa-dos` | DOS memory ownership and reclamation, font storage, raw B800, four VGA planes, attributes, cursor, font API, mode changes, incremental updates, command-line behavior, VBE queries and GB2312 filenames |
 | `make qa-application` | tvedit glyphs/frames plus editor cursor movement, Delete, Backspace and saved bytes; configured optional editors run the same scenarios |
@@ -318,7 +318,8 @@ is optional; extracted source archives are identified by their file hashes.
 
 ## Oracles and failure artifacts
 
-Unit tests include the production `.INC` files in a small COM harness. Unicorn
+Unit tests link production C and `.INC` files into small COM harnesses. Display
+and keyboard checks cover 8086, 386 and Pentium compiler targets. Unicorn
 executes the machine code with distinct code/screen/stack segments, a bounded
 instruction count, guarded screen reads/writes, and stack-balance checks. Only
 the final hardware drawing routines are replaced, with recording stubs that

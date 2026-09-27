@@ -11,7 +11,7 @@ neighboring stroke directions. `D_ZBF` describes the four directions and
 single/double weights; `S_QSX` reads those properties for raw CP437 bytes and
 conversion codes. Neighbor reads stay within the screen and the current row.
 
-`FRM.INC:S_CORNER` checks corners and their adjacent horizontal strokes. It
+`common/frame.c`, through `frame.inc:S_CORNER`, checks corners and their adjacent horizontal strokes. It
 handles single, double, and mixed corners, including short scrollbar caps
 terminated by up/down arrows. These checks also seed the frame conversion
 pass so a corner beside Chinese text can establish the frame boundary.

@@ -15,21 +15,26 @@ make -f GccUnix.mak
 export PATH="$PWD/build/GccUnixR:$PATH"
 ```
 
-`VESA.COM` 还需要 [Open Watcom](https://openwatcom.org/) 的 16 位 C 编译器 `wcc` 和链接器 `wlink`。将它们加入 `PATH`，或设置 `WATCOM` 为工具链目录。回到本仓库：
+`CKBD`、`VGA`、`EGA`、`HGA` 和 `VESA` 使用 [Open Watcom](https://openwatcom.org/) 的 16 位 C 编译器 `wcc` 和链接器 `wlink`。将它们加入 `PATH`，或设置 `WATCOM` 为工具链目录。回到本仓库：
 
 ```bash
 make          # 汇编模块及独立的 VESA.COM
 make check    # 每个模块都生成了 COM
+make variants # build/8086、build/386、build/586
 make clean
 ```
 
-单独编译原有模块不需要 C 工具链，例如 `make build/VGA.COM`。也可以直接汇编：
+尚未迁移到 C 的模块可以单独汇编，例如 `make build/READ4.COM`：
 
 ```text
-jwasm -q -Zm -bin -Isrc/common -Isrc/font -Fo=build/VGA.COM src/video/VGA.ASM
+jwasm -q -Zm -bin -Isrc/common -Isrc/font -Fo=build/READ4.COM src/font/READ4.ASM
 ```
 
 构建脚本从各模块目录读入 `INCLUDE` 文件。`R16.COM` 由 `tools/joinr16.py` 把 `READ3` 到 `READ6` 接在桩后面。`PMZB.ASM` 和 `INT10V.ASM` 汇编时会提示 `A4073`，操作数按字处理。
+
+`make CPU=386 BUILD=build/386` 为公共 C 模块选择 386 代码生成；`CPU=586` 选择 Pentium 调优。默认 `CPU=8086` 保留基本键盘及传统显卡路径的 8086 支持，`VESA.COM` 在所有目录中都至少要求 386。各目录保留原来的 DOS 文件名，可直接配合相同的安装配置使用；需要并存时也可将 `build/386/CKBD.COM` 改名为 `CKBD386.COM`。
+
+CPU 目标只改变实际编译的代码。纯汇编模块可能完全相同，WCC 的 386 与 Pentium 调优也可能得到相同机器码。当前没有 MMX/SSE 变体；增加这类实现时，还需要处理中断中的 FPU/SIMD 状态保存以及 DOS host 对相应指令的支持。
 
 ## 编码
 
@@ -106,7 +111,7 @@ make qa-mutate       # 验证测试能捕获故意引入的汇编错误
 
 ## 目录
 
-- `src/common/`：公共显示逻辑和驻留接口
+- `src/common/`：C 框线判断、文本编辑校验，以及汇编调用和驻留接口
 - `src/video/`：传统显卡驱动；`vesa/` 为 VESA 的 C/汇编实现
 - `src/input/`：键盘、输入法、码表查询和整字编辑
 - `src/font/`：字库加载模块与原有点阵数据

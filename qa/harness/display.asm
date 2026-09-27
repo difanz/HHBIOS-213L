@@ -3,6 +3,7 @@
 .model tiny
 .code
 org 100h
+start label near
 exports dw S_XR, S_XSZF, S_XSHZ, D_XPQ, D_ZBFS, K_HZ1
         dw L_AH0E, L_RET, D_0050, D_005A
         dw S_QSX
@@ -27,4 +28,7 @@ L_INT10:
 L_RET:
     ret
 D_XPQ db 4000 dup (0)
-end
+COMMON_TEXT segment word public 'COMMON'
+COMMON_TEXT ends
+DGROUP group COMMON_TEXT
+end start

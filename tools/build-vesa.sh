@@ -4,11 +4,17 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 out=${1:-"$root/build/VESA.COM"}
 source_dir=${2:-"$root/src"}
+source "$root/tools/cpu-target.sh" "${3:-386}"
+if ((cpu_flag < 3)); then
+    echo 'VESA requires a 386 or newer CPU target' >&2
+    exit 2
+fi
 mkdir -p "$(dirname -- "$out")"
 out=$(realpath "$out")
 source_dir=$(realpath "$source_dir")
 source "$root/tools/source-tree.sh"
 source_includes "$source_dir"
+common_dir="$source_dir/common"
 source_dir="$source_dir/video/vesa"
 if [[ -n ${WATCOM:-} ]]; then
     export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
@@ -22,15 +28,16 @@ work=$(mktemp -d "$(dirname -- "$out")/.vesa-XXXXXX")
 trap 'rm -rf "$work"' EXIT
 (
     cd "$work"
-    wcc -q -3 -bt=dos -ms -s -os -zl -zlf -fo=vesac.obj "$source_dir/vesa.c"
-    wcc -q -3 -bt=dos -ms -s -os -zl -zlf -fo=fontc.obj "$source_dir/vesa_font.c"
-    wcc -q -3 -bt=dos -ms -s -os -zl -zlf -fo=rasterc.obj "$source_dir/vesa_raster.c"
-    wcc -q -3 -bt=dos -ms -zu -s -os -zl -zlf -fo=mousec.obj "$source_dir/vesa_mouse.c"
+    wcc -q -"$cpu_flag" -bt=dos -ms -s -os -zl -zlf -fo=vesac.obj "$source_dir/vesa.c"
+    wcc -q -"$cpu_flag" -bt=dos -ms -s -os -zl -zlf -fo=fontc.obj "$source_dir/vesa_font.c"
+    wcc -q -"$cpu_flag" -bt=dos -ms -s -os -zl -zlf -fo=rasterc.obj "$source_dir/vesa_raster.c"
+    wcc -q -"$cpu_flag" -bt=dos -ms -zu -s -os -zl -zlf -fo=mousec.obj "$source_dir/vesa_mouse.c"
+    wcc "${common_c_flags[@]}" -fo=framec.obj "$common_dir/frame.c"
     env -u JWASM "$assembler" -q -0 -Zm -omf "${asm_includes[@]}" -Fomousea.obj "$source_dir/vesa_mouse.asm"
-    env -u JWASM "$assembler" -q -0 -Zm -omf "${asm_includes[@]}" -Fovesaa.obj "$source_dir/vesa.asm"
+    env -u JWASM "$assembler" -q -0 -Zm -omf -DHH_CPU=3 "${asm_includes[@]}" -Fovesaa.obj "$source_dir/vesa.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Fofonta.obj "$source_dir/vesa_font.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Forastera.obj "$source_dir/vesa_raster.asm"
-    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj,rastera.obj,mousea.obj,mousec.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
+    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj,rastera.obj,mousea.obj,mousec.obj,framec.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
     cp vesa.com "$out"
     cp vesa.map "${out%.*}.map"
 )

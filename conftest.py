@@ -7,7 +7,7 @@ import subprocess
 import pytest
 
 from qa.spec.machine import DisplayMachine
-from qa.spec.build import asm_includes
+from qa.spec.build import build_mixed
 
 ROOT = Path(__file__).resolve().parent
 
@@ -77,17 +77,10 @@ def source_dir(pytestconfig):
     return pytestconfig.getoption('--source-dir').resolve()
 
 
-@pytest.fixture(scope='session')
-def display_binary(assembler, source_dir, tmp_path_factory):
+@pytest.fixture(scope='session', params=['8086', '386', '586'])
+def display_binary(assembler, source_dir, tmp_path_factory, request):
     out = tmp_path_factory.mktemp('assembly') / 'display.com'
-    result = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
-                    f'-Fo{out}', str(ROOT / 'qa/harness/display.asm')],
-                   capture_output=True,
-                   env={k: v for k, v in os.environ.items() if k != 'JWASM'})
-    log = result.stdout + result.stderr
-    (out.parent / 'assembler.log').write_bytes(log)
-    assert result.returncode == 0 and b'Error A' not in log, log.decode('utf-8', errors='backslashreplace')
-    return out.read_bytes()
+    return build_mixed(ROOT / 'qa/harness/display.asm', out, source_dir, assembler, request.param)
 
 
 @pytest.hookimpl(hookwrapper=True)

@@ -3,8 +3,9 @@
 ;	1997.2.20, 7.7, 9.11
 ;	1998.2.24, 8.9
 
-SEG_A		SEGMENT
-		ASSUME	CS:SEG_A, DS:SEG_A
+        INCLUDE segments.inc
+SEG_A SEGMENT PARA PUBLIC 'CODE'
+		ASSUME CS:DGROUP, DS:DGROUP
 
 		ORG	100H
 START:		JMP	BEGIN
@@ -1786,6 +1787,8 @@ K_SET	EQU	$
 		RET
 S_SETB8 	ENDP
 
+SEG_A ENDS
+SEG_TAIL SEGMENT WORD PUBLIC 'TAIL'
 D_XPQ		DB	25*80*2 DUP(0)		;虚屏区
 D_KZZFQ 	DB	4096 DUP(0)		;扩展字符库
 D_KZZF		DB	'KZZF',0
@@ -1793,6 +1796,7 @@ D_KZZF		DB	'KZZF',0
 ;****************************************************************************
 ;程序执行开始
 BEGIN:
+        require_386
 		MOV	AX,3510H
 		INT	21H			;取原INT10地址
 		MOV	WORD PTR D_INT10,BX	;保存
@@ -2116,7 +2120,7 @@ MSG		DB	'EGA.COM EGA显示模块 1998.2.24',13,10
 		DB	'         /X:不显示版本信息',13,10
 		DB	'         /Z:不使用直接写屏',13,10,'$'
 
-SEG_A		ENDS
+SEG_TAIL ENDS
 		END	START
 		MOV	BYTE PTR ES:[100H],10H	;汉字显示方式
 

@@ -1,5 +1,5 @@
-# HHBIOS-213L — rebuild DOS .COM modules with JWasm (MASM-compatible)
-# Sources are GB2312/GBK under src/: do not convert them to UTF-8.
+# HHBIOS-213L — DOS .COM modules built with JWasm and Open Watcom C.
+# Legacy assembly sources are GB2312/GBK: do not convert them to UTF-8.
 #
 # Requires a JWasm built with tools/jwasm-m510.patch applied
 # (Baron-von-Riedesel/JWasm, commit 7f6f32e). Stock -Zm is not enough.
@@ -12,16 +12,19 @@ JWASM ?= jwasm
 JWFLAGS ?= -q -Zm -bin
 SRC := src
 BUILD := build
+CPU ?= 8086
+VESA_CPU := $(if $(filter 8086,$(CPU)),386,$(CPU))
 
 SOURCE_DIRS := $(shell find $(SRC) -type d | LC_ALL=C sort)
 ASMS := $(foreach dir,$(SOURCE_DIRS),$(wildcard $(dir)/*.ASM))
-INCS := $(foreach dir,$(SOURCE_DIRS),$(wildcard $(dir)/*.INC))
+INCS := $(foreach dir,$(SOURCE_DIRS),$(wildcard $(dir)/*.INC $(dir)/*.inc))
 COMS := $(addprefix $(BUILD)/,$(notdir $(ASMS:.ASM=.COM)))
 ASM_INCLUDES := $(addprefix -I,$(SOURCE_DIRS))
 VESA := $(SRC)/video/vesa
+COMMON_C := $(wildcard $(SRC)/common/*.[ch])
 vpath %.ASM $(SOURCE_DIRS)
 
-.PHONY: all clean check setup qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
+.PHONY: all clean check setup variants qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
 QA_PYTHON ?= python3
 
 all: $(COMS) $(BUILD)/VESA.COM
@@ -31,8 +34,19 @@ all: $(COMS) $(BUILD)/VESA.COM
 setup:
 	bash tools/build-setup.sh --output "$(BUILD)/SETUP.EXE"
 
-$(BUILD)/VESA.COM: $(wildcard $(VESA)/*) $(INCS) tools/build-vesa.sh tools/source-tree.sh | $(BUILD)
-	JWASM="$(JWASM)" bash tools/build-vesa.sh "$@" "$(SRC)"
+$(BUILD)/VESA.COM: $(wildcard $(VESA)/*) $(COMMON_C) $(INCS) tools/build-vesa.sh tools/source-tree.sh tools/cpu-target.sh $(BUILD)/.cpu-$(CPU) | $(BUILD)
+	JWASM="$(JWASM)" bash tools/build-vesa.sh "$@" "$(SRC)" "$(VESA_CPU)"
+
+# Changing CPU in an existing output directory must rebuild mixed modules.
+$(BUILD)/.cpu-$(CPU): | $(BUILD)
+	@bash tools/cpu-target.sh "$(CPU)"
+	rm -f $(BUILD)/.cpu-*
+	touch $@
+
+variants:
+	$(MAKE) all CPU=8086 BUILD=$(BUILD)/8086
+	$(MAKE) all CPU=386 BUILD=$(BUILD)/386
+	$(MAKE) all CPU=586 BUILD=$(BUILD)/586
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -47,7 +61,10 @@ $(BUILD)/%.COM: %.ASM $(INCS) | $(BUILD)
 	env -u JWASM "$(JWASM)" $(JWFLAGS) $(ASM_INCLUDES) -Fo$@ -Fw$(BUILD)/$*.err $<
 	rm -f $(BUILD)/$*.err
 
-# Confirm every src/*.ASM produced a non-empty build/*.COM.
+$(addprefix $(BUILD)/,VGA.COM EGA.COM HGA.COM CKBD.COM): $(BUILD)/%.COM: %.ASM $(INCS) $(COMMON_C) tools/build-module.sh tools/source-tree.sh tools/cpu-target.sh $(BUILD)/.cpu-$(CPU) | $(BUILD)
+	JWASM="$(JWASM)" bash tools/build-module.sh "$<" "$@" "$(SRC)" "$(CPU)"
+
+# Confirm every assembly module produced a non-empty COM.
 check: all
 	@bash tools/check-coms.sh "$(SRC)" "$(BUILD)"
 	@test -s $(BUILD)/VESA.COM

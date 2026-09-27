@@ -6,7 +6,7 @@ import struct
 import subprocess
 
 import pytest
-from qa.spec.build import source_file, asm_includes
+from qa.spec.build import source_file, build_mixed
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
 from unicorn import x86_const as reg
 
@@ -25,20 +25,16 @@ SYMBOLS = ('S_TABLE_WORD', 'S_TABLE_NEXT', 'S_TABLE_OPEN', 'T_XMS', 'T_HANDLE',
            'S_PHRASE_OPEN', 'S_A9000', 'D_SPCZ', 'D_2CC1', 'D_9648')
 
 
-@pytest.fixture(scope='session')
-def table_binary(assembler, source_dir, tmp_path_factory):
+@pytest.fixture(scope='session', params=['8086', '386', '586'])
+def table_binary(assembler, source_dir, tmp_path_factory, request):
     out = tmp_path_factory.mktemp('keytable')
     source = source_file(source_dir, 'CKBD.ASM').read_bytes()
-    footer = b"DB 'HHTABLE1'\r\nDW " + ', '.join(SYMBOLS).encode() + b'\r\nSEG_A ENDS'
-    source, count = re.subn(rb'SEG_A\s+ENDS', lambda _: footer, source)
+    footer = b"DB 'HHTABLE1'\r\nDW " + ', '.join(SYMBOLS).encode() + b'\r\nSEG_TAIL ENDS'
+    source, count = re.subn(rb'SEG_TAIL\s+ENDS', lambda _: footer, source)
     assert count == 1
     path = out / 'ckbd.asm'
     path.write_bytes(source)
-    result = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
-                             '-Fo'+str(out/'CKBD.COM'), str(path)], capture_output=True,
-                            env={k: v for k, v in os.environ.items() if k != 'JWASM'})
-    assert result.returncode == 0, result.stdout + result.stderr
-    raw = (out/'CKBD.COM').read_bytes()
+    raw = build_mixed(path, out/'CKBD.COM', source_dir, assembler, request.param)
     symbols = dict(zip(SYMBOLS, struct.unpack_from('<'+str(len(SYMBOLS))+'H', raw,
                                                   raw.rindex(b'HHTABLE1')+8)))
     return raw, symbols

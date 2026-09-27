@@ -1,6 +1,7 @@
 .model tiny
 .code
 org 100h
+start label near
 exports dw S_EDIT, D_EDIT, D_ESTATE
 D_INT16 label dword
     dw old_bios,1000h
@@ -13,4 +14,7 @@ S_INT16_1:
 old_bios:
     int 60h
     retf 2
-end
+COMMON_TEXT segment word public 'COMMON'
+COMMON_TEXT ends
+DGROUP group COMMON_TEXT
+end start

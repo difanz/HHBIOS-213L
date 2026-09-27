@@ -7,7 +7,8 @@ import struct
 import subprocess
 
 import pytest
-from qa.spec.build import asm_includes
+from qa.spec.build import build_mixed
+from qa.spec.dos import ROOT
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_MEM_READ
 from unicorn import x86_const as reg
 
@@ -17,14 +18,10 @@ pytestmark = pytest.mark.unit
 BS, DEL, LEFT, RIGHT = 0x0e08, 0x5300, 0x4b00, 0x4d00
 
 
-@pytest.fixture(scope='session')
-def key_binary(assembler, source_dir, tmp_path_factory):
+@pytest.fixture(scope='session', params=['8086', '386', '586'])
+def key_binary(assembler, source_dir, tmp_path_factory, request):
     out = tmp_path_factory.mktemp('key-assembly') / 'key.com'
-    p = subprocess.run([assembler, '-q', '-Zm', '-bin', *asm_includes(source_dir),
-                        f'-Fo{out}', 'qa/harness/keyedit.asm'], capture_output=True,
-                       env={k: v for k, v in os.environ.items() if k != 'JWASM'})
-    assert p.returncode == 0, p.stdout + p.stderr
-    return out.read_bytes()
+    return build_mixed(ROOT / 'qa/harness/keyedit.asm', out, source_dir, assembler, request.param)
 
 
 class Keyboard:
@@ -162,14 +159,18 @@ def test_disabled_filter_preserves_the_bios_request(keyboard):
     assert keyboard.keys == [DEL]
 
 
-def test_peek_before_application_update_does_not_cancel_companion(keyboard):
+@pytest.mark.parametrize('key,updated,column', [
+    (RIGHT, '中文abc', 6),
+    (DEL, b'\xd6\xd0\xc4abc', 5),
+])
+def test_peek_before_application_update_does_not_cancel_companion(keyboard, key, updated, column):
     keyboard.screen('中文abc', 5)
-    assert keyboard.call(key=RIGHT) == RIGHT
+    assert keyboard.call(key=key) == key
     for _ in range(3):
         assert keyboard.call(0x11) is None
-    keyboard.screen('中文abc', 6)
-    assert keyboard.call(0x11) == RIGHT
-    assert keyboard.call(0x10) == RIGHT
+    keyboard.screen(updated, column)
+    assert keyboard.call(0x11) == key
+    assert keyboard.call(0x10) == key
 
 
 def test_trail_delete_has_same_value_in_peek_and_read(keyboard):
