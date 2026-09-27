@@ -32,3 +32,23 @@ def test_stale_completion_cannot_pass_a_new_guest(tmp_path):
     (tmp_path / 'done.txt').write_text('complete\n')
     with pytest.raises(AssertionError, match='stale guest results'):
         run_dos('must-not-launch', tmp_path, ['MISSING.COM'])
+
+
+@pytest.mark.parametrize('reset', [False, True])
+@pytest.mark.parametrize('pending', [b'', b'\xff'])
+def test_serial_disconnect_requires_complete_requests(monkeypatch,reset,pending):
+    from qa.spec import physical_keyboard as module
+    class Peer:
+        def recv(self, size):
+            if reset:
+                raise ConnectionResetError()
+            return b''
+    keyboard=module.PhysicalKeyboard.__new__(module.PhysicalKeyboard)
+    keyboard.client=Peer(); keyboard.disconnected=False; keyboard.pending=pending
+    monkeypatch.setattr(module.select,'select',lambda *args: ([keyboard.client],[],[]))
+    if pending:
+        with pytest.raises(AssertionError,match='midway'):
+            keyboard.poll()
+    else:
+        keyboard.poll()
+    assert keyboard.disconnected

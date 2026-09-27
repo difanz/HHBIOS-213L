@@ -108,6 +108,7 @@ repository. Supply copies you can use via these options or environment variables
 | `--msedit2` / `MSEDIT2_COM` | Standalone MS-DOS Editor 2.0.026 EDIT.COM |
 | `--dos-apps` / `DOS_APPS` | Root containing `tc201/TC.EXE` and `tc30/TC.EXE`; tc30 also needs the three DPMI files above |
 | `--pctools` / `PCTOOLS_DIR` | Unpacked PC Tools 9 directory, including PCSHELL.EXE, its configuration and overlays |
+| `--dosshell` / `DOSSHELL_DIR` | MS-DOS Shell with DOSSHELL.EXE, DOSSHELL.VID, DOSSHELL.INI and DOSSHELL.HLP; use the standard VGA configuration |
 
 The [DOS software collection](https://software-archive.tifan.la/cndos-new-dos-16-years-collection/)
 contains Turbo C 2.01 (`soft/doswaref/TC201.zip`) and Turbo C++ 3.0
@@ -147,6 +148,44 @@ Turbo C 2.01 also uses READ5 so its real-mode IDE has enough conventional memory
 `test_borland_dpmi_font_memory` exercises Borland C++ 3.1 and Turbo C++ 3.0
 with each of READ4 and READ5, checking Chinese cursor movement, deletion and
 saved file bytes through their 16-bit DPMI runtime.
+
+### DOSSHELL text modes
+
+The [MS-DOS 6.22 supplemental package](https://ftp.zx.net.nz/pub/archive/ftp.microsoft.com/Softlib/MSLFILES/SUP622.EXE)
+contains DOSSHELL. The archive SHA-256 is
+`9240c2c624b9fd328f0ac21cbea93e3d75f8ede6485c43bbe86a95071ddda69a`.
+Unpack the self-extracting ZIP, then use its DOS `EXPAND.EXE` to expand
+`DOSSHELL.EX_` and `DOSSHELL.HL_`. For VGA, expand `VGA.VI_` to
+`DOSSHELL.VID` and `EGA.IN_` to `DOSSHELL.INI`, as specified by the package's
+`SETUP.BAT`. Keep these optional binaries outside version control.
+
+```sh
+python qa/run.py application qa/spec/test_dosshell.py \
+  --dosshell /path/to/dosshell --screenshots --dosbox /path/to/dosbox
+```
+
+The tests launch the actual shell in `/T:L`, `/T:H1` and `/T:H2` (80×25,
+80×43 and 80×50), with a native BIOS control and the resident VESA driver.
+They select a program item below row 24 in high modes, click File in each
+geometry, and choose high-row modes in DOSSHELL's
+Display dialog, then return to 25 rows. No helper preselects the row count.
+Only the copied configuration gets a Chinese program title; the supplied
+application files are untouched.
+
+`SHELL.BIN` holds up to five records, each containing twelve metadata words,
+256 BDA bytes, and an 8000-byte text area (the metadata gives the used length).
+`AFTER.BIN` records the BDA after exit. `VIDEO.BIN` logs up to 256 AX/BX/CX/DX
+requests for mode, font and adapter services. The observer calls no DOS
+services from INT 1Ch and waits for a safe text aperture before reading B800.
+Physical keyboard/mouse events and SDL screenshots use the existing serial
+handshake. Assertions cover actual row counts, menu responses, exit geometry,
+Chinese glyph pixels, pane borders, directory branches and the last-row footer.
+
+DOSSHELL loads its text font with `AX=1110h`, including after temporary graphics
+mode probes, and checks the scanline count returned by `AX=1B00h`. These paths
+are distinct from selecting the ROM font with `AX=1112h`. The VESA driver
+preserves its native Chinese font while honoring the logical font height;
+arbitrary application-supplied glyph shapes are not installed in its renderer.
 
 ## Layers
 

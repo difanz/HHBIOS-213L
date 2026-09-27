@@ -29,6 +29,8 @@ def pytest_addoption(parser):
                      help='Optional unpacked application fixtures: tc201/, tc30/.')
     parser.addoption('--pctools', type=Path, default=os.environ.get('PCTOOLS_DIR'),
                      help='Optional PC Tools 9 directory; needs DOSBox absolute disk reads and mtools.')
+    parser.addoption('--dosshell', type=Path, default=os.environ.get('DOSSHELL_DIR'),
+                     help='Optional MS-DOS Shell directory with its VGA display driver and configuration.')
     parser.addoption('--screenshots', action='store_true',
                      help='Capture the actual SDL window before each application key (requires ImageMagick import).')
     parser.addoption('--vesa-research-config', type=Path,

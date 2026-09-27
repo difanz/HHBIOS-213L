@@ -15,6 +15,10 @@ conversion codes. Neighbor reads stay within the screen and the current row.
 handles single, double, and mixed corners, including short scrollbar caps
 terminated by up/down arrows. These checks also seed the frame conversion
 pass so a corner beside Chinese text can establish the frame boundary.
+An open-top vertical run of at least three cells can be anchored by a matching
+bottom stroke. This keeps adjacent pane borders separate. A `└─[ ]` directory
+branch directly below an ASCII `[+]` or `[-]` parent also supplies frame evidence;
+the same `C0 C4` bytes without that context remain eligible for Chinese pairing.
 
 Recognized frames may be converted in B800 using the public `D_ZBFB` table.
 Attributes are preserved. The renderer uses `S_ALVB` to decode conversion

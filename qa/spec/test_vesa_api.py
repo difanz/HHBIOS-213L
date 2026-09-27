@@ -203,6 +203,47 @@ class Driver:
         assert self.read('stack_bottom',2)==b'\x5a\xa5'
 
 
+@pytest.mark.parametrize('scan,rows,height,pages', [(0,25,8,8),(1,43,8,4),(2,50,8,4)])
+@pytest.mark.parametrize('active', [0,1])
+def test_functionality_reports_text_after_scanline_selection(vesa_driver,scan,rows,height,pages,active):
+    packet=0x30100
+    def bios(m):
+        if m.get('AX') == 0x1200+scan:
+            m.put('AX',0x1212)
+        else:
+            assert m.get('AX') == 0x1b00
+            m.uc.mem_write(packet,bytes(range(64)))
+            m.put('AX',0x1b1b)
+    m=Driver(vesa_driver,bios)
+    m.write('active',bytes([active]))
+    m.run(AX=0x1200+scan,BX=0x30)
+    m.write('active',b'\1')
+    for name,value in dict(text_rows=rows,logical_height=height,page_count=pages).items():
+        m.write(name,struct.pack('<H',value))
+    bda=bytearray(256)
+    bda[0x49]=3; struct.pack_into('<3H',bda,0x4a,80,32768//pages,0)
+    m.uc.mem_write(0x400,bytes(bda))
+    m.uc.mem_write(packet-1,b'\xa5'*66)
+    m.run(AX=0x1b00,BX=0,ES=0x3000,DI=0x100)
+    actual=bytes(m.uc.mem_read(packet,64))
+    assert actual[:4] == bytes(range(4)), 'BIOS capability pointer must survive'
+    assert actual[4:34] == bda[0x49:0x67]
+    assert actual[0x22] == rows and struct.unpack_from('<H',actual,0x23)[0] == height
+    assert struct.unpack_from('<H',actual,0x27)[0] == 16
+    assert actual[0x29:0x2b] == bytes([pages,scan])
+    assert actual[0x2d]&0x20 == 0
+    assert m.uc.mem_read(packet-1,1) == m.uc.mem_read(packet+64,1) == b'\xa5'
+
+
+def test_functionality_rejects_wrapping_destination(vesa_driver):
+    m=Driver(vesa_driver,lambda m: pytest.fail('wrapping packet reached BIOS'))
+    m.write('active',b'\1')
+    m.uc.mem_write(0x30000,b'\xa5'*65536)
+    m.run(AX=0x1b00,BX=0,ES=0x3000,DI=0xffc1)
+    assert m.get('AX')&255 == 0
+    assert m.uc.mem_read(0x30000,65536) == b'\xa5'*65536
+
+
 @pytest.mark.parametrize('banked,page',[(0,1),(0,255),(1,8),(1,255)])
 @pytest.mark.parametrize('function',[0x0200,0x0300,0x0800,0x0941,0x0a41,0x1300])
 def test_unavailable_text_pages_do_not_alias_valid_pages(vesa_driver,banked,page,function):

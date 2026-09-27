@@ -26,6 +26,7 @@ class PhysicalKeyboard:
         self.server.listen(1)
         self.port = self.server.getsockname()[1]
         self.client = None
+        self.disconnected = False
         self.pending = b''
         self.display = None
         self.xvfb = None
@@ -121,14 +122,24 @@ class PhysicalKeyboard:
         self.x.XSync(self.display, 0)
 
     def poll(self):
+        if self.disconnected:
+            time.sleep(.05)
+            return
         peer = self.client or self.server
         if not select.select([peer], [], [], .05)[0]:
             return
         if self.client is None:
             self.client, _ = self.server.accept()
             return
-        data = self.client.recv(128)
+        try:
+            data = self.client.recv(128)
+        except ConnectionResetError:
+            # DOSBox can reset COM1's socket after the last key exits DOS.
+            # The runner still requires a zero exit and a fresh DONE.TXT.
+            data = b''
         if not data:
+            self.disconnected = True
+            assert not self.pending, 'Guest disconnected midway through an input request'
             return
         self.pending += data
         while len(self.pending) >= 2:
@@ -157,9 +168,10 @@ class PhysicalKeyboard:
             names = {0x50: 'Down', 0x48: 'Up', 0x47: 'Home', 0x4f: 'End',
                      0x4b: 'Left', 0x4d: 'Right', 0x53: 'Delete', 0x0e: 'BackSpace',
                      0x3c: 'F2', 0x3d: 'F3', 0x1c: 'Return', 0x01: 'Escape',
-                     0x21: 'f', 0x2d: 'x', 0x22: 'g', 0x12: 'e'}
+                     0x21: 'f', 0x2d: 'x', 0x22: 'g', 0x12: 'e',
+                     0x18: 'o', 0x20: 'd', 0x0f: 'Tab'}
             name = names[key >> 8]
-            alt = key in (0x2100, 0x2d00)
+            alt = key in (0x2100, 0x2d00, 0x1800)
             if alt:
                 self.event('Alt_L', True)
             self.event(name, True)

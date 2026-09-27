@@ -291,6 +291,30 @@ def test_normalized_frame_does_not_redraw(machine):
     assert machine.draws == []
 
 
+def test_adjacent_open_top_panes_use_connected_bottom_corners(machine):
+    screen = blank()
+    for row in range(6, 21):
+        put(screen, row, 35, b'\xb3\xb3')
+    put(screen, 21, 34, '─┘└─'.encode('cp437'))
+    machine.scan(screen)
+    for row in range(6, 21):
+        for col in (35, 36):
+            assert machine.cell(row, col) == ('char', 0xb3, 7)
+
+
+@pytest.mark.parametrize('parent', [b'[-]', b'[+]', b'   '])
+def test_directory_branch_requires_a_parent_node(machine, parent):
+    screen = blank()
+    put(screen, 6, 2, parent)
+    put(screen, 7, 3, b'\xc0\xc4[ ] CHILD')
+    machine.scan(screen)
+    if parent == b'   ':
+        assert machine.cell(7, 3) == ('hanzi-left', 0xc0c4, 7)
+    else:
+        assert machine.cell(7, 3) == ('char', 0xc0, 7)
+        assert machine.cell(7, 4) == ('char', 0xc4, 7)
+
+
 @pytest.mark.parametrize('mode', [1, 2])
 def test_connected_corners_do_not_override_explicit_modes(machine, mode):
     screen = blank()

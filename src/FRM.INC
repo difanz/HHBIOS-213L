@@ -37,6 +37,8 @@ S_CORNER	PROC	NEAR
 		MOV	BYTE PTR CS:D_CFLG,0
 		MOV	SI,BX
 		MOV	AL,ES:[SI]
+		CALL	S_TREE
+		JZ	SC_YES
 		MOV	DI,OFFSET D_FRMC
 		MOV	CX,(D_FRME-D_FRMC)/3
 SC_TAB: 	CMP	AL,CS:[DI]
@@ -76,6 +78,53 @@ SC_RET: 	POP	DI
 		CMP	BYTE PTR CS:D_CFLG,1
 		RET
 S_CORNER	ENDP
+
+; A directory tree may put its first branch below an ASCII [+]/[-] node,
+; not below a vertical stroke. Require both node brackets before protecting
+; C0 C4, which by themselves are also a valid Chinese character.
+S_TREE          PROC    NEAR
+                PUSH    AX
+                PUSH    DX
+                PUSH    DI
+                MOV     DI,SI
+                CMP     AL,0C0H
+                JZ      ST_NODE
+                CMP     AL,0C4H
+                JNZ     ST_END
+                OR      DL,DL
+                JZ      ST_END
+                DEC     DL
+                SUB     DI,2
+ST_NODE:        OR      DH,DH
+                JZ      ST_END
+                OR      DL,DL
+                JZ      ST_END
+                CMP     DL,75
+                JA      ST_END
+                CMP     BYTE PTR ES:[DI],0C0H
+                JNZ     ST_END
+                CMP     BYTE PTR ES:[DI+2],0C4H
+                JNZ     ST_END
+                CMP     BYTE PTR ES:[DI+4],'['
+                JNZ     ST_END
+                CMP     BYTE PTR ES:[DI+8],']'
+                JNZ     ST_END
+                CMP     BYTE PTR ES:[DI-162],'['
+                JNZ     ST_END
+                CMP     BYTE PTR ES:[DI-158],']'
+                JNZ     ST_END
+                MOV     AL,ES:[DI-160]
+                CMP     AL,'+'
+                JZ      ST_YES
+                CMP     AL,'-'
+                JNZ     ST_END
+ST_YES:         MOV     BYTE PTR CS:D_CFLG,1
+ST_END:         POP     DI
+                POP     DX
+                POP     AX
+                CMP     BYTE PTR CS:D_CFLG,1
+                RET
+S_TREE          ENDP
 
 ; SI = corner cell. AH = bar byte. CL bit0 = bar on the right.
 ; CL bit1 = line below the corner. ES = buffer. DX = position.

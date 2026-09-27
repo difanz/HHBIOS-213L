@@ -540,14 +540,27 @@ L_ZX3:
 		AND	DH,0FH
 		MOV	CH,DH			;保留低4位
 		CMP	DI,160
-		JB	L_ZX5
+		JB	L_ZXBT
 		MOV	BL,[DI-80*2]		;上一行字符
 		CMP	BL,0A0H 		;判制表符?
-		JA	L_ZX5
+		JA	L_ZXBT
 		CALL	S_QSX			;取属性
 		MOV	CL,4
 		SHR	DH,CL			;移低4位
 		CMP	CH,DH			;判?
+		JZ	L_ZX7
+; A long open-top rail can also be anchored by a bottom corner.
+L_ZXBT:		PUSH	AX
+		MOV	AX,SI
+		SHR	AX,1
+		CMP	AX,XR_CELLS
+		POP	AX
+		JAE	L_ZX5
+		MOV	BL,[SI]
+		CALL	S_QSX
+		JC	L_ZX5
+		AND	DH,0CH
+		CMP	CH,DH
 		JZ	L_ZX7
 L_ZX5:
 		CMP	CS:D_COL,0

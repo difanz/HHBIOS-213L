@@ -180,6 +180,8 @@ static int activate(u16 preserve)
     put8(0x49, logical_mode); put16(0x4a, TEXT_COLS);
     put16(0x4c, page_bytes); put16(0x4e, 0); put8(0x62, 0);
     put8(0x84, last_row); put16(0x85, logical_height);
+    put8(0x89,(bda8(0x89)&0x6f)|(scan_lines==200 ? 0x80 : scan_lines==400 ? 0x10 : 0));
+    put8(0x88,(bda8(0x88)&0xf0)|(scan_lines==200 ? 8 : 9));
     put16(0x60, cursor_shape);
     active = 1; cursor_visible = 0; prompt_open = 0;
     if (resident_bytes) mouse_resume();
@@ -632,6 +634,13 @@ u16 CALL dispatch(void)
         if (!active) keyboard();
         return 1;
     }
+    /* Applications may select scanlines while a graphics font probe has
+     * suspended us. Track that request before they return to text mode. */
+    if (function==0x12 && (request.bx & 255)==0x30 && lo<=2) {
+        bios(&request);
+        if ((request.ax & 255)==0x12) scan_lines=lo==0 ? 200 : lo==1 ? 350 : 400;
+        return 1;
+    }
     if (!function) {
         if (!allow_mode) return 1;
         suspend();
@@ -685,17 +694,29 @@ u16 CALL dispatch(void)
         bios(&request); break;
     case 0x11:
         if (lo==0x30) { bios(&request); request.cx=logical_height; request.dx=(request.dx & 0xff00)|last_row; }
-        else if (lo==0x11 || lo==0x12 || lo==0x14) {
-            u16 height=lo==0x12 ? 8 : lo==0x11 ? 14 : 16;
-            rows_mode(scan_lines/height,height,1);
+        else if (lo==0x10 || lo==0x11 || lo==0x12 || lo==0x14) {
+            /* User-font activation also changes the logical row count.
+             * Chinese scanout continues to use our native bitmap font. */
+            u16 height=lo==0x10 ? p : lo==0x12 ? 8 : lo==0x11 ? 14 : 16;
+            if (height && height<=32) rows_mode(scan_lines/height,height,1);
         }
         break;
-    case 0x12:
-        if ((request.bx & 255)==0x30 && lo<=2) {
-            scan_lines=lo==0 ? 200 : lo==1 ? 350 : 400;
-            request.ax=(request.ax & 0xff00)|0x12;
-        } else return 0;
+    case 0x1b: {
+        u8 FAR *info=PTR(u8,request.es,request.di);
+        if (lo || request.bx) return 0;
+        if (request.di>0xffc0) { request.ax &= 0xff00; break; }
+        bios(&request);
+        if ((request.ax & 255)!=0x1b) break;
+        /* Keep the BIOS capability pointer, but describe the logical mode.
+         * DOSSHELL checks 2Ah and retries with the returned scanline setting. */
+        for (i=0;i<30;++i) info[4+i]=bda8(0x49+i);
+        info[0x22]=(u8)text_rows;
+        info[0x23]=(u8)logical_height; info[0x24]=0;
+        info[0x27]=16; info[0x28]=0; info[0x29]=(u8)page_count;
+        info[0x2a]=scan_lines==200 ? 0 : scan_lines==350 ? 1 : 2;
+        info[0x2d] &= ~0x20; /* backgrounds retain all sixteen colors */
         break;
+    }
     case 0x13: {
         u16 saved=position(p), off=request.bp;
         put16(0x50+(p & 7)*2, request.dx);
