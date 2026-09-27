@@ -35,9 +35,9 @@ L_EXIT:
 L_40:
 		MOV	AX,140EH		;取西文制表符转换表BX:AX
 		INT	10H
-		CMP	AX,140EH		;判96年版2.13L?
+		CMP	AX,140EH		;判转换表接口是否可用?
 		JNZ	L_44
-		MOV	DX,OFFSET NO961
+		MOV	DX,OFFSET NOTABLE
 		JMP	SHORT L_ERR
 L_44:
 		MOV	ES,BX
@@ -142,11 +142,11 @@ D_ZBFB		DB	80H, 81H, 82H, 14H, 83H, 84H, 85H,0B7H
 ;	DB	94H, 0D4H, 95H, 0BEH, 96H, 0D6H, 97H, 0B7H
 ;	DB	98H, 0D3H, 99H, 0BDH, 9AH, 0C7H, 9BH, 0B6H, 0, 0
 
-NO213		DB	'不是95年版2.13系列汉字系统!',7,13,10,'$'
+NO213		DB	'未安装2.13汉字显示模块!',7,13,10,'$'
 NOZJXP		DB	'不是直接写屏方式!',7,13,10,'$'
 NOKZZF		DB	'未使用扩展字符库!',7,13,10,'$'
 NO16		DB	'只能使用16点阵显示!',7,13,10,'$'
-NO961		DB	'不是1996年版2.13L汉字系统!',7,13,10,'$'
+NOTABLE		DB	'不支持制表符转换表接口!',7,13,10,'$'
 
 SEG_A		ENDS
 		END	START
