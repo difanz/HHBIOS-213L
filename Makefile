@@ -17,10 +17,15 @@ ASMS := $(wildcard $(SRC)/*.ASM)
 INCS := $(wildcard $(SRC)/*.INC)
 COMS := $(patsubst $(SRC)/%.ASM,$(BUILD)/%.COM,$(ASMS))
 
-.PHONY: all clean check qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
+.PHONY: all clean check setup qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
 QA_PYTHON ?= python3
 
 all: $(COMS) $(BUILD)/VESA.COM
+
+# Optional real-mode Turbo Vision installer. See src/setup/README.md.
+# BORLAND_DIR, TVISION_DIR and DOSBOX are supplied by the developer.
+setup:
+	bash tools/build-setup.sh --output "$(BUILD)/SETUP.EXE"
 
 $(BUILD)/VESA.COM: $(SRC)/vesa.c $(SRC)/vesa.asm $(SRC)/vesa.h $(SRC)/vesa_font.c $(SRC)/vesa_font.asm $(SRC)/vesa_raster.c $(SRC)/vesa_mouse.c $(SRC)/vesa_mouse.asm $(INCS) tools/build-vesa.sh | $(BUILD)
 	JWASM="$(JWASM)" bash tools/build-vesa.sh "$@" "$(SRC)"
@@ -40,7 +45,7 @@ $(BUILD)/%.COM: $(SRC)/%.ASM $(INCS) | $(BUILD)
 
 # Confirm every src/*.ASM produced a non-empty build/*.COM.
 check: all
-	@python3 tools/cmpcoms.py
+	@bash tools/check-coms.sh "$(SRC)" "$(BUILD)"
 	@test -s $(BUILD)/VESA.COM
 
 clean:

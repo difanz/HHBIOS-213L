@@ -1,0 +1,34 @@
+--- a/new.cpp
++++ b/new.cpp
+@@ -161,4 +161,6 @@
++#if __BORLANDC__ >= 0x450
+ void * operator new[] ( size_t sz )
+ {
+    return allocBlock(sz);
+ }
++#endif
+@@ -198,4 +200,6 @@
++#if __BORLANDC__ >= 0x450
+ void operator delete[] ( void *blk )
+ {
+    deleteBlock(blk);
+ }
++#endif
+--- a/tobjstrm.cpp
++++ b/tobjstrm.cpp
+@@ -365,5 +365,7 @@
++#if __BORLANDC__ >= 0x450
+ ipstream& operator >> ( ipstream& ps, signed char &ch )
+ {
+     ch = ps.readByte();
+     return ps;
+ }
++#endif
+@@ -597,5 +599,7 @@
++#if __BORLANDC__ >= 0x450
+ opstream& operator << ( opstream& ps, signed char ch )
+ {
+     ps.writeByte( ch );
+     return ps;
+ }
++#endif

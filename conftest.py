@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parent
 
 
 def pytest_addoption(parser):
+    parser.addoption('--msdos-image', type=Path, default=os.environ.get('MSDOS_IMAGE'),
+                     help='Optional bootable QA disk made by qa/prepare.sh; tests copy it before use.')
+    parser.addoption('--setup-exe', type=Path, default=os.environ.get('SETUP_EXE'),
+                     help='Optional real-mode SETUP.EXE built with tools/build-setup.sh.')
     parser.addoption('--source-dir', type=Path, default=ROOT / 'src',
                      help='Assemble this source tree (baseline/mutation comparisons).')
     parser.addoption('--dosbox', default=os.environ.get('DOSBOX') or os.environ.get('DOSBOX_X', 'dosbox'),

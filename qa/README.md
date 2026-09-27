@@ -65,6 +65,61 @@ emulator rejects these filename bytes, the case reports a skip with its DOS
 error code. Supported environments must create, enumerate, reopen and read the
 same filename and contents with HHBIOS loaded.
 
+## Interactive MS-DOS environment
+
+`qa/prepare.sh` builds an actual bootable MS-DOS disk for interactive QA with
+DOSBox-X. It uses local installation media: supply the files from all three
+MS-DOS 6.22 disks in one directory, a bootable floppy image of that version,
+and `CTMOUSE.EXE`. Host dependencies are Bash, GNU coreutils, mtools, psmisc (`fuser`), 7z,
+unzip and iconv, plus the normal COM build tools. No DOS or compiler download
+is implicit.
+
+```sh
+export DOSBOX=/path/to/dosbox-x
+bash qa/prepare.sh --msdos-dir /path/to/msdos622/files \
+  --msdos-boot /path/to/msdos622-boot.img --mouse /path/to/CTMOUSE.EXE \
+  --borland /path/to/borland-cpp-3.1
+"$DOSBOX" -conf build/run/dosbox.conf
+```
+
+The equivalent environment variables are `MSDOS_DIR`, `MSDOS_BOOT`,
+`CTMOUSE_EXE` and `BORLAND_DIR`. Application fixture variables documented below
+also apply. Available fixtures are copied; unavailable optional applications
+are reported. `--no-build` reuses existing modules and probes. Build the optional
+[SETUP.EXE](../src/setup/README.md) first to include it.
+
+The image boots Microsoft's kernel and COMMAND.COM with HIMEM, EMM386 and
+CuteMouse. `C:\HHBIOS` contains the original binary distribution from the
+repository's `original-import` tag, the files inside its three self-extracting
+archives, and current compiled modules. Both HZK16 fonts, input tables and
+legacy utilities are retained. `Q:` is an MS-DOS `SUBST` for `C:\QA`; `TOOLS`
+lists the editors, IDEs, DOSSHELL and PC Tools available there. Guest probes
+are on the PATH through `Q:\PROBES`.
+
+Preparation refuses to update a disk held open by DOSBox. Close DOSBox first,
+or select a separate disk with `--image /path/to/QA.IMG`. The generated
+`build/run/dosbox.conf` points to that disk on the next launch.
+Existing application settings and
+HHBIOS configuration inside the disk are preserved; compiled modules, probes,
+launch wrappers and the generated DOS startup files are updated. Source
+fixtures remain untouched. The disk and staging directories live under ignored
+`build/`; nothing there is part of an open-source commit.
+
+The optional real-kernel regression boots a disposable copy of this disk and
+checks DOS identity, HHBIOS residency, console timing, streamed Chinese pixels,
+CLS palette/status-row preservation and repeated help invocations. It compares
+interrupt vectors and DOS arenas before and after the loop, and checks the
+resident stack guard on each iteration. Both UMB and conventional residency run
+with automatic and normal CPU cores. Tests use fresh builds of the modules and
+never write to the interactive disk itself. With `--screenshots`, MSBACKUP's
+downloaded border and mouse glyphs are compared pixel by pixel against native
+VGA text, on both 800×600 and 1024×768 VESA surfaces:
+
+```sh
+python -m pytest qa/spec/test_msdos.py --msdos-image build/run/MSDOS.IMG \
+  --dosbox "$DOSBOX" --screenshots
+```
+
 The DOS layer also uses Open Watcom's `wcl386` and the `dos4g`, `dos32a`,
 `causeway`, and `pmodew` linker systems. Include its `binw` directory on `PATH`
 so the linker can find the DOS extender stubs and `dos4gw.exe`; setting `WATCOM`
