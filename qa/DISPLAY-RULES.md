@@ -15,8 +15,11 @@ conversion codes. Neighbor reads stay within the screen and the current row.
 handles single, double, and mixed corners, including short scrollbar caps
 terminated by up/down arrows. These checks also seed the frame conversion
 pass so a corner beside Chinese text can establish the frame boundary.
-An open-top vertical run of at least three cells can be anchored by a matching
-bottom stroke. This keeps adjacent pane borders separate. A `└─[ ]` directory
+A vertical run can be anchored by a matching top or bottom stroke, including
+an unconverted junction. An isolated, unanchored `B3` or `BA` byte remains
+unchanged: it may be the first byte of a Chinese character arriving through
+DOS output. Converting it before its trail arrives loses that character.
+This keeps adjacent pane borders separate. A `└─[ ]` directory
 branch directly below an ASCII `[+]` or `[-]` parent also supplies frame evidence;
 the same `C0 C4` bytes without that context remain eligible for Chinese pairing.
 

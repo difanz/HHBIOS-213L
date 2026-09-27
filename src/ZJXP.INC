@@ -53,6 +53,10 @@ L_XR1:
 		XOR	SI,SI
 L_XR2:
 		LODSW				;È¡×Ö·û
+        IFDEF XR_CUSTOM
+        CALL S_CUSTOM
+        JNZ L_XR9
+        ENDIF
 		CMP	AL,0B0H 		;ÅÐÎ÷ÎÄÖÆ±í·û
 		JB	L_XR9
 		CMP	AL,0E0H
@@ -170,6 +174,16 @@ S_XRROW		PROC	NEAR
 		MOV	CX,80
 L_XRROW:
 		LODSW
+        ; An unchanged single-byte cell cannot change DBCS alignment.
+        ; Keep walking the row, but avoid fetching and painting its glyph.
+        CMP AL,0A0H
+        JA L_XRPAINT
+        CMP AX,ES:[DI]
+        JNE L_XRPAINT
+        MOV CS:D_PAIR,0
+        ADD DI,2
+        JMP SHORT L_XRNEXT
+L_XRPAINT:
 		STOSW
 		PUSH	DS
 		PUSH	ES
@@ -185,6 +199,7 @@ L_XRROW:
 		POP	SI
 		POP	ES
 		POP	DS
+L_XRNEXT:
 		INC	DL
 		LOOP	L_XRROW
 		RET
@@ -360,6 +375,10 @@ L_QT9:
 		MOV	CX,1
 ;×Ó³ÌÐò:ÖÆ±í·û×ª»»ÂëÐ´ÈëB800
 S_ZJZF:
+        IFDEF XR_CUSTOM
+        CALL S_CUSTOM
+        JNZ L_ZJ8
+        ENDIF
 		CMP	CX,4
 		JB	L_ZJ0
 		MOV	BL,AL			;ËÄ¸öÒÔÉÏÏàÍ¬
@@ -497,6 +516,10 @@ L_SX2:
 		CMP	AL,0BAH 		;º
 		JNZ	L_SX4
 L_SX3:
+        IFDEF XR_CUSTOM
+        CALL S_CUSTOM
+        JNZ L_SX4
+        ENDIF
 		CALL	S_ZBF			;È¡×ª»»ÂëBL		1.18
 		CALL	S_ZXSM
 		OR	CX,CX
@@ -533,8 +556,7 @@ L_ZX3:
 		MOV	AL,BL
 
 		PUSH	CX
-		CMP	DL,3			;ÈýÐÐ?
-		JB	L_ZX5
+        ; A single rail is a frame only with a matching vertical anchor.
 	;	MOV	BL,AL
 		CALL	S_QSX			;È¡ÊúÏßÊôÐÔ
 		AND	DH,0FH
@@ -542,9 +564,9 @@ L_ZX3:
 		CMP	DI,160
 		JB	L_ZXBT
 		MOV	BL,[DI-80*2]		;ÉÏÒ»ÐÐ×Ö·û
-		CMP	BL,0A0H 		;ÅÐÖÆ±í·û?
-		JA	L_ZXBT
 		CALL	S_QSX			;È¡ÊôÐÔ
+        JC L_ZXBT
+        AND DH,0C0H
 		MOV	CL,4
 		SHR	DH,CL			;ÒÆµÍ4Î»
 		CMP	CH,DH			;ÅÐ?
@@ -563,6 +585,10 @@ L_ZXBT:		PUSH	AX
 		CMP	CH,DH
 		JZ	L_ZX7
 L_ZX5:
+        ; A lone unanchored rail may be the first byte of a Han character.
+        ; Do not irreversibly alias it before the next byte arrives.
+        CMP DL,2
+        JB L_ZX8
 		CMP	CS:D_COL,0
 		JE	L_ZXLEFT
 		CMP	BYTE PTR [DI-2],0A0H	;×óÓÒÎª×Ö·û?
@@ -633,6 +659,13 @@ S_ALVB		ENDP
 
 ;×Ó³ÌÐò:ÏÔÊ¾
 S_XRXS		PROC	NEAR
+        IFDEF XR_CUSTOM
+        CALL S_CUSTOM
+        JZ L_XXSTANDARD
+        MOV CS:D_PAIR,0
+        JMP L_XX1A
+L_XXSTANDARD:
+        ENDIF
 		CMP	CS:D_ZBFS,0		;=0´¿Î÷ÎÄ·½Ê½
 		JZ	L_XX1
 		CMP	AL,0A0H 		;ÅÐºº×Ö?
@@ -689,6 +722,13 @@ L_XX3:
 		POP	BX
 		JZ	L_XX1
 L_XXTRAIL:
+        IFDEF XR_CUSTOM
+        PUSH AX
+        MOV AL,DS:[SI]
+        CALL S_CUSTOM
+        POP AX
+        JNZ L_XX1
+        ENDIF
 		MOV	BX,DS:[SI]		;ÓÒ±ß×Ö·û
 		CMP	BL,0A0H
 		JBE	L_XX1

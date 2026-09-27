@@ -17,6 +17,8 @@ class FontMachine:
         raw,self.symbols=image
         self.uc=Uc(UC_ARCH_X86,UC_MODE_16); self.uc.mem_map(0,0x100000)
         self.uc.mem_write(0x10100,raw)
+        self.buffer=(len(raw)+0x10f)&~15
+        assert self.buffer+256<0xe000, 'Test buffer must fit below the test stack'
         self.kind,self.failure=kind,failure
         self.data=data if data is not None else (ROOT/'fonts/HH20.FNT').read_bytes()
         self.position=0; self.moves=0; self.closed=0; self.allocated=False
@@ -111,9 +113,9 @@ def test_font_load_cache_and_traditional_bank(vesa_driver,kind):
         for code in (32,65,0xba,0xc9,0xa6a1,0xa6c1,0xbaba,0xd6d0,0xcec4,0xd7d6):
             for repeated in range(2):
                 before=m.moves
-                m.uc.mem_write(0x18000,b'\xa5'*96)
-                m.call('font_get',code,0x8002)
-                out=bytes(m.uc.mem_read(0x18000,96))
+                m.uc.mem_write(0x10000+m.buffer,b'\xa5'*96)
+                m.call('font_get',code,m.buffer+2)
+                out=bytes(m.uc.mem_read(0x10000+m.buffer,96))
                 assert out[:2]==out[-2:]==b'\xa5\xa5'
                 expected=native_rows(code,traditional=traditional)+native_rows(code,1,traditional)
                 assert struct.unpack('<46H',out[2:-2])==tuple(v << 6 for v in expected)
@@ -138,8 +140,42 @@ def test_font_failed_install_closes_file_and_releases_storage(vesa_driver,kind,c
 @pytest.mark.parametrize('kind',['xms','ems'])
 def test_runtime_font_failure_is_not_cached(vesa_driver,kind):
     m=FontMachine(vesa_driver,kind); assert m.call('font_open')==1
-    m.failure='move'; m.call('font_get',65,0x8000)
-    assert m.word('font_fault')==1 and m.uc.mem_read(0x18000,92)==bytes(92)
-    m.failure=None; before=m.moves; m.call('font_get',65,0x8000)
+    m.failure='move'; m.call('font_get',65,m.buffer)
+    assert m.word('font_fault')==1 and m.uc.mem_read(0x10000+m.buffer,92)==bytes(92)
+    m.failure=None; before=m.moves; m.call('font_get',65,m.buffer)
     assert m.moves==before+2
-    assert struct.unpack('<23H',m.uc.mem_read(0x18000,46))==tuple(v << 6 for v in native_rows(65))
+    assert struct.unpack('<23H',m.uc.mem_read(0x10000+m.buffer,46))==tuple(v << 6 for v in native_rows(65))
+
+
+@pytest.mark.parametrize('kind',['xms','ems'])
+def test_downloaded_glyph_updates_without_invalidating_unrelated_cells(vesa_driver,kind):
+    m=FontMachine(vesa_driver,kind); assert m.call('font_open')==1
+    # Replace only the hardware observation boundary; execute the real cache,
+    # change detection, external-memory transfers and bitmap raster preparation.
+    m.uc.mem_write(0x10000+m.symbols['font_snapshot'],b'\xb8\x01\x00\xc3')
+    rom=bytes((i*13+i//16)&255 for i in range(4096))
+    m.uc.mem_write(0x30000,rom); m.write('font_segment',struct.pack('<H',0x3000))
+    m.write('font_offset',b'\0\0'); m.write('text_cells',struct.pack('<H',2000))
+    bitmap=bytearray(rom); code=0xb9
+    bitmap[code*16:code*16+16]=bytes([0x81]*16)
+    address=0x10000+m.symbols['text_transfer']+4096
+    m.uc.mem_write(address,bytes(bitmap)); m.call('font_sync')
+    flags=bytes(m.uc.mem_read(0x10000+m.symbols['font_custom'],256))
+    assert [i for i,f in enumerate(flags) if f&1]==[code]
+    m.call('font_get',code,m.buffer)
+    expected=sum(((0x81>>(7-x*8//10))&1)<<(15-x) for x in range(10))
+    assert struct.unpack('<46H',m.uc.mem_read(0x10000+m.buffer,92))==(expected,)*23+(0,)*23
+    moves=m.moves
+    m.uc.mem_write(address,bytes(bitmap)); m.call('font_sync'); m.call('font_get',code,m.buffer)
+    assert m.moves==moves+1, 'Unchanged glyph must reuse its decoded cache entry'
+    screen=bytes([code,7,65,7])*1000
+    m.write('shadow',screen)
+    bitmap[code*16:code*16+16]=bytes([0xff]*16)
+    m.uc.mem_write(address,bytes(bitmap)); m.call('font_sync')
+    shadow=bytes(m.uc.mem_read(0x10000+m.symbols['shadow'],4000))
+    assert shadow[2::4]==screen[2::4] and shadow[3::4]==screen[3::4]
+    assert shadow[1::4]==bytes([0xf8])*1000
+    m.call('font_get',code,m.buffer)
+    assert struct.unpack('<23H',m.uc.mem_read(0x10000+m.buffer,46))==(0xffc0,)*23
+    m.uc.mem_write(address,rom); m.call('font_sync'); m.call('font_get',code,m.buffer)
+    assert struct.unpack('<23H',m.uc.mem_read(0x10000+m.buffer,46))==tuple(v<<6 for v in native_rows(code))

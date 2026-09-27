@@ -31,6 +31,15 @@ HP_SCAN:
         JA HP_SINGLE
         CMP DL,79
         JAE HP_SINGLE
+        IFDEF XR_CUSTOM
+        CALL S_CUSTOM
+        JNZ HP_SINGLE
+        PUSH AX
+        MOV AL,ES:[BX+2]
+        CALL S_CUSTOM
+        POP AX
+        JNZ HP_SINGLE
+        ENDIF
         CMP BYTE PTR ES:[BX+2],0A1H
         JB HP_SINGLE
         CMP BYTE PTR ES:[BX+2],0FEH

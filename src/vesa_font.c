@@ -12,10 +12,13 @@ u32 CALL font_entry;
 u16 CALL font_kind, font_handle, font_kb, font_fault;
 static u16 records, next_slot;
 static u32 text_storage;
+u8 CALL font_custom[256]; /* bit 0: application bitmap, bit 1: changed */
+static u16 custom_active;
 static u16 keys[FONT_CACHE], valid[FONT_CACHE];
 static u8 cache[FONT_CACHE][FONT_RECORD];
 extern u8 CALL text_transfer[8192];
 void CALL font_service(u16 kind, struct registers *r);
+u16 CALL font_snapshot(void);
 
 #pragma pack(push, 1)
 struct xmove { u32 size; u16 source; u32 from; u16 destination; u32 to; };
@@ -60,10 +63,10 @@ static int transfer(u32 offset, void *buffer, u16 size, u16 writing)
 
 void CALL font_get(u16 code, u16 *out)
 {
-    u16 slot, i, id, y;
+    u16 slot, i, id, y, x, bits;
     u8 *p;
     clear(out,CELL_HEIGHT*4);
-    if (code<256) slot=code;
+    if (code<256) slot=(font_custom[code]&1) ? code|0x8000 : code;
     else {
         if ((code >> 8)<0xa1 || (code >> 8)>0xf7 ||
             (code & 255)<0xa1 || (code & 255)>0xfe) return;
@@ -74,7 +77,11 @@ void CALL font_get(u16 code, u16 *out)
         if (valid[i] && keys[i]==slot) break;
     if (i==FONT_CACHE) {
         i=next_slot; next_slot=(next_slot+1) % FONT_CACHE; valid[i]=0;
-        if (!transfer((u32)slot*2,&id,2,0) || id>=records ||
+        if (slot & 0x8000) {
+            if (!transfer(text_storage+32768UL+(u32)code*16,cache[i],16,0)) {
+                font_fault=1; return;
+            }
+        } else if (!transfer((u32)slot*2,&id,2,0) || id>=records ||
             !transfer(FONT_MAP_BYTES+RECORD_OFFSET(id),cache[i],FONT_RECORD,0)) {
             font_fault=1;
             return;
@@ -82,10 +89,59 @@ void CALL font_get(u16 code, u16 *out)
         keys[i]=slot; valid[i]=1;
     }
     p=cache[i];
+    if (slot & 0x8000) {
+        /* Downloaded UI glyphs fill the complete cell, including its edges. */
+        for (y=0;y<CELL_HEIGHT;++y) {
+            bits=0;
+            for (x=0;x<CELL_WIDTH;++x)
+                bits=(bits<<1)|((p[y*16/CELL_HEIGHT]>>(7-x*8/CELL_WIDTH))&1);
+            out[y]=bits<<6;
+        }
+        return;
+    }
     for (y=0; y<CELL_HEIGHT; ++y,p+=3) {
         out[y]=(((u16)p[0] << 8) | p[1]) & 0xffc0;
         out[y+CELL_HEIGHT]=((u16)p[1] << 10) | ((u16)p[2] << 2);
     }
+}
+
+/* Reuse the bank-switch scratch buffer to compare downloaded VGA font RAM
+ * with its previous XMS/EMS copy. Only changed glyphs invalidate cells/cache.
+ * The 4 KiB payload costs no additional conventional resident memory. */
+void CALL font_sync(void)
+{
+    u16 code,y,i,changed,custom,any=0,was;
+    u8 FAR *rom=PTR(u8,font_segment,font_offset);
+    u8 *current=text_transfer+4096;
+    if (!font_snapshot()) {
+        if (!custom_active) return;
+        custom_active=0;
+        clear(font_custom,sizeof(font_custom));
+        clear(valid,sizeof(valid)); invalidate();
+        return;
+    }
+    if (custom_active && !transfer(text_storage+32768UL,text_transfer,4096,0)) {
+        font_fault=1; return;
+    }
+    for (code=0;code<256;++code) {
+        was=font_custom[code]&1; custom=0; changed=!custom_active;
+        for (y=0;y<16;++y) {
+            i=code*16+y;
+            if (current[i]!=rom[i]) custom=1;
+            if (custom_active && current[i]!=text_transfer[i]) changed=1;
+        }
+        font_custom[code]=(u8)(custom | ((changed && (was || custom)) ? 2 : 0));
+        if (changed) any=1;
+    }
+    if (any && !transfer(text_storage+32768UL,current,4096,1)) {
+        font_fault=1; clear(font_custom,sizeof(font_custom)); return;
+    }
+    for (i=0;i<FONT_CACHE;++i)
+        if (valid[i] && (keys[i]&0x8000) && (font_custom[keys[i]&255]&2)) valid[i]=0;
+    if (!custom_active) invalidate();
+    else for (i=0;i<text_cells;++i)
+        if (font_custom[shadow[i]&255]&2) shadow[i]^=0xff00;
+    custom_active=1;
 }
 
 /* HHBIOS's public 8x16 bitmap interface retains its original input format. */
@@ -171,7 +227,7 @@ u16 CALL font_open(void)
         length!=FONT_MAP_BYTES+RECORD_OFFSET(records)) goto done;
     font_kb=(u16)((length+1023) >> 10);
     text_storage=length;
-    if (!allocate(font_kb+32)) goto done;
+    if (!allocate(font_kb+36)) goto done;
     for (offset=0; offset<length; offset+=count) {
         count=length-offset>4096 ? 4096 : (u16)(length-offset);
         r.ax=0x3f00; r.bx=file; r.cx=count; r.dx=(u16)text_transfer;

@@ -8,6 +8,10 @@ video:
     pushf
     cmp ah,0
     je video_record
+    cmp ah,0bh
+    je video_record
+    cmp ah,10h
+    je video_record
     cmp ah,11h
     je video_record
     cmp ah,12h

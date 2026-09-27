@@ -146,7 +146,7 @@ static void show_cursor(void)
 }
 static void repaint(void)
 {
-    if (!active) return;
+    if (!active || !text_ready()) return;
     hide_cursor(); mouse_erase(); refresh();
     if (prompt_dirty) prompt_draw();
     mouse_poll(); show_cursor(); mouse_paint();
@@ -178,6 +178,7 @@ static int activate(u16 preserve)
     if (r.ax!=0x004f) return 0;
     display_pitch = screen.pitch;
     if (!aperture()) return 0;
+    font_seed();
     active_page = 0;
     if (!preserve) {
         for (i=0; i<text_cells; ++i) page(0)[i]=0x0720;
@@ -379,11 +380,22 @@ u16 CALL initialize(void)
 static void scroll(u16 p, u8 down, u16 count, u16 attribute, u16 top, u16 bottom)
 {
     u16 x, y, left=top & 255, right=bottom & 255, first=top >> 8, last=bottom >> 8;
+    u16 copied=0;
     u16 FAR *text=page(p);
     if (left>=80 || first>=text_rows || left>right || first>last) return;
     if (right>79) right=79;
     if (last>=text_rows) last=text_rows-1;
     if (!count || count>last-first+1) count=last-first+1;
+    /* Whole scanlines on the native 800x600 surface can move all four
+     * planes through VGA latches. Keep the shadow paired with those pixels;
+     * pending direct B800 writes are still detected by the next refresh. */
+    if (active && p==active_page && !large_surface && !left && right==79 &&
+        count<=last-first) {
+        hide_cursor();
+        if (mouse_erase()) refresh();
+        scroll_pixels(first,last,count,down);
+        copied=active;
+    }
     for (y=0; y<=last-first; ++y) {
         u16 row=down ? last-y : first+y;
         for (x=left; x<=right; ++x) {
@@ -391,6 +403,8 @@ static void scroll(u16 p, u8 down, u16 count, u16 attribute, u16 top, u16 bottom
             if (down ? row>=first+count : row+count<=last)
                 value=text[(down ? row-count : row+count)*80+x];
             text[row*80+x]=value;
+            if (copied && (down ? row<first+count : row+count>last))
+                shadow[row*80+x]=~value;
         }
     }
 }
@@ -615,6 +629,7 @@ u16 CALL dispatch(void)
         if (lo==20) offset|=(u32)request.dx<<16;
         if (!active || request.bx>3 || offset>plane_bytes || request.cx>plane_bytes-offset ||
             request.di>65535U-request.cx) request.ax=1;
+        else if (!text_ready()) request.ax=2;
         else if (!request.cx) request.ax=0;
         else {
             if (large_surface) raster_read(request.bx,offset,request.es,request.di,request.cx);
@@ -707,6 +722,17 @@ u16 CALL dispatch(void)
         if (count>text_cells-i) count=text_cells-i;
         while (count--) { page(p)[i]=(function==9 ? request.bx << 8 : page(p)[i] & 0xff00) | lo; ++i; }
         repaint(); break;
+    case 0x0b:
+        /* DOS CLS uses the CGA palette interface even in text mode. The
+         * physical VBE BIOS may otherwise remap colors 1..3 as CGA colors. */
+        if (!p) {
+            struct registers border;
+            zero(&border,sizeof(border)); border.ax=0x1007;
+            border.bx=request.bx & 15; bios(&border);
+            border.ax=0x1001; bios(&border);
+            put8(0x66,(bda8(0x66)&0xe0)|(request.bx&31));
+        } else if (p==1) put8(0x66,(bda8(0x66)&0xdf)|((request.bx&1)<<5));
+        break;
     case 0x0e: tty((u8)lo, active_page); repaint(); break;
     case 0x0c: case 0x0d:
         if (request.cx<screen.width && request.dx<screen.height) {
@@ -781,7 +807,7 @@ u16 CALL dispatch(void)
 
 void CALL tick(void)
 {
-    if (!active || ++counter<period) return;
+    if (!active || ++counter<period || !text_ready()) return;
     counter=0;
     hide_cursor(); mouse_erase(); refresh(); mouse_poll();
     if (!active) { keyboard(); return; }

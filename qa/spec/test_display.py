@@ -20,6 +20,22 @@ def test_chinese(machine, text, col):
         assert machine.cell(3, col+i+1) == ('hanzi-right', code, 7)
 
 
+@pytest.mark.parametrize('row', [0, 12, 24])
+def test_streamed_chinese_keeps_bytes_from_previous_scan(machine,row):
+    from qa.spec.machine import SCREEN
+    raw='2.13L 汉字系统键盘模块 1999.11.17'.encode('gb2312')
+    screen=blank()
+    for col,byte in enumerate(raw):
+        put(screen,row,col,bytes([byte]))
+        machine.scan(screen)
+        # A real console changes only the next byte, retaining any aliases
+        # the preceding refresh wrote into guest video memory.
+        screen=bytearray(machine.uc.mem_read(SCREEN,4000))
+    for col in range(6,22,2):
+        code=int.from_bytes(raw[col:col+2],'big')
+        assert machine.cell(row,col)==('hanzi-left',code,7)
+
+
 @pytest.mark.parametrize('frame', ['┌─┐│└─┘', '╔═╗║╚═╝', '╒═╕│╘═╛', '╓─╖║╙─╜'])
 @pytest.mark.parametrize('row,col', [(0, 0), (0, 77), (22, 0), (22, 77), (5, 9)])
 def test_small_boxes(machine, frame, row, col):

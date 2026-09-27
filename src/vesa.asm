@@ -8,6 +8,7 @@ org 100h
 public start
 public int10_handler, int8_handler, old10, old8, stack_bottom, stack_top
 public image_end, resident_end, S_UMB, umb_segment, resident_paragraphs
+public font_checking
 extrn initialize:near, dispatch:near, tick:near
 extrn request:byte, screen:byte, resident_segment:word, keyboard_segment:word
 extrn framebuffer:word, display_pitch:word, active_page:word
@@ -25,6 +26,7 @@ extrn font_segment:word, font_offset:word, active:byte, busy:byte, traditional:b
 extrn direct:byte
 extrn prompt_notify:byte
 extrn font_get:near, font_open:near, font_close:near, font_bitmap:near
+extrn font_sync:near, font_custom:byte
 CELL_WIDTH equ 10
 CELL_HEIGHT equ 23
 GLYPH_HEIGHT equ 20
@@ -53,9 +55,11 @@ plane_xor dw 0
 plane_background dw 0
 saved_gc db 9 dup (0)
 saved_seq db 0
+saved_memory_mode db 0
 gc_index db 0
 seq_index db 0
 video_depth db 0
+font_checking db 0
 aperture_alias db 0ffh
 text_map db 1
 public mapped_block
@@ -181,6 +185,10 @@ query_boundary:
     je query_inactive
     cmp cs:banked_text,0
     je query_scan
+    ; Font comparison temporarily borrows text_transfer while B800 remains
+    ; mapped. A keyboard IRQ must not overwrite that scratch with a snapshot.
+    cmp cs:font_checking,0
+    jne query_scan
     cmp cs:video_depth,0
     jne query_snapshot
     call snapshot_text
@@ -490,10 +498,32 @@ snapshot_text endp
 
 refresh proc near
     save_regs
+    call text_ready
+    or ax,ax
+    jz refresh_done
+    push cs
+    pop ds
+    mov cs:font_checking,1
+    call font_sync
+    mov cs:font_checking,0
     call classifier_policy
     mov ds,cs:D_B800
     push cs
     pop es
+    ; Check the live text aperture before any graphics mapping or frame scan.
+    ; Policy changes and software mouse erasure still force the normal path.
+    mov al,cs:D_ZBFS
+    cmp al,cs:D_LASTMODE
+    jne refresh_changed
+    mov al,cs:K_HZ1
+    cmp al,cs:D_LASTHZ
+    jne refresh_changed
+    xor si,si
+    mov di,offset D_XPQ
+    mov cx,cs:text_cells
+    repe cmpsw
+    je refresh_done
+refresh_changed:
     cmp cs:banked_text,0
     je refresh_ready
     mov ax,offset text_transfer
@@ -527,6 +557,186 @@ refresh_done:
     load_regs
     ret
 refresh endp
+
+; A font downloader can temporarily unmap B800 between its direct I/O writes.
+; IRQ refresh/capture must wait until the application restores a text aperture.
+public text_ready
+text_ready proc near
+    pushf
+    cli
+    push bx
+    push dx
+    mov ax,1
+    cmp cs:banked_text,0
+    je text_ready_done
+    mov dx,3ceh
+    in al,dx
+    mov bl,al
+    mov al,6
+    out dx,al
+    inc dx
+    in al,dx
+    mov bh,al
+    dec dx
+    mov al,bl
+    out dx,al
+    and bh,0ch
+    mov bl,cs:text_map
+    and bl,0ch
+    mov ax,1
+    cmp bh,bl
+    je text_ready_done
+    cmp bh,0ch
+    je text_ready_done
+    xor ax,ax
+text_ready_done:
+    pop dx
+    pop bx
+    popf
+    ret
+text_ready endp
+
+; ZF=0 identifies an application-defined single-byte glyph. Keep its byte
+; out of the frame-alias and DBCS pairing paths shared with legacy drivers.
+S_CUSTOM proc near
+    push bx
+    mov bl,al
+    xor bh,bh
+    test cs:font_custom[bx],1
+    pop bx
+    ret
+S_CUSTOM endp
+
+; Observe the first VGA character block after a direct font-RAM operation.
+; Odd/even text addressing distinguishes it from our normal linear aperture.
+; The bank is already the isolated text bank; never touch visible scanout.
+public font_snapshot
+font_snapshot proc near
+    save_regs
+    xor bp,bp
+    cmp cs:banked_text,0
+    je font_snapshot_done
+    mov dx,3c4h
+    in al,dx
+    mov bl,al
+    mov al,4
+    out dx,al
+    inc dx
+    in al,dx
+    mov bh,al
+    dec dx
+    test al,4
+    jnz font_snapshot_seq
+    cli
+    mov ax,0604h
+    out dx,ax
+    mov dx,3ceh
+    in al,dx
+    push ax
+    mov si,4
+font_snapshot_gc:
+    mov ax,si
+    out dx,al
+    inc dx
+    in al,dx
+    dec dx
+    push ax
+    inc si
+    cmp si,7
+    jb font_snapshot_gc
+    mov ax,0204h
+    out dx,ax
+    mov ax,5
+    out dx,ax
+    mov ax,0406h
+    out dx,ax
+    mov ax,0a000h
+    mov ds,ax
+    push cs
+    pop es
+    xor si,si
+    mov di,offset text_transfer+4096
+    mov bp,256
+font_snapshot_char:
+    mov cx,8
+    rep movsw
+    add si,16
+    dec bp
+    jnz font_snapshot_char
+    mov cx,3
+font_snapshot_restore:
+    pop ax
+    mov ah,al
+    mov al,cl
+    add al,3
+    out dx,ax
+    loop font_snapshot_restore
+    pop ax
+    out dx,al
+    mov dx,3c4h
+    mov al,4
+    mov ah,bh
+    out dx,ax
+    mov bp,1
+font_snapshot_seq:
+    mov al,bl
+    out dx,al
+font_snapshot_done:
+    mov cs:bank_result,bp
+    load_regs
+    mov ax,cs:bank_result
+    ret
+font_snapshot endp
+
+public font_seed
+font_seed proc near
+    save_regs
+    cmp cs:banked_text,0
+    je font_seed_done
+    cli
+    mov dx,3c4h
+    mov ax,0604h
+    out dx,ax
+    mov ax,0402h
+    out dx,ax
+    mov dx,3ceh
+    mov ax,1
+    out dx,ax
+    mov ax,3
+    out dx,ax
+    mov ax,4
+    out dx,ax
+    mov ax,5
+    out dx,ax
+    mov ax,0506h
+    out dx,ax
+    mov ax,0ff08h
+    out dx,ax
+    mov ds,cs:font_segment
+    mov si,cs:font_offset
+    mov ax,0a000h
+    mov es,ax
+    xor di,di
+    mov bx,256
+    xor ax,ax
+font_seed_char:
+    mov cx,8
+    rep movsw
+    mov cx,8
+    rep stosw
+    dec bx
+    jnz font_seed_char
+    mov ah,cs:text_map
+    mov al,6
+    out dx,ax
+    mov dx,3c4h
+    ; Linear B800 bytes need only plane zero. Leave font plane two intact.
+    mov ax,0102h
+    out dx,ax
+font_seed_done:
+    load_regs
+    ret
+font_seed endp
 
 classifier_policy proc near
     mov ax,cs:active_page
@@ -1031,6 +1241,17 @@ video_direct:
     in al,dx
     mov saved_seq,al
     dec dx
+    ; Text programs such as MSBACKUP restore VGA odd/even addressing after
+    ; accessing font RAM directly. Raster writes require linear plane bytes;
+    ; keep the application's text addressing outside this transaction.
+    mov al,4
+    out dx,al
+    inc dx
+    in al,dx
+    mov saved_memory_mode,al
+    dec dx
+    mov ax,0604h
+    out dx,ax
     mov ax,0f02h
     out dx,ax
 video_ready:
@@ -1079,12 +1300,96 @@ video_restore_gc:
     mov al,2
     mov ah,saved_seq
     out dx,ax
+    mov al,4
+    mov ah,saved_memory_mode
+    out dx,ax
     mov al,seq_index
     out dx,al
 video_finished:
     load_regs
     ret
 video_end endp
+
+; Native 800x600 full-width scroll. Write mode 1 copies the four VGA latches
+; together. Direction handles overlap; the IME strip is outside this range.
+public scroll_pixels
+scroll_pixels proc near
+    push bp
+    mov bp,sp
+    save_regs
+    call video_begin
+    jc scroll_pixels_done
+    mov ax,[bp+6]              ; last row
+    sub ax,[bp+4]              ; first row
+    inc ax
+    sub ax,[bp+8]              ; rows retained
+    mov bx,2300               ; 23 scanlines * 100 bytes per plane
+    mul bx
+    mov cx,ax
+    mov ax,[bp+4]
+    mul bx
+    mov di,ax
+    mov ax,[bp+8]
+    mul bx
+    mov si,di
+    add si,ax
+    cmp word ptr [bp+10],0
+    je scroll_pixels_forward
+    xchg si,di
+    add si,cx
+    add di,cx
+    dec si
+    dec di
+    std
+scroll_pixels_forward:
+    mov ax,cs:framebuffer
+    mov ds,ax
+    mov es,ax
+    mov dx,3ceh
+    mov ax,0105h
+    out dx,ax
+    rep movsb
+    cld
+    call video_end
+    ; The framebuffer and its shadow describe the same retained rows.
+    push cs
+    pop ds
+    push cs
+    pop es
+    mov ax,[bp+6]
+    sub ax,[bp+4]
+    inc ax
+    sub ax,[bp+8]
+    mov bx,160
+    mul bx
+    mov cx,ax
+    shr cx,1
+    mov ax,[bp+4]
+    mul bx
+    mov di,offset D_XPQ
+    add di,ax
+    mov ax,[bp+8]
+    mul bx
+    mov si,di
+    add si,ax
+    cmp word ptr [bp+10],0
+    je scroll_shadow_forward
+    xchg si,di
+    mov ax,cx
+    shl ax,1
+    add si,ax
+    add di,ax
+    sub si,2
+    sub di,2
+    std
+scroll_shadow_forward:
+    rep movsw
+    cld
+scroll_pixels_done:
+    load_regs
+    pop bp
+    ret
+scroll_pixels endp
 
 public pixel
 pixel proc near
@@ -1212,6 +1517,7 @@ boundary proc near
 boundary endp
 
 policy label byte
+XR_CUSTOM equ 1
 XR_ROWS TEXTEQU <cs:text_rows>
 XR_LASTROW TEXTEQU <cs:last_row>
 XR_CELLS TEXTEQU <cs:text_cells>

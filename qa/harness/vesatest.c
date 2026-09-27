@@ -33,6 +33,63 @@ static void ticks(unsigned n)
     while ((unsigned long)(*clock-start)<n) {}
 }
 
+static int scroll_capture(FILE *out)
+{
+    union REGPACK r;
+    unsigned plane,y,count;
+    _fmemcpy(buffer,MK_FP(0xb800,0),4000);
+    if (fwrite(buffer,1,4000,out)!=4000) return 1;
+    for (plane=0;plane<4;++plane) for (y=0;y<600;y+=32) {
+        count=(600-y<32 ? 600-y : 32)*100;
+        memset(&r,0,sizeof(r)); r.x.ax=0x1412; r.x.bx=plane;
+        r.x.si=y*100; r.x.cx=count; r.x.es=FP_SEG(buffer); r.x.di=FP_OFF(buffer);
+        intr(0x10,&r);
+        if (r.x.ax || fwrite(buffer,1,count,out)!=count) return 1;
+    }
+    return 0;
+}
+
+/* Compare accelerated scanout against a forced glyph-by-glyph redraw of
+ * exactly the same text. Includes overlap, clipping, pending direct writes,
+ * split Chinese attributes, and the untouched IME strip. */
+static int scrolling(void)
+{
+    static unsigned operations[][3]={
+        {0x0601,0,0x184f}, {0x0703,0,0x184f},
+        {0x0602,0x0300,0x144f}, {0x0701,0x0300,0x144f},
+        {0x0601,0x0305,0x144a}, {0x0600,0,0x184f}
+    };
+    union REGPACK r;
+    unsigned row,col,step;
+    unsigned __far *text=MK_FP(0xb800,0);
+    FILE *out=fopen("SCROLL.BIN","wb");
+    if (!out) return 1;
+    memset(&r,0,sizeof(r));r.x.ax=0x1700;intr(0x10,&r);
+    for (step=0;step<sizeof(operations)/sizeof(operations[0]);++step) {
+        _disable();
+        for (row=0;row<25;++row) for (col=0;col<80;++col)
+            text[row*80+col]=((row%14+1)<<8)|('A'+(row+col)%26);
+        text[10*80+20]=0x1ed6; text[10*80+21]=0x4bd0;
+        text[11*80+20]=0x2ece; text[11*80+21]=0x5fc4;
+        _enable();
+        memset(&r,0,sizeof(r));r.x.ax=0x1500;intr(0x10,&r);
+        _disable();
+        _fmemcpy(buffer,text,4000);
+        ((unsigned *)buffer)[12*80+3]=0x7c5a;
+        _enable();
+        if (fwrite(buffer,1,4000,out)!=4000) return 2;
+        _disable();
+        text[12*80+3]=0x7c5a; /* Not yet visible when the scroll starts. */
+        memset(&r,0,sizeof(r));r.x.ax=operations[step][0];r.x.bx=0x1e00;
+        r.x.cx=operations[step][1];r.x.dx=operations[step][2];intr(0x10,&r);
+        _enable();
+        if (scroll_capture(out)) return 3;
+        memset(&r,0,sizeof(r));r.x.ax=0x180c;r.x.bx=0x0300;intr(0x10,&r);
+        if (scroll_capture(out)) return 4;
+    }
+    return fclose(out)!=0;
+}
+
 static int transition(const char *operation)
 {
     union REGPACK r, result[4];
@@ -275,7 +332,35 @@ int main(int argc, char **argv)
     if (argc>1 && strcmp(argv[1],"ports")==0) return ports();
     if (argc>1 && strcmp(argv[1],"drawing")==0) return drawing();
     if (argc>1 && strcmp(argv[1],"resident")==0) return resident();
+    if (argc>1 && strcmp(argv[1],"guard")==0) {
+        unsigned offset;
+        in=fopen("STACK.OFF","rb");if(!in) return 1;
+        if(fread(&offset,2,1,in)!=1) {fclose(in);return 2;}
+        fclose(in);
+        memset(&r,0,sizeof(r));r.x.ax=0x1411;intr(0x10,&r);
+        if(r.x.ax!=0x5356 || offset>r.x.si-2) return 3;
+        if(*(unsigned __far *)MK_FP(r.x.es,offset)!=0xa55a) return 4;
+        return 0;
+    }
     if (argc>1 && strcmp(argv[1],"pages")==0) return pages();
+    if (argc>1 && strcmp(argv[1],"scroll")==0) return scrolling();
+    if (argc>1 && (!strcmp(argv[1],"screen") || !strcmp(argv[1],"rawscreen"))) {
+        if (!strcmp(argv[1],"screen")) {
+            memset(&r,0,sizeof(r));r.x.ax=0x1700;intr(0x10,&r);
+            r.x.ax=0x1500;intr(0x10,&r);
+        }
+        out=fopen("SCREEN.BIN","wb");if(!out) return 1;
+        if(scroll_capture(out)) {fclose(out);return 2;}
+        if(fclose(out)) return 3;
+        memset(&r,0,sizeof(r));r.x.ax=0x1009;
+        r.x.es=FP_SEG(buffer);r.x.dx=FP_OFF(buffer);intr(0x10,&r);
+        memset(&r,0,sizeof(r));r.x.ax=0x1017;r.x.cx=256;
+        r.x.es=FP_SEG(buffer);r.x.dx=FP_OFF(buffer+17);intr(0x10,&r);
+        out=fopen("PALETTE.BIN","wb");if(!out) return 4;
+        if(fwrite(buffer,1,785,out)!=785) {fclose(out);return 5;}
+        if(fclose(out)) return 6;
+        return hostshot();
+    }
     if (argc>1) return transition(argv[1]);
     memset(&r,0,sizeof(r)); r.x.ax=0xff00; intr(0x10,&r);
     if (r.x.ax!=0x56) return 1;

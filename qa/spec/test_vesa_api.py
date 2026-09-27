@@ -206,6 +206,71 @@ class Driver:
         assert self.read('stack_bottom',2)==b'\x5a\xa5'
 
 
+@pytest.mark.parametrize('color',[0,6,15,31])
+def test_text_border_uses_palette_entry_without_cga_remapping(vesa_driver,color):
+    calls=[]
+    def bios(m):
+        calls.append((m.get('AX'),m.get('BX')))
+        if m.get('AX')==0x1007:
+            assert m.get('BX')==color&15
+            m.put('BX',0x3e00|m.get('BX'))  # A caller-customized palette entry.
+        else:
+            assert m.get('AX')==0x1001 and m.get('BX')>>8==0x3e
+    m=Driver(vesa_driver,bios);m.write('active',b'\1')
+    m.uc.mem_write(0x466,b'\xe0')
+    m.run(AX=0x0b00,BX=color)
+    assert [ax for ax,bx in calls]==[0x1007,0x1001]
+    assert m.uc.mem_read(0x466,1)==bytes([0xe0|color])
+    assert (m.get('AX'),m.get('BX'))==(0x0b00,color)
+
+
+@pytest.mark.parametrize('palette',[0,1])
+def test_text_cga_palette_updates_bda_without_changing_display(vesa_driver,palette):
+    m=Driver(vesa_driver,lambda m: pytest.fail('CGA palette must not reach the physical VBE mode'))
+    m.write('active',b'\1');m.uc.mem_write(0x466,b'\xc5')
+    m.run(AX=0x0b00,BX=0x100|palette)
+    assert m.uc.mem_read(0x466,1)==bytes([0xc5|(palette<<5)])
+
+
+@pytest.mark.parametrize('custom',[False,True])
+@pytest.mark.parametrize('column,role',[(3,1),(4,2)])
+def test_downloaded_symbols_are_single_bytes_in_keyboard_queries(vesa_driver,custom,column,role):
+    m=Driver(vesa_driver,lambda m: pytest.fail('Boundary query must not invoke BIOS'))
+    m.write('active',b'\1'); m.write('direct',b'\1'); m.write('policy',b'\3')
+    screen=bytearray(b' \x07'*2000)
+    screen[6:10]=b'\xcb\x07\xb2\x07'
+    m.uc.mem_write(0xb8000,bytes(screen))
+    flags=bytearray(256); flags[0xcb]=flags[0xb2]=custom
+    m.write('font_custom',bytes(flags))
+    m.run(AX=0x1410,DX=column)
+    assert (m.get('AX'),m.get('BX'),m.get('CX'))==(0 if custom else role,0x4b48,0xb800)
+
+
+def test_keyboard_irq_cannot_overwrite_font_comparison_scratch(vesa_driver):
+    m=Driver(vesa_driver,lambda m: pytest.fail('Keyboard query must not switch banks'))
+    for name in ('active','direct','banked_text','font_checking'):
+        m.write(name,b'\1')
+    m.write('policy',b'\3')
+    m.uc.mem_write(0xb8000,b'\xd6\x07\xd0\x07'+b' \x07'*1998)
+    m.write('text_transfer',b'\xa5'*8192)
+    m.run(AX=0x1410,DX=1)
+    assert (m.get('AX'),m.get('BX'),m.get('CX'))==(2,0x4b48,0xb800)
+    assert m.read('text_transfer',8192)==b'\xa5'*8192
+
+
+def test_downloaded_font_boundary_query_stays_inside_last_row(vesa_driver):
+    m=Driver(vesa_driver,lambda m: pytest.fail('Boundary query must not invoke BIOS'))
+    m.write('active',b'\1'); m.write('direct',b'\1'); m.write('policy',b'\3')
+    m.uc.mem_write(0xb8000,b' \x07'*1999+b'\xcb\x07')
+    reads=[]
+    m.uc.hook_add(UC_HOOK_MEM_READ,
+                 lambda uc,kind,address,size,value,data: reads.append((address,size)),
+                 begin=0xb8000,end=0xbffff)
+    m.run(AX=0x1410,DX=0x184f)
+    assert (m.get('AX'),m.get('BX'),m.get('CX'))==(0,0x4b48,0xb800)
+    assert reads and all(address+size<=0xb8000+4000 for address,size in reads)
+
+
 def test_ime_notification_reenters_only_after_releasing_private_stack(vesa_driver):
     calls = []
 
@@ -480,10 +545,10 @@ def test_refresh_batches_banks_and_avoids_idle_pixel_writes(vesa_driver):
     assert banks==[0,1] and sum(writes)==2000*23*4*2
     banks.clear(); writes.clear()
     m.run('refresh',limit=10000000)
-    assert banks==[0,1] and writes==[]
+    assert banks==[] and writes==[]
     banks.clear(); writes.clear(); m.uc.mem_write(0xb8000,b'A')
     m.run('refresh',limit=10000000)
-    assert banks==[0,1] and 0 < sum(writes) < 2000*23*4*2
+    assert banks==[0,1] and sum(writes)==23*4*2
 
 
 def test_open_prompt_does_not_add_idle_timer_pixel_writes(vesa_driver):

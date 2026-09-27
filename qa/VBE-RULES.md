@@ -21,6 +21,12 @@ The bounded bitmap store is 1280 bytes plus a 10-byte validity map. Character
 writes replace only the affected bitmap cells; source buffers need not stay live.
 An unchanged prompt is not redrawn on every timer tick.
 
+While the console is active, INT 10h/AH=0Bh follows text-mode semantics:
+BH=0 changes the border using the selected palette entry, and BH=1 updates
+the BIOS color-select flag without remapping text colors. MS-DOS `CLS` uses
+this legacy CGA interface; forwarding it to a VBE graphics BIOS can otherwise
+change the status row's colors. The application's palette remains intact.
+
 `VESA /M:hex` selects a BIOS-provided physical mode, for example 104h for
 1024x768 or 106h for 1280x1024. Selecting a larger surface alone retains the
 logical text geometry. The viewport is centered,
@@ -111,12 +117,27 @@ deletion while a font read is in progress. Interrupts are masked only during
 the bounded text snapshot/copy-back operations, not during rasterization
 or XMS/EMS calls. The shadow is 8000 bytes and the banked snapshot is 8192 bytes.
 
+Banked consoles keep the first VGA 8x16 font block in plane two of the text
+bank, initialized from the ROM font. Ordinary linear B800 writes use only
+plane zero so they cannot overwrite it. Programs such as MSBACKUP can update
+this block directly and restore odd/even text addressing. Drawing temporarily
+selects linear plane addressing and then restores the application's registers.
+Refresh waits while a font downloader has temporarily unmapped B800.
+
+Application-defined glyphs remain single-byte symbols through classification
+and keyboard boundary queries. Their bitmaps fill the complete physical cell;
+unchanged characters retain the configured console font. Font changes invalidate
+only affected cached glyphs and cells, including software mouse cursors. The
+4 KiB font copy is held in XMS/EMS and compared using the existing scratch buffer;
+only a 256-byte glyph flag table is added to conventional data. A keyboard query
+uses the still-mapped B800 page while that scratch buffer is in use.
+
 HH20.FNT is loaded before mode installation into XMS, or EMS 4.0 using its
 mapping-preserving move-region service. The resident cache holds 16 packed
 glyphs (1120 bitmap bytes plus 64 bytes of keys/validity). Simplified and
 traditional slot maps share deduplicated glyphs in the external allocation.
-An additional 32 KiB in that same allocation preserves all text pages across
-font/row changes that require a physical mode switch. No DOS allocation occurs
+An additional 36 KiB in that same allocation holds the downloaded font and
+preserves all text pages across font/row changes that require a physical mode switch. No DOS allocation occurs
 during those transitions.
 The loader closes its file and releases its allocation on installation failure.
 No full framebuffer or font copy occupies conventional memory. Font lookup

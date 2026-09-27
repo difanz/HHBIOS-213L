@@ -3,7 +3,7 @@
 #define HH_VESA_H
 typedef unsigned char u8;
 typedef unsigned short u16;
-#if defined(VESA_HOST) && !defined(__WATCOMC__)
+#if defined(VESA_HOST) && !defined(__WATCOMC__) && !defined(__BORLANDC__)
 typedef unsigned int u32;
 #else
 typedef unsigned long u32;
@@ -69,12 +69,15 @@ extern u8 CALL active, busy, policy, hanzi, traditional;
 extern u16 CALL shadow[TEXT_COLS*MAX_TEXT_ROWS];
 extern u16 CALL frame_alias_offset;
 void CALL font_get(u16 code, u16 *out);
+void CALL font_seed(void);
 u16 CALL font_open(void);
 void CALL font_close(void);
 u16 CALL font_text(u16 saving);
 extern u16 CALL font_kind, font_kb, font_fault;
 void CALL bios(struct registers *r);
 void CALL refresh(void);
+u16 CALL text_ready(void);
+void CALL scroll_pixels(u16 first, u16 last, u16 count, u16 down);
 void CALL invalidate(void);
 void CALL boundary(struct registers *r);
 u16 CALL aperture(void);
