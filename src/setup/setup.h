@@ -1,37 +1,88 @@
 /* Setup policy is ordinary C++98/C89, independent of DOS and Turbo Vision. */
-#ifndef HH_SETUP_H
-#define HH_SETUP_H
+#ifndef HHBIOS_SRC_SETUP_SETUP_H_
+#define HHBIOS_SRC_SETUP_SETUP_H_
 #include <stdio.h>
 
-enum { FontXms, FontEms, FontLow, FontCount };
-enum { VideoVga, Video102, Video104, Video106, VideoEga, VideoHga, VideoCga, VideoCount };
-enum { ImePinyin=1, ImeShouwei=2, ImeTelegraph=4, ImeWubi=8 };
-enum { AdapterUnknown, AdapterMda, AdapterCga, AdapterEga, AdapterVga };
-enum { FileRead5, FileRead4, FileRead2, FileCkbd, FileVga, FileVesa,
-       FileEga, FileHga, FileCga, FileHzk, FileFont20, FilePy, FileSw,
-       FileDb, FileWbx, FileCount };
-enum { BatchSize=4096, IniSize=8192 };
-struct Machine {
-    unsigned dos_major, dos_minor, conventional_kb, free_kb, umb_kb, cpu;
-    unsigned xms_version, xms_largest, xms_total;
-    unsigned ems_version, ems_pages, ems_frame, dpmi, adapter;
-    unsigned vbe_version, modes, loaded;
-    unsigned alloc_strategy, umb_link;
+enum { kFontXms, kFontEms, kFontLow, kFontCount };
+enum {
+  kVideoVga,
+  kVideo102,
+  kVideo104,
+  kVideo106,
+  kVideoEga,
+  kVideoHga,
+  kVideoCga,
+  kVideoCount
 };
-struct Files { unsigned long size[FileCount]; };
-struct Choices { unsigned font, low, video, ime, paired; };
-extern const char * const file_names[FileCount];
-extern const char * const font_names[FontCount];
-extern const char * const video_names[VideoCount];
-extern const char * const video_commands[VideoCount];
-void probe_machine(Machine *m);
-void scan_files(Files *f);
-int safe_directory(const char *path);
-void recommend(const Machine *m, const Files *f, Choices *c);
-const char *validate(const Machine *m, const Files *f, const Choices *c);
-int make_batch(const char *path, const Choices *c, char *out);
+enum { kImePinyin = 1, kImeShouwei = 2, kImeTelegraph = 4, kImeWubi = 8 };
+enum { kAdapterUnknown, kAdapterMda, kAdapterCga, kAdapterEga, kAdapterVga };
+enum {
+  kFileRead5,
+  kFileRead4,
+  kFileRead2,
+  kFileCkbd,
+  kFileVga,
+  kFileVesa,
+  kFileEga,
+  kFileHga,
+  kFileCga,
+  kFileHzk,
+  kFileFont20,
+  kFilePy,
+  kFileSw,
+  kFileDb,
+  kFileWbx,
+  kFileCount
+};
+enum { kBatchSize = 4096, kIniSize = 8192 };
+struct MachineCapabilities {
+  unsigned dos_major;
+  unsigned dos_minor;
+  unsigned conventional_kb;
+  unsigned free_kb;
+  unsigned umb_kb;
+  unsigned cpu;
+  unsigned xms_version;
+  unsigned xms_largest;
+  unsigned xms_total;
+  unsigned ems_version;
+  unsigned ems_pages;
+  unsigned ems_frame;
+  unsigned dpmi;
+  unsigned adapter;
+  unsigned vbe_version;
+  unsigned modes;
+  unsigned loaded;
+  unsigned alloc_strategy;
+  unsigned umb_link;
+};
+struct InstallationFiles {
+  unsigned long size[kFileCount];
+};
+struct SetupChoices {
+  unsigned font;
+  unsigned low;
+  unsigned video;
+  unsigned ime;
+  unsigned paired;
+};
+extern const char* const kFileNames[kFileCount];
+extern const char* const kFontNames[kFontCount];
+extern const char* const kVideoNames[kVideoCount];
+extern const char* const kVideoCommands[kVideoCount];
+void ProbeMachine(MachineCapabilities* machine);
+void ScanFiles(InstallationFiles* files);
+int IsSafeDirectory(const char* path);
+void RecommendConfiguration(const MachineCapabilities* machine,
+                            const InstallationFiles* files,
+                            SetupChoices* choices);
+const char* ValidateConfiguration(const MachineCapabilities* machine,
+                                  const InstallationFiles* files,
+                                  const SetupChoices* choices);
+int MakeBatch(const char* path, const SetupChoices* choices, char* out);
 /* Preserve all original INI lines except the three IME switches. */
-int make_ini(const char *original, const Choices *c, char *out);
-const char *save_pair(const char *batch, const char *ini);
-void report_machine(FILE *out, const Machine *m, const Files *f);
-#endif
+int MakeIni(const char* original, const SetupChoices* choices, char* out);
+const char* SaveConfigurationFiles(const char* batch, const char* ini);
+void ReportMachine(FILE* out, const MachineCapabilities* machine,
+                   const InstallationFiles* files);
+#endif  // HHBIOS_SRC_SETUP_SETUP_H_

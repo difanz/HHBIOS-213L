@@ -1,0 +1,12 @@
+# Google layout for C89/C++98 DOS sources as well as host probes.
+# Assembly ABI names and Turbo Vision overrides keep their existing spelling.
+BasedOnStyle: Google
+ColumnLimit: 80
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+InsertBraces: true
+AttributeMacros:
+  - CALL
+  - FAR
+  - far

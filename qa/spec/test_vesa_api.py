@@ -79,7 +79,7 @@ def layout_library(source_dir,tmp_path_factory):
     p=subprocess.run(['cc','-shared','-fPIC','-Wall','-Wextra','-Werror','-DVESA_HOST',str(source_dir/'vesa.c'),'-o',str(out)],capture_output=True,text=True)
     assert p.returncode==0,p.stdout+p.stderr
     lib=ctypes.CDLL(str(out))
-    for fn in (lib.vesa_console_layout,lib.vesa_layout):
+    for fn in (lib.DecodeConsoleModeInfo,lib.DecodeVbeModeInfo):
         fn.argtypes=[ctypes.POINTER(Surface),ctypes.c_void_p,ctypes.c_uint16,ctypes.c_uint16]
         fn.restype=ctypes.c_int
     return lib
@@ -87,7 +87,7 @@ def layout_library(source_dir,tmp_path_factory):
 
 @pytest.fixture
 def layout(layout_library):
-    return layout_library.vesa_console_layout
+    return layout_library.DecodeConsoleModeInfo
 
 
 @pytest.mark.parametrize('version,attributes',[(0x100,0x1b),(0x101,0x1b),(0x102,0x19),(0x200,0x19),(0x300,0x19)])
@@ -128,11 +128,11 @@ def test_geometry_and_pixel_format_are_decoded_independently_of_console(layout_l
     if masks: info[31:37]=bytes(masks)
     struct.pack_into('<I',info,40,0xe0000000)
     s=Surface(); buf=ctypes.create_string_buffer(bytes(info))
-    assert layout_library.vesa_layout(ctypes.byref(s),buf,0x200,0x321)==1
+    assert layout_library.DecodeVbeModeInfo(ctypes.byref(s),buf,0x200,0x321)==1
     assert (s.width,s.height,s.pitch,s.bpp,s.format,s.physical)==(width,height,pitch,bpp,model,0xe0000000)
     if masks: assert (s.red_size,s.red_pos,s.green_size,s.green_pos,s.blue_size,s.blue_pos)==masks
     # Describing a format must not select a renderer that cannot draw it.
-    assert layout_library.vesa_console_layout(ctypes.byref(s),buf,0x200,0x321)==int((width,height,bpp)==(1024,768,4))
+    assert layout_library.DecodeConsoleModeInfo(ctypes.byref(s),buf,0x200,0x321)==int((width,height,bpp)==(1024,768,4))
 
 
 @pytest.mark.parametrize('failure',[None,'old-dos',0x5800,0x5802,'link','strategy',0x48])

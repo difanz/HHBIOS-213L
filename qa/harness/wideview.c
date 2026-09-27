@@ -17,7 +17,7 @@ typedef char require_u32[sizeof(u32)==4 ? 1 : -1];
 static u8 controller[512],info[256],glyphs[8192],line[16384];
 static u16 cells[510],cfg[6],geometry[5],previous,bank=0xffff;
 static u32 base,window_bytes,gran_bytes,stats[4];
-static struct surface surface;
+static struct VbeSurface surface;
 static u8 colors[16][4],dac[16][4],vga_dac[48];
 static const u8 rgb[16][3]={
     {0,0,0},{0,0,170},{0,170,0},{0,170,170},{170,0,0},{170,0,170},
@@ -41,7 +41,7 @@ static int discover(void)
         r.x.ax=0x4f01; r.x.cx=mode; r.x.es=FP_SEG(info); r.x.di=FP_OFF(info); intr(0x10,&r);
         if (r.x.ax!=0x004f || word(info+18)!=cfg[0] || word(info+20)!=cfg[1] || info[25]!=cfg[5]) continue;
         if (word(info)&0x40 || (cfg[5]==4 && word(info)&0x20)) continue;
-        if (!vesa_layout(&surface,info,version,mode)) continue;
+        if (!DecodeVbeModeInfo(&surface,info,version,mode)) continue;
         if (surface.pitch>sizeof(line) || !(info[2+surface.window]&1)) continue;
         window_bytes=(u32)surface.window_kb*1024; gran_bytes=(u32)surface.granularity_kb*1024;
         return 1;
