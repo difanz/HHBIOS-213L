@@ -22,6 +22,10 @@ MUTANTS = [
     ('inconsistent-peek-key', 'KEYEDIT.INC', b'CALL S_EPEEK', b'NOP', 'trail_delete_has_same_value'),
     ('discard-preupdate-poll', 'KEYEDIT.INC', b'JC EV_DONE', b'JC EV_CANCEL',
      'peek_before_application_update'),
+    ('wrong-ems-page', 'READ4.ASM', b'MOV\tCL,9', b'MOV\tCL,8',
+     'ems_glyph_page_and_row_boundaries'),
+    ('oversized-ems-glyph-copy', 'READ4.ASM', b'MOV\tCX,10H', b'MOV\tCX,20H',
+     'ems_glyph_page_and_row_boundaries'),
 ]
 
 

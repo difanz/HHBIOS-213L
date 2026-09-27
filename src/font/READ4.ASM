@@ -61,16 +61,13 @@ L_2:
 		MUL	DH			;区号*94
 		XOR	DH,DH
 		ADD	AX,DX			;+位号
-		SHL	AX,1
 
-		XOR	BX,BX
-		MOV	CX,6
-L_10:
-		SHL	AX,1
-		RCL	BX,1
-		LOOP	L_10
-		SHR	AX,1
-		SHR	AX,1
+		MOV	BX,AX
+		MOV	CL,9
+		SHR	BX,CL			; 512 glyphs per EMS page
+		MOV	CL,5
+		SHL	AX,CL
+		AND	AX,3FFFH		; byte offset within the 16 KiB page
 		MOV	SI,AX			;偏移,BX=逻辑页号
 
 		CMP	BX,BP			;判字库最后页号?
@@ -88,9 +85,9 @@ L_10:
 		OR	AH,AH
 		JNZ	L_MAPRESTORE
 		MOV	DS,D_SEG		;物理窗口段
-		MOV	CX,20H
+		MOV	CX,10H
 		XOR	DI,DI			;存放地址
-		REP	MOVSB			;传送
+		REP	MOVSW			;传送
 L_MAPRESTORE:
 		MOV	AH,48H			; restore even if the font map failed
 		INT	67H

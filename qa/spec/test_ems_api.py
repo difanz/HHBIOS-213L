@@ -31,7 +31,14 @@ def ems_binary(assembler, source_dir, tmp_path_factory):
     return raw, symbols
 
 
-def exercise(binary, entry, failure):
+def font_glyph(handle, index):
+    """Distinct words expose wrong pages, offsets, fonts and copy lengths."""
+    return struct.pack('<16H', *(index ^ (handle << 12) ^ (word * 0x421)
+                                for word in range(16)))
+
+
+def exercise(binary, entry, failure, glyph_index=0, traditional=False,
+             last_page=15, flags=0x202):
     raw, symbols = binary
     uc = Uc(UC_ARCH_X86, UC_MODE_16)
     uc.mem_map(0, 0x100000)
@@ -41,8 +48,11 @@ def exercise(binary, entry, failure):
     uc.mem_write(frame, caller_pages)
     previous_glyph = bytes([0x55])*32
     uc.mem_write(code, previous_glyph)
-    glyph = bytes(range(32))
-    for name, value in dict(D_HJ=11, D_HF=12, D_PMJ=15, D_PMF=15, D_SEG=frame//16).items():
+    guard = bytes([0xa5])*32
+    uc.mem_write(code+32, guard)
+    glyph = font_glyph(12 if traditional else 11, glyph_index)
+    for name, value in dict(D_HJ=11, D_HF=12, D_PMJ=last_page,
+                            D_PMF=last_page, D_SEG=frame//16).items():
         uc.mem_write(code+symbols[name], struct.pack('<H', value))
     state = dict(saved=None, allocated=False, opened=False, calls=[])
 
@@ -71,6 +81,8 @@ def exercise(binary, entry, failure):
                 pytest.fail(f'unexpected DOS function {ah:02x}')
             return
         assert number == 0x67
+        if entry == 'INT_7F':
+            assert not get('EFLAGS') & 0x200, 'EMS mapping must be atomic'
         failed = (failure == 'allocate' and ah == 0x43 or
                   failure == 'save' and ah == 0x47 or
                   failure == f'map{al}' and ah == 0x44)
@@ -85,7 +97,10 @@ def exercise(binary, entry, failure):
             assert get('DX') in (11, 12), 'must use the font handle, not the caller handle'
             state['saved'] = bytes(uc.mem_read(frame, 65536))
         elif ah == 0x44:
-            uc.mem_write(frame+al*16384, glyph + bytes(16384-32))
+            handle, page = get('DX'), get('BX')
+            assert handle in (11, 12) and 0 <= page < 16
+            uc.mem_write(frame+al*16384, b''.join(
+                font_glyph(handle, page*512+i) for i in range(512)))
         elif ah == 0x48:
             assert state['saved'] is not None
             uc.mem_write(frame, state['saved'])
@@ -97,21 +112,29 @@ def exercise(binary, entry, failure):
             pytest.fail(f'unexpected EMS function {ah:02x}')
 
     uc.hook_add(UC_HOOK_INTR, interrupt)
-    for name, value in dict(CS=code//16, DS=code//16, ES=code//16,
-                            SS=stack//16, SP=0xff00, EFLAGS=0x202,
-                            AX=0x100 if entry == 'INT_7F' else ord('J'), DX=0xa1a1).items():
+    hanzi = ((glyph_index//94+0xa1) << 8) | (glyph_index%94+0xa1)
+    preserved = dict(AX=0 if traditional else 0x100, BX=0x1234, CX=0x2345,
+                     SI=0x3456, DI=0x4567, BP=0x5678, DS=0x7000, ES=0x6000)
+    inputs = preserved if entry == 'INT_7F' else dict(AX=ord('J'), DS=code//16, ES=code//16)
+    for name, value in dict(CS=code//16, SS=stack//16, SP=0xff00,
+                            EFLAGS=flags, DX=hanzi, **inputs).items():
         put(name, value)
-    uc.mem_write(stack+0xff00, struct.pack('<3H', 0xff00, code//16, 0x202))
+    uc.mem_write(stack+0xff00, struct.pack('<3H', 0xff00, code//16, flags))
     uc.emu_start(code+symbols[entry], code+0xff00, count=10000)
     assert get('IP') == 0xff00
     assert get('SP') == 0xff00 + (6 if entry == 'INT_7F' else 2)
-    assert get('DS') == code//16
-    assert get('EFLAGS') & 0x200, 'interrupts left disabled'
     assert bytes(uc.mem_read(frame, 65536)) == caller_pages
     assert state['saved'] is None
     if entry == 'INT_7F':
-        assert bytes(uc.mem_read(code, 32)) == (previous_glyph if failure else glyph)
+        assert {name: get(name) for name in preserved} == preserved
+        assert get('DX') == code//16
+        assert get('EFLAGS') & 0x600 == flags & 0x600, 'caller IF/DF changed'
+        no_glyph = failure or glyph_index//512 > last_page
+        assert bytes(uc.mem_read(code, 32)) == (previous_glyph if no_glyph else glyph)
+        assert bytes(uc.mem_read(code+32, 32)) == guard, 'glyph buffer overrun'
     else:
+        assert get('DS') == code//16
+        assert get('EFLAGS') & 0x200, 'interrupts left disabled'
         assert bool(get('EFLAGS') & 1) == bool(failure)
         assert state['allocated'] == (failure is None)
         assert not state['opened']
@@ -119,10 +142,29 @@ def exercise(binary, entry, failure):
 
 
 @pytest.mark.parametrize('failure', [None, 'save', 'map0'])
-def test_ems_glyph_restores_caller_on_failure(ems_binary, failure):
-    state = exercise(ems_binary, 'INT_7F', failure)
+@pytest.mark.parametrize('glyph_index', [0, 511, 512, 8177])
+def test_ems_glyph_restores_caller_on_failure(ems_binary, failure, glyph_index):
+    state = exercise(ems_binary, 'INT_7F', failure, glyph_index)
     if failure == 'save':
         assert state['calls'] == [(0x67, 0x47)]
+
+
+@pytest.mark.parametrize('traditional', [False, True])
+@pytest.mark.parametrize('glyph_index', sorted(
+    {0, 93, 94, 8177} | {page*512+edge for page in range(1, 16) for edge in (-1, 0)}))
+def test_ems_glyph_page_and_row_boundaries(ems_binary, glyph_index, traditional):
+    exercise(ems_binary, 'INT_7F', None, glyph_index, traditional)
+
+
+@pytest.mark.parametrize('flags', [0x002, 0x202, 0x602])
+def test_ems_glyph_preserves_caller_flags(ems_binary, flags):
+    exercise(ems_binary, 'INT_7F', None, 511, flags=flags)
+
+
+@pytest.mark.parametrize('last_page,glyph_index', [(0, 512), (7, 4096), (15, 8192)])
+def test_ems_glyph_beyond_last_page_keeps_previous_buffer(ems_binary, last_page, glyph_index):
+    state = exercise(ems_binary, 'INT_7F', None, glyph_index, last_page=last_page)
+    assert state['calls'] == []
 
 
 @pytest.mark.parametrize('failure', [None, 'allocate', 'save', 'map0', 'map1'])
