@@ -558,8 +558,8 @@ def test_msdos_distribution_tables_and_unload(dosbox_binary, memory_build,
 
 @pytest.mark.dos
 @pytest.mark.parametrize('local', [False, True])
-@pytest.mark.parametrize('phrase', [False, True])
-def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, local, phrase):
+@pytest.mark.parametrize('mode', ['type', 'phrase', 'pinyin'])
+def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, local, mode):
     for path in memory_build.glob('*.COM'):
         shutil.copy2(path, tmp_path)
     for name in ('HZK16', 'HH20.FNT'):
@@ -569,14 +569,18 @@ def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, l
     assert result.returncode == 0, result.stdout+result.stderr
     keyboard_config(tmp_path)
     config = (tmp_path/'213L.INI').read_bytes().splitlines()
-    config[29 if phrase else 30] = b'59'
-    if phrase:
+    config[30 if mode == 'type' else 29] = b'59'
+    if mode == 'phrase':
         config[28] = b'31'  # mutable phrase extension space
     (tmp_path/'213L.INI').write_bytes(b'\r\n'.join(config)+b'\r\n')
     codes = [(i % 26+1) | ((i//26 % 26+1) << 5) | ((i//676 % 26+1) << 10)
              for i in range(6768)]
     (tmp_path/'SWMB').write_bytes('首尾'.encode('gb2312')+struct.pack('<6768H', *codes))
-    if phrase:
+    if mode == 'pinyin':
+        # zhong -> vs, shuang' -> ux, ang -> ag; three distinct GB2312 results.
+        codes = [0x8276, 0x8315, 0x80e1] + [0x8042]*6765
+        (tmp_path/'PYMB').write_bytes(b'\xb0\xa1'*286+struct.pack('<6768H', *codes))
+    if mode == 'phrase':
         codes = [0x8041, 0x8023] + [0x8042]*6766
         (tmp_path/'PYMB').write_bytes(b'\xb0\xa1'*286+struct.pack('<6768H', *codes))
         dictionary = bytearray(16)
@@ -588,9 +592,13 @@ def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, l
         (tmp_path/'SPCZ.DAT').write_bytes(dictionary)
     (tmp_path/'SCREEN.KEY').touch()
     files = run_dos(dosbox_binary, tmp_path, ['READ5', 'CKBD'+(' /C' if local else ''),
-                    'VESA', 'IMETABLE '+('phrase' if phrase else 'type'), 'MEMORY off'], physical_keys=True,
+                    'VESA', 'IMETABLE '+mode, 'MEMORY off'], physical_keys=True,
                     settings='\n[dosbox]\nmachine=svga_s3\n')
     # First candidates for a, a after forward/back paging, ab, and abc.
-    expected = b'\xb0\xa1\xb0\xa2' if phrase else b''.join(
-        bytes([0xb0+index//94, 0xa1+index % 94]) for index in (0, 0, 26, 1378))
+    expected = {
+        'type': b''.join(bytes([0xb0+index//94, 0xa1+index % 94])
+                         for index in (0, 0, 26, 1378)),
+        'phrase': b'\xb0\xa1\xb0\xa2',
+        'pinyin': b'\xb0\xa1\xb0\xa2\xb0\xa3',
+    }[mode]
     assert files['TYPED.BIN'].read_bytes() == expected

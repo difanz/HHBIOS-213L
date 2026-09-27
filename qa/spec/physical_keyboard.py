@@ -179,6 +179,8 @@ class PhysicalKeyboard:
                      0x21: 'f', 0x2d: 'x', 0x22: 'g', 0x12: 'e',
                      0x18: 'o', 0x20: 'd', 0x0f: 'Tab',
                      0x1e: 'a', 0x30: 'b', 0x2e: 'c', 0x39: 'space',
+                     0x2c: 'z', 0x23: 'h', 0x31: 'n', 0x1f: 's',
+                     0x16: 'u', 0x28: 'apostrophe',
                      0x1a: 'bracketleft', 0x1b: 'bracketright'}
             name = names[key >> 8]
             alt = key in (0x2100, 0x2d00, 0x1800)

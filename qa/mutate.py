@@ -1,4 +1,4 @@
-"""Deliberate production-assembly mutants. Surviving or invalid mutants fail.
+"""Deliberate production-code mutants. Surviving or invalid mutants fail.
 
 Run from the repo root with the same Python/JWasm as the ordinary suite.
 This is a small, reviewed fault model, not a percentage coverage claim.
@@ -26,6 +26,10 @@ MUTANTS = [
      'ems_glyph_page_and_row_boundaries'),
     ('oversized-ems-glyph-copy', 'READ4.ASM', b'MOV\tCX,10H', b'MOV\tCX,20H',
      'ems_glyph_page_and_row_boundaries'),
+    ('premature-pinyin-initial', 'pinyin.c', b'length > 2 &&', b'length >= 2 &&',
+     'query_and_phrase_spelling'),
+    ('pinyin-clobbers-ax', 'pinyin.inc', b'ss:[bp+14],ax', b'ss:[bp+16],ax',
+     'query_and_phrase_spelling'),
 ]
 
 

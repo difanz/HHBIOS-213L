@@ -23,14 +23,19 @@ trap 'rm -rf "$work"' EXIT
     common_sources=("${@:5}")
     if ((${#common_sources[@]} == 0)); then
         case "$(basename "$input" | tr '[:lower:]' '[:upper:]')" in
-            CKBD.ASM|KEYEDIT.ASM) common_sources=(text_edit);;
+            CKBD.ASM) common_sources=(text_edit pinyin);;
+            KEYEDIT.ASM) common_sources=(text_edit);;
             *) common_sources=(frame);;
         esac
     fi
     for common in "${common_sources[@]}"; do
-        [[ $common == frame || $common == text_edit ]] || exit 2
+        case "$common" in
+            frame|text_edit) c_source="$source_dir/common/$common.c";;
+            pinyin) c_source="$source_dir/input/pinyin.c";;
+            *) exit 2;;
+        esac
         wcc "${common_c_flags[@]}" \
-            -nt=COMMON_TEXT -nc=COMMON -fo="$common.obj" "$source_dir/common/$common.c"
+            -nt=COMMON_TEXT -nc=COMMON -fo="$common.obj" "$c_source"
         objects+=",$common.obj"
     done
     wlink option quiet option nodefaultlibs format dos com option map=module.map \

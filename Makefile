@@ -64,6 +64,8 @@ $(BUILD)/%.COM: %.ASM $(INCS) | $(BUILD)
 $(addprefix $(BUILD)/,VGA.COM EGA.COM HGA.COM CKBD.COM): $(BUILD)/%.COM: %.ASM $(INCS) $(COMMON_C) tools/build-module.sh tools/source-tree.sh tools/cpu-target.sh $(BUILD)/.cpu-$(CPU) | $(BUILD)
 	JWASM="$(JWASM)" bash tools/build-module.sh "$<" "$@" "$(SRC)" "$(CPU)"
 
+$(BUILD)/CKBD.COM: $(SRC)/input/pinyin.c $(SRC)/input/pinyin.h
+
 # Confirm every assembly module produced a non-empty COM.
 check: all
 	@bash tools/check-coms.sh "$(SRC)" "$(BUILD)"

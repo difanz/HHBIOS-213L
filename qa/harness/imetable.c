@@ -7,20 +7,36 @@
 
 #include "hostshot.h"
 
-static int TypeCandidates(int phrase) {
-  /* Select shape-code input through CKBD's documented function-key API. */
+enum InputMode { kShape, kPhrase, kPinyin };
+
+static int TypeCandidates(enum InputMode mode) {
+  /* Select the input method through CKBD's function-key API. */
   static const unsigned keys[] = {0x1e61, 0x3920, 0x1e61, 0x1b5d, 0x1a5b,
                                   0x3920, 0x1e61, 0x3062, 0x3920, 0x1e61,
                                   0x3062, 0x2e63, 0x3920};
   static const unsigned phrase_keys[] = {0x1e61, 0x3062, 0x2e63, 0x1e61};
-  const unsigned* sequence = phrase ? phrase_keys : keys;
-  unsigned count = phrase ? sizeof(phrase_keys) / sizeof(phrase_keys[0])
-                          : sizeof(keys) / sizeof(keys[0]);
+  /* zhonx, Backspace, g, Space; shuang', Space; ang, Space. */
+  static const unsigned pinyin_keys[] = {
+      0x2c7a, 0x2368, 0x186f, 0x316e, 0x2d78, 0x0e08, 0x2267,
+      0x3920, 0x1f73, 0x2368, 0x1675, 0x1e61, 0x316e, 0x2267,
+      0x2827, 0x3920, 0x1e61, 0x316e, 0x2267, 0x3920};
+  const unsigned* sequence = keys;
+  unsigned count = sizeof(keys) / sizeof(keys[0]);
+  unsigned function_key = 0x112;
   union REGPACK registers;
   unsigned i;
   FILE* output = fopen("TYPED.BIN", "wb");
   if (!output) {
     return 1;
+  }
+  if (mode == kPhrase) {
+    sequence = phrase_keys;
+    count = sizeof(phrase_keys) / sizeof(phrase_keys[0]);
+    function_key = 0x114;
+  } else if (mode == kPinyin) {
+    sequence = pinyin_keys;
+    count = sizeof(pinyin_keys) / sizeof(pinyin_keys[0]);
+    function_key = 0x113;
   }
   memset(&registers, 0, sizeof(registers));
   registers.x.ax = 0x2f00;
@@ -29,8 +45,8 @@ static int TypeCandidates(int phrase) {
     fclose(output);
     return 2;
   }
-  registers.x.ax = 0x2100 | *(unsigned char __far*)MK_FP(
-                                registers.x.bp, phrase ? 0x114 : 0x112);
+  registers.x.ax =
+      0x2100 | *(unsigned char __far*)MK_FP(registers.x.bp, function_key);
   intr(0x16, &registers);
   for (i = 0; i < count; ++i) {
     if (hostrequest(sequence[i])) {
@@ -60,10 +76,13 @@ int main(int argc, char** argv) {
   unsigned column;
   FILE* output;
   if (argc == 2 && !strcmp(argv[1], "type")) {
-    return TypeCandidates(0);
+    return TypeCandidates(kShape);
   }
   if (argc == 2 && !strcmp(argv[1], "phrase")) {
-    return TypeCandidates(1);
+    return TypeCandidates(kPhrase);
+  }
+  if (argc == 2 && !strcmp(argv[1], "pinyin")) {
+    return TypeCandidates(kPinyin);
   }
   output = fopen("CODES.BIN", "wb");
   if (!output) {
