@@ -89,7 +89,11 @@ static u8 vbe_mode, allow_mode = 1, logical_mode = 3;
 static u8 counter, period = 2, cursor_on = 1, cursor_visible, blink = 1;
 static u16 cursor_position, cursor_shape = 0x0d0e;
 static u16 prompt[80];
-static u8 prompt_open, prompt_col, prompt_attr = 0x1e;
+/* AH=14h bitmaps are caller-owned: retain their pixels, never their pointer. */
+static u8 prompt_bits[80][16], prompt_bitmap[10];
+static u8 prompt_open, prompt_col, prompt_dirty, prompt_attr = 0x1e;
+u8 CALL prompt_notify;
+static void prompt_draw(void);
 
 static void zero(void *p, u16 n)
 {
@@ -143,7 +147,9 @@ static void show_cursor(void)
 static void repaint(void)
 {
     if (!active) return;
-    hide_cursor(); mouse_erase(); refresh(); mouse_poll(); show_cursor(); mouse_paint();
+    hide_cursor(); mouse_erase(); refresh();
+    if (prompt_dirty) prompt_draw();
+    mouse_poll(); show_cursor(); mouse_paint();
 }
 static u8 suspend(void)
 {
@@ -183,7 +189,10 @@ static int activate(u16 preserve)
     put8(0x89,(bda8(0x89)&0x6f)|(scan_lines==200 ? 0x80 : scan_lines==400 ? 0x10 : 0));
     put8(0x88,(bda8(0x88)&0xf0)|(scan_lines==200 ? 8 : 9));
     put16(0x60, cursor_shape);
-    active = 1; cursor_visible = 0; prompt_open = 0;
+    active = 1; cursor_visible = 0; prompt_dirty = 1;
+    /* CKBD must enter through INT 10h after we release the resident stack. */
+    if (!prompt_open && keyboard_segment && (*PTR(u8,keyboard_segment,0xf4)&2))
+        prompt_notify=1;
     if (resident_bytes) mouse_resume();
     keyboard(); invalidate(); repaint();
     return 1;
@@ -477,7 +486,7 @@ static void state(void)
                     put8(0x49, logical_mode); put8(0x84,last_row);
                     put16(0x85,logical_height); put16(0x4c,page_bytes);
                     put8(0x62,(u8)active_page); put16(0x4e,active_page*page_bytes);
-                    invalidate();
+                    invalidate(); prompt_dirty=1;
                 }
             }
         }
@@ -492,17 +501,24 @@ static void prompt_draw(void)
     if (!begin_draw()) return;
     for (i=0; i<80; ++i) {
         u16 c=prompt[i] & 255, attr=prompt[i] >> 8;
-        if (c>=0xa1 && c<=0xf7 && i<79 && (prompt[i+1] & 255)>=0xa1 && (prompt[i+1] & 255)<=0xfe) {
+        if (!prompt_open) draw(32,0,(text_rows << 8)+i);
+        else if (prompt_bitmap[i/8] & (1 << (i&7)))
+            bitmap(resident_segment,(u16)prompt_bits[i],attr,(text_rows << 8)+i,1);
+        else if (c>=0xa1 && c<=0xf7 && i<79 &&
+            !(prompt_bitmap[(i+1)/8] & (1 << ((i+1)&7))) &&
+            (prompt[i+1] & 255)>=0xa1 && (prompt[i+1] & 255)<=0xfe) {
             draw((c << 8) | (prompt[i+1] & 255), (attr << 8) | (prompt[i+1] >> 8), (text_rows << 8)+i);
             ++i;
         } else draw(c, attr, (text_rows << 8)+i);
     }
     end_draw();
+    prompt_dirty=0;
 }
 static void prompt_clear(void)
 {
     u16 i;
     for (i=0; i<80; ++i) prompt[i]=((u16)prompt_attr << 8) | 32;
+    zero(prompt_bitmap,sizeof(prompt_bitmap));
     prompt_col=0; prompt_open=1;
 }
 
@@ -512,18 +528,20 @@ static void extended(void)
     if (op==0) { prompt_clear(); prompt_draw(); }
     else if (op==1 || op==3) {
         if (!prompt_open) prompt_clear();
-        if (op==3 && (pos & 255)==8) { if (prompt_col) --prompt_col; prompt[prompt_col]=((u16)prompt_attr << 8)|32; }
-        else for (i=0; i<(op==3 ? 1 : request.cx) && prompt_col+i<80; ++i)
+        if (op==3 && (pos & 255)==8) {
+            if (prompt_col) --prompt_col;
+            prompt[prompt_col]=((u16)prompt_attr << 8)|32;
+            prompt_bitmap[prompt_col/8] &= ~(1 << (prompt_col&7));
+        } else for (i=0; i<(op==3 ? 1 : request.cx) && prompt_col+i<80; ++i) {
             prompt[prompt_col+i]=(request.bx & 255)*256+(pos & 255);
+            prompt_bitmap[(prompt_col+i)/8] &= ~(1 << ((prompt_col+i)&7));
+        }
         if (op==3 && (pos & 255)!=8 && prompt_col<79) ++prompt_col;
         prompt_draw();
     } else if (op==2) { if ((pos & 255)<80) prompt_col=(u8)pos; }
     else if (op==4) {
-        if (begin_draw()) {
-            for (i=0; i<80; ++i) draw(32, 0, (text_rows << 8)+i);
-            end_draw();
-        }
         prompt_open=0;
+        prompt_draw();
     } else if (op==5) prompt_attr=(u8)request.bx;
     else if (op==6) {
         request.ax=0x0f12; request.bx=(text_rows << 8)|4; request.cx=(raster_height << 8) | (text_rows+1);
@@ -539,8 +557,17 @@ static void extended(void)
     else if (op==9) {
         if (inside(pos)) { page(active_page)[index(pos)]=(request.bx << 8) | (request.bx >> 8); repaint(); }
     } else if (op==10) {
-        if (request.si<=0xffc0 && (pos & 255)<80)
-            bitmap(request.bp, request.si, request.bx & 255, (text_rows << 8) | (pos & 255));
+        u16 col=pos & 255,j;
+        if (request.si<=0xffc0 && col<80) {
+            if (!prompt_open) prompt_clear();
+            for (i=0;i<4 && col+i<80;++i) {
+                for (j=0;j<16;++j)
+                    prompt_bits[col+i][j]=*PTR(u8,request.bp,request.si+i*16+j);
+                prompt[col+i]=request.bx << 8;
+                prompt_bitmap[(col+i)/8] |= 1 << ((col+i)&7);
+            }
+            prompt_draw();
+        }
     } else if (op==11) { blink=(u8)(request.bx >> 8); }
     else if (op==12) { request.bx=resident_segment; request.ax=(u16)shadow; }
     else if (op==13) { period=(u8)(request.bx >> 8); if (!period) period=1; }
@@ -731,7 +758,7 @@ u16 CALL dispatch(void)
         repaint(); break;
     }
     case 0x14: extended(); break;
-    case 0x15: repaint(); break;
+    case 0x15: prompt_dirty=1; repaint(); break;
     case 0x16: {
         u8 bits[32]; glyph(request.dx, bits);
         for (i=0; i<(request.dx >> 8 ? 32 : 16); ++i) *PTR(u8, request.bp, request.bx+i)=bits[i];
@@ -743,8 +770,8 @@ u16 CALL dispatch(void)
         else if (lo==4 || lo==5) allow_mode=(u8)(lo==5);
         else if (lo==10 || lo==11) { direct=(u8)(lo==11); keyboard(); }
         else if (lo==12) { policy=(u8)p; invalidate(); }
-        else if (lo==17 || lo==18) { traditional=(u8)(lo==18); invalidate(); }
-        else if (lo==19 || lo==23) invalidate();
+        else if (lo==17 || lo==18) { traditional=(u8)(lo==18); invalidate(); prompt_dirty=1; }
+        else if (lo==19 || lo==23) { invalidate(); prompt_dirty=1; }
         repaint(); break;
     default: return 0;
     }
@@ -758,6 +785,7 @@ void CALL tick(void)
     counter=0;
     hide_cursor(); mouse_erase(); refresh(); mouse_poll();
     if (!active) { keyboard(); return; }
+    if (prompt_dirty) prompt_draw();
     /* Keep blink phase independent of dirty text. */
     if (!blink || (bda8(0x6c) & 8)) show_cursor();
     mouse_paint();

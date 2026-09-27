@@ -9,6 +9,7 @@ import pytest
 from qa.spec.dos import ROOT, digest, run_dos
 from qa.spec.pixels import native_rows
 from qa.spec.test_dos_display import guest_build
+from qa.spec.test_application import keyboard_config
 
 pytestmark = pytest.mark.application
 FRAME_SIZE = 8280
@@ -52,11 +53,12 @@ def shell_dir(pytestconfig, shellcap_build, tmp_path):
 def exercise(binary, directory, build, display, mode, actions, clicks):
     commands = []
     if display == 'vesa':
-        for name in ('READ5.COM', 'VESA.COM'):
+        for name in ('READ5.COM', 'CKBD.COM', 'VESA.COM'):
             shutil.copy2(build/name, directory)
         for name in ('HZK16', 'HH20.FNT'):
             shutil.copy2(ROOT/'fonts'/name, directory)
-        commands = ['READ5', 'VESA']
+        keyboard_config(directory)
+        commands = ['READ5', 'CKBD /E', 'VESA']
     (directory/'ACTIONS.BIN').write_bytes(struct.pack('<'+'H'*len(actions), *actions))
     (directory/'MOUSE.JSN').write_text(json.dumps(clicks)+'\n')
     files = run_dos(binary, directory, commands+['SHELLCAP DOSSHELL.EXE /T:'+mode],
@@ -100,9 +102,10 @@ def screen_pixels(directory, frame, rows):
     rgb = subprocess.check_output(['convert', str(directory/shot['file']), '-depth', '8', 'rgb:-'])
     assert len(rgb) == width*height*3
 
-    def glyph(cell, code, half=0):
+    def glyph(cell, code, half=0, expected=None):
         row, col = divmod(cell, 80)
-        expected = native_rows(code, half)[:ch]
+        if expected is None:
+            expected = native_rows(code, half)[:ch]
         ink, paper = set(), set()
         for y, bits in enumerate(expected):
             for x in range(10):
@@ -125,6 +128,23 @@ def screen_pixels(directory, frame, rows):
             glyph(row*80+col, 0xb3)
     for col, code in ((3, 0xc0), (4, 0xc4)):
         glyph(7*80+col, code)
+    # The system IME row is separate from the application's last text row.
+    for col, char in ((0, '英'), (2, '文')):
+        code = int.from_bytes(char.encode('gb2312'), 'big')
+        for half in (0, 1):
+            glyph(rows*80+col+half, code, half)
+    for col, code in enumerate(b'2.13L', 10):
+        glyph(rows*80+col, code)
+    # CKBD's original four-cell bitmap, written before its version string.
+    logo = bytes([
+        255,128,128,159,177,129,131,134,140,152,176,177,191,128,128,255,
+        255,0,0,0,128,128,0,0,0,0,0,152,152,0,0,255,
+        255,0,0,48,113,240,48,48,48,48,48,49,252,0,0,255,
+        255,1,1,249,141,13,13,121,13,13,13,141,249,1,1,255])
+    for col in range(4):
+        expected = tuple(sum(((logo[col*16+y*16//20] >> (7-x*8//10)) & 1)
+                             << (9-x) for x in range(10)) for y in range(20))
+        glyph(rows*80+76+col, 0, expected=(expected+(0,)*3)[:ch])
 
 
 @pytest.mark.parametrize('display', ['native', 'vesa'])

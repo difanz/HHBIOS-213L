@@ -171,7 +171,7 @@ def test_vesa_umb_allocator_restores_dos_state(vesa_driver,failure,initial):
 
 class Driver:
     """Linked production code; only the external BIOS is substituted."""
-    def __init__(self, image, bios):
+    def __init__(self, image, bios, keyboard=None):
         raw,self.symbols=image
         self.uc=Uc(UC_ARCH_X86,UC_MODE_16); self.uc.mem_map(0,0x100000)
         self.uc.mem_write(0x10100,raw)
@@ -179,6 +179,9 @@ class Driver:
         self.write('old10',struct.pack('<HH',0xf000,0x1000))
         self.uc.mem_write(0x1f000,b'\xcd\xf1\xcf')
         def interrupt(uc,number,_):
+            if number == 0x16 and keyboard is not None:
+                keyboard(self)
+                return
             assert number==0xf1, f'unexpected interrupt {number:02x}'
             bios(self)
         self.uc.hook_add(UC_HOOK_INTR,interrupt)
@@ -201,6 +204,38 @@ class Driver:
         assert self.get('IP')==0xff00
         assert self.get('SP')==0xe000+len(frame)
         assert self.read('stack_bottom',2)==b'\x5a\xa5'
+
+
+def test_ime_notification_reenters_only_after_releasing_private_stack(vesa_driver):
+    calls = []
+
+    def keyboard(m):
+        calls.append(m.get('AX'))
+        assert m.get('AX') == 0x2900 and m.get('SS') == 0x8000
+        assert m.read('busy') == m.read('prompt_notify') == b'\0'
+        # A real interrupt frame, followed by CKBD-style AH=14h reentry. The
+        # final register clobbers must not change the outer video API result.
+        sp = m.get('SP')-6
+        m.uc.mem_write(m.get('SS')*16+sp,
+                       struct.pack('<3H', m.get('IP'), m.get('CS'), m.get('EFLAGS')))
+        m.put('SP', sp)
+        m.put('CS', 0x3000)
+        m.put('IP', 0)
+
+    m = Driver(vesa_driver, lambda m: pytest.fail('unexpected BIOS call'), keyboard)
+    code = b'\xb8\x00\x14\x9c\x9a'+struct.pack('<2H', m.symbols['int10_handler'], 0x1000)
+    code += b'\xb8\xad\xde\xbb\xef\xbe\x8e\xd8\xcf'
+    m.uc.mem_write(0x30000, code)
+    m.write('active', b'\1')
+    m.write('prompt_notify', b'\1')
+    initial = dict(AX=0x0f00, BX=0x7f42, CX=0x1234, DX=0x5678,
+                   SI=0x2468, DI=0x1357, BP=0x3579, DS=0x4000, ES=0x5000)
+    m.run(**initial, limit=2000000)
+    assert calls == [0x2900]
+    assert m.get('AX') == 0x5003 and m.get('BX') == 0x42
+    for name in ('CX', 'DX', 'SI', 'DI', 'BP', 'DS', 'ES'):
+        assert m.get(name) == initial[name]
+    assert m.get('SS') == 0x8000 and m.get('EFLAGS') == 0x202
 
 
 @pytest.mark.parametrize('scan,rows,height,pages', [(0,25,8,8),(1,43,8,4),(2,50,8,4)])
@@ -449,6 +484,22 @@ def test_refresh_batches_banks_and_avoids_idle_pixel_writes(vesa_driver):
     banks.clear(); writes.clear(); m.uc.mem_write(0xb8000,b'A')
     m.run('refresh',limit=10000000)
     assert banks==[0,1] and 0 < sum(writes) < 2000*23*4*2
+
+
+def test_open_prompt_does_not_add_idle_timer_pixel_writes(vesa_driver):
+    m=Driver(vesa_driver,lambda m: pytest.fail('unexpected BIOS call'))
+    m.write('active',b'\1')
+    m.uc.mem_write(0xb8000,b' \x07'*2000)
+    m.run(AX=0x1700)  # Suppress the blinking caret.
+    m.run(AX=0x1400,limit=1000000)
+    m.run(AX=0x1500,limit=10000000)  # Settle initial text and prompt pixels.
+    writes=[]
+    m.uc.hook_add(UC_HOOK_MEM_WRITE,
+                  lambda uc,access,address,size,value,_: writes.append(address),
+                  begin=0xa0000,end=0xaffff)
+    for _ in range(4):
+        m.run('tick',limit=10000000)
+    assert writes==[]
 
 
 def test_zero_length_capture_checks_availability_without_bank_switch(vesa_driver):

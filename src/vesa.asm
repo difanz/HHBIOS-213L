@@ -23,6 +23,7 @@ extrn mouse_resume:near
 extrn mouse_native:byte
 extrn font_segment:word, font_offset:word, active:byte, busy:byte, traditional:byte
 extrn direct:byte
+extrn prompt_notify:byte
 extrn font_get:near, font_open:near, font_close:near, font_bitmap:near
 CELL_WIDTH equ 10
 CELL_HEIGHT equ 23
@@ -139,6 +140,16 @@ dispatch_interrupts:
     cmp cs:handled,0
     je pass10
     load_regs
+    ; CKBD reenters INT 10h to paint AH=14h. Only notify after restoring the
+    ; caller's stack and releasing busy; its nested calls own the C stack.
+    cmp cs:prompt_notify,0
+    je prompt_notified
+    mov cs:prompt_notify,0
+    save_regs
+    mov ax,2900h
+    int 16h
+    load_regs
+prompt_notified:
     iret
 pass10:
     load_regs
@@ -816,7 +827,7 @@ bitmap proc near
     mov si,[bp+6]
     mov bx,[bp+8]
     mov dx,[bp+10]
-    mov cx,4
+    mov cx,[bp+12]
 bitmap_column:
     push cx
     push cs
@@ -1483,6 +1494,14 @@ install_vectors:
     int 21h
     call mouse_resume
     mov busy,0
+    cmp prompt_notify,0
+    je install_prompt_done
+    mov prompt_notify,0
+    push ds
+    mov ax,2900h
+    int 16h
+    pop ds
+install_prompt_done:
     mov ax,ds
     mov bx,cs
     cmp ax,bx

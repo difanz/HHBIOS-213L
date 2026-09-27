@@ -80,7 +80,13 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
             if screen[2*(row*80+col)]==32:
                 for plane in planes:
                     assert plane_bits(plane,100,col*10,row*23,10,23)==(0,)*23, (row,col)
-    for plane in planes: assert not any(plane[57500:])
+    # CKBD's persistent IME row occupies 575..597, independently of B800.
+    for p, plane in enumerate(planes):
+        for col, code in ((0, 0xd3a2), (2, 0xcec4)):
+            for half in (0, 1):
+                expected=colored_rows(native_rows(code,half),10,23,0x4a,p)
+                assert plane_bits(plane,100,(col+half)*10,575,10,23)==expected
+        assert not any(plane[59800:])
 
 
 @pytest.mark.parametrize('operation',['text','legacy','state','ports'])

@@ -83,7 +83,7 @@ u16 CALL begin_draw(void);
 void CALL end_draw(void);
 void CALL draw(u16 code, u16 attribute, u16 position);
 void CALL draw_wide(u16 code, u16 attribute, u16 position);
-void CALL bitmap(u16 segment, u16 offset, u16 attribute, u16 position);
+void CALL bitmap(u16 segment, u16 offset, u16 attribute, u16 position, u16 count);
 void CALL glyph(u16 code, u8 *out);
 void CALL cursor_xor(u16 position, u16 lines);
 u16 CALL pixel(u16 x, u16 y, u16 color, u16 writing);

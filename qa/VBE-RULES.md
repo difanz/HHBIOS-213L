@@ -10,6 +10,17 @@ Western/CP437 uses Terminus 10x20 bitmaps. Box strokes extend through the row sp
 licenses, traditional mapping and file format are in [fonts/README.md](../fonts/README.md).
 At the default 800x600 size, the final two scanlines remain available to pixel APIs.
 
+The IME row is outside the application's B800 text grid. When CKBD's keep-prompt
+setting is enabled, installation opens it through INT 16h/AH=29h. That callback
+runs only after the display handler has restored the caller's stack and released
+its busy guard, allowing CKBD's nested INT 10h/AH=14h drawing calls. Open prompt
+text and copied 8x16 bitmap cells survive geometry changes, graphics excursions
+and console state restoration. A closed prompt remains hidden during refresh;
+returning to a text mode may reopen it according to CKBD's keep-prompt setting.
+The bounded bitmap store is 1280 bytes plus a 10-byte validity map. Character
+writes replace only the affected bitmap cells; source buffers need not stay live.
+An unchanged prompt is not redrawn on every timer tick.
+
 `VESA /M:hex` selects a BIOS-provided physical mode, for example 104h for
 1024x768 or 106h for 1280x1024. Selecting a larger surface alone retains the
 logical text geometry. The viewport is centered,

@@ -169,8 +169,14 @@ The tests launch the actual shell in `/T:L`, `/T:H1` and `/T:H2` (80×25,
 They select a program item below row 24 in high modes, click File in each
 geometry, and choose high-row modes in DOSSHELL's
 Display dialog, then return to 25 rows. No helper preselects the row count.
+The VESA cases load CKBD and verify both DOSSHELL's last-row shortcuts and the
+separate HHBIOS input-method row, including its original four-cell bitmap logo.
 Only the copied configuration gets a Chinese program title; the supplied
 application files are untouched.
+
+`test_prompt.py` additionally checks prompt visibility settings, copied bitmap
+lifetime, clipped/overlapping bitmap and character writes, 25/43/50-row changes,
+VBE state restoration and graphics-to-text returns using actual planar pixels.
 
 `SHELL.BIN` holds up to five records, each containing twelve metadata words,
 256 BDA bytes, and an 8000-byte text area (the metadata gives the used length).
