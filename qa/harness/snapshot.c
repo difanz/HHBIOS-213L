@@ -109,7 +109,7 @@ int main(int argc, char **argv)
     union REGPACK display;
     char name[13];
     int mode, frame = 0, plane;
-    unsigned old4, old5, y, framebuffer, pitch, vesa, geometry[8], rows, count, extended;
+    unsigned old4, old5, y, framebuffer, pitch, vesa, geometry[10], rows, count, extended, text_bytes;
     unsigned long offset;
     unsigned char crtc[25];
     unsigned direct=argc>1 && strcmp(argv[1],"direct")==0, page=0, i;
@@ -126,6 +126,8 @@ int main(int argc, char **argv)
     r.x.ax = 0x1411;
     int86(0x10, &r, &r);
     vesa = r.x.ax == 0x5356;
+    text_bytes=vesa ? ((unsigned)*(unsigned char __far *)MK_FP(0x40,0x84)+1)*160 : 4000;
+    if (text_bytes>8000 || !text_bytes || (direct && text_bytes!=4000)) return 21;
     /* Hide software cursor, retaining the driver's current cell geometry. */
     r.x.ax = 0x0100; r.x.cx = 0x2000;
     int86(0x10, &r, &r);
@@ -150,14 +152,14 @@ int main(int argc, char **argv)
     if (!in) return 4;
     while ((mode = fgetc(in)) != EOF) {
         if (mode > (direct ? 5 : 3) || frame >= 100) return 5;
-        if (fread(buffer, 1, 4000, in) != 4000) return 6;
+        if (fread(buffer, 1, text_bytes, in) != text_bytes) return 6;
         if (direct) {
             if (direct_write(page,(unsigned)mode)) return 18;
         } else {
             r.x.ax = 0x180c; r.h.bh = mode;
             int86(0x10, &r, &r);
             _disable();
-            _fmemcpy(MK_FP(0xb800, 0), buffer, 4000);
+            _fmemcpy(MK_FP(0xb800, 0), buffer, text_bytes);
             _enable();
         }
         ticks(24);
@@ -185,13 +187,15 @@ int main(int argc, char **argv)
                 extended=geometry[0]!=800 || geometry[1]!=600 || geometry[5] || geometry[6] || geometry[7]!=1;
             }
         }
-        if (fwrite(extended ? "HHSNAP3\n" : vesa ? "HHSNAP2\n" : "HHSNAP1\n", 1, 8, out) != 8) return 8;
-        if (vesa && fwrite(geometry,2,extended ? 8 : 5,out)!=(extended ? 8 : 5)) return 8;
+        geometry[8]=80; geometry[9]=text_bytes/160;
+        count=text_bytes!=4000 ? 10 : extended ? 8 : 5;
+        if (fwrite(count==10 ? "HHSNAP4\n" : extended ? "HHSNAP3\n" : vesa ? "HHSNAP2\n" : "HHSNAP1\n", 1, 8, out) != 8) return 8;
+        if (vesa && fwrite(geometry,2,count,out)!=count) return 8;
         _disable();
-        _fmemcpy(buffer, MK_FP(0xb800+page*0x100, 0), 4000);
-        _fmemcpy(buffer + 4000, MK_FP(0x40, 0x50+page*2), 2);
+        _fmemcpy(buffer, MK_FP(0xb800+page*0x100, 0), text_bytes);
+        _fmemcpy(buffer + text_bytes, MK_FP(0x40, 0x50+page*2), 2);
         _enable();
-        if (fwrite(buffer, 1, 4002, out) != 4002) return 8;
+        if (fwrite(buffer, 1, text_bytes+2, out) != text_bytes+2) return 8;
         for (y = 0; y < 25; ++y) {
             outp(0x3d4, y); crtc[y] = inp(0x3d5);
         }

@@ -11,12 +11,17 @@ D_EOFF          DW 0
 D_ESEG          DW 0
 D_EDEL          DW 0             ; 0FFFFh for cursor movement
 D_EROW          DB 80 DUP (0)
+D_ESYNTH        DB 0             ; modifier view belongs to the offered key
 
-; DS=CS; caller has saved all registers except AX. CF=1: key returned, ZF=0.
+; DS=CS; caller saved registers except AX. CF=1: handled (key queries ZF=0).
 ; CF=0: continue the original handler with its original AX.
 S_EDIT PROC NEAR
         CMP D_EDIT,0
         JE ED_PASS
+        CMP AH,2
+        JE ED_SHIFT
+        CMP AH,12H
+        JE ED_SHIFT
         CMP AH,0
         JE ED_REQUEST
         CMP AH,10H
@@ -29,10 +34,14 @@ ED_REQUEST:
         MOV BP,AX
         CMP D_ESTATE,1
         JNE ED_READY
+        PUSHF
+        CLI
         CALL S_EVERIFY
+        POPF
 ED_READY:
         CMP D_ESTATE,2
         JNE ED_READ
+        MOV D_ESYNTH,1
         MOV AX,D_ENEXT
         TEST BP,0100H
         JNZ ED_RETURN
@@ -42,12 +51,16 @@ ED_RETURN:
         STC
         RET
 ED_READ:
+        MOV D_ESYNTH,0
         MOV AX,BP
         TEST AH,1
         JZ ED_CONSUME
         CALL S_INT16_1
         JZ ED_EMPTY
+        PUSHF
+        CLI
         CALL S_EPEEK
+        POPF
         JMP SHORT ED_RETURN
 ED_EMPTY:
         MOV AX,BP
@@ -58,17 +71,29 @@ ED_CONSUME:
         PUSHF
         CALL CS:D_INT16
         PUSH AX
+        PUSHF
+        CLI
         CALL S_ESTART
+        POPF
         POP AX
         ; S_ESTART can replace Delete at a trail by Backspace, then Delete.
         CMP D_ESTATE,1
         JNE ED_RETURN
         CMP D_EFIRST,1
         JNE ED_RETURN
+        MOV D_ESYNTH,1
         MOV AX,0E08H
         JMP SHORT ED_RETURN
 ED_PASS:
         CLC
+        RET
+ED_SHIFT:
+        CMP D_ESYNTH,0
+        JE ED_PASS
+        PUSHF
+        CALL CS:D_INT16
+        AND AX,0F0F0H           ; keep lock states, clear Shift/Ctrl/Alt
+        STC
         RET
 S_EDIT ENDP
 
@@ -95,6 +120,7 @@ EP_CHECK:
         JNE EP_ORIGINAL
         POP BP
         POP AX
+        MOV D_ESYNTH,1
         MOV AX,0E08H
         RET
 EP_ORIGINAL:
@@ -104,23 +130,24 @@ EP_DONE:
         RET
 S_EPEEK ENDP
 
-; BIOS-visible, unmodified, page-zero cursor in HHBIOS's 80x25 text view.
+; BIOS-visible, unmodified, page-zero cursor in HHBIOS's 80-column text view.
 S_ECURSOR PROC NEAR
         MOV BX,40H
         MOV ES,BX
         TEST BYTE PTR ES:[17H],0FH
         JNZ EC_NO
+EC_VIEW:
         CMP BYTE PTR ES:[62H],0
         JNE EC_NO
         CMP WORD PTR ES:[4AH],80
         JNE EC_NO
         TEST BYTE PTR ES:[61H],20H
-        JNZ EC_NO
+        JNZ EC_WAIT
         MOV DX,ES:[50H]
-        CMP DH,25
-        JAE EC_NO
+        CMP DH,ES:[84H]
+        JA EC_WAIT
         CMP DL,80
-        JAE EC_NO
+        JAE EC_WAIT
         MOV AX,1410H
         XOR BX,BX
         INT 10H
@@ -130,7 +157,12 @@ S_ECURSOR PROC NEAR
         MOV ES,CX
         CLC
         RET
+EC_WAIT:
+        MOV AX,0FFFFH
+        STC
+        RET
 EC_NO:
+        XOR AX,AX
         STC
         RET
 S_ECURSOR ENDP
@@ -241,13 +273,23 @@ S_ESTART ENDP
 
 ; Compare the application's update before exposing the companion key.
 S_EVERIFY PROC NEAR
-        CALL S_ECURSOR
-        JC EV_CANCEL
+        ; Verify the previous key independently of a newly held modifier.
+        MOV BX,40H
+        MOV ES,BX
+        CALL EC_VIEW
+        JNC EV_CURSOR
+        CMP AX,0FFFFH
+        JE EV_DONE
+        JMP SHORT EV_CANCEL
+EV_CURSOR:
         MOV AX,ES
         CMP AX,D_ESEG
         JNE EV_CANCEL
         CMP DX,D_EOLD
         JNE EV_UPDATED
+        ; Cursor and row updates may arrive in either order.
+        CMP DX,D_ECUR
+        JNE EV_DONE
         ; Empty polling before the application's update is not consumption.
         CALL S_ESAME
         JC EV_DONE
@@ -261,9 +303,11 @@ EV_UPDATED:
         JNC EV_CANCEL
         JMP SHORT EV_YES
 EV_DELETE:
+        ; Repainting can publish a row in several writes. Wait for proof;
+        ; consuming another real key or moving the cursor cancels this state.
         MOV CX,1
         CALL S_ESHIFT
-        JNC EV_CANCEL
+        JNC EV_DONE
         ; A native DBCS deletion or an ambiguous update must not be doubled.
         MOV CX,2
         CALL S_ESHIFT

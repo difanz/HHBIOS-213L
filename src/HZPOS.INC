@@ -2,6 +2,7 @@
 ; DX = row/column, AX = 0 single byte, 1 lead, 2 trail; BX = 'HK'.
 ; CX = direct-screen segment, or zero when the display policy is inactive.
 ; Use the display policy and corner classifier, including converted frames.
+        INCLUDE TEXTGEOM.INC
 S_HZPOS PROC NEAR
         PUSHF
         CLI
@@ -12,8 +13,8 @@ S_HZPOS PROC NEAR
         JE HP_OFF
         CMP BYTE PTR CS:K_HZ1,0EBH
         JE HP_OFF
-        CMP DH,25
-        JAE HP_OFF
+        CMP DH,XR_LASTROW
+        JA HP_OFF
         CMP DL,80
         JAE HP_OFF
         MOV ES,CS:D_B800

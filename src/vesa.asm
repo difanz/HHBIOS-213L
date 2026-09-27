@@ -16,7 +16,11 @@ extrn display_start:word, split_line:word
 extrn text_bank:word, banked_text_allowed:byte
 extrn requested_mode:word, plane_bytes:dword, bank_step:word, large_surface:byte
 extrn mode_selected:byte
+extrn text_rows:word, text_cells:word, page_bytes:word, last_row:byte
 extrn raster_cell:near
+extrn old33:dword, int33_handler:far
+extrn mouse_resume:near
+extrn mouse_native:byte
 extrn font_segment:word, font_offset:word, active:byte, busy:byte, traditional:byte
 extrn direct:byte
 extrn font_get:near, font_open:near, font_close:near, font_bitmap:near
@@ -88,6 +92,8 @@ load_regs macro
 endm
 
 int10_handler proc far
+    cmp cs:mouse_native,0
+    jne chain10
     cmp ax,1410h
     je query_boundary
     cmp cs:busy,0
@@ -197,6 +203,8 @@ int8_handler proc far
     call cs:old8
     pushf
     cli
+    cmp cs:mouse_native,0
+    jne timer_done
     cmp cs:busy,0
     jne timer_done
     mov cs:busy,1
@@ -264,6 +272,12 @@ bios endp
 ; Set CPU B800 compatibility aperture. As on VGA, some cards alias the
 ; upper 64 KiB; put scanout around the unused B800 text area on those cards.
 public aperture
+public reprobe
+reprobe proc near
+    mov cs:aperture_alias,0ffh
+    mov cs:text_map,1
+    ret
+reprobe endp
 aperture proc near
     save_regs
     mov cs:aperture_result,1
@@ -447,15 +461,16 @@ snapshot_text proc near
     save_regs
     cli
     mov ax,cs:active_page
-    mov cl,8
-    shl ax,cl
+    mul cs:page_bytes
+    mov cl,4
+    shr ax,cl
     add ax,0b800h
     mov ds,ax
     push cs
     pop es
     xor si,si
     mov di,offset text_transfer
-    mov cx,2000
+    mov cx,cs:text_cells
     cld
     rep movsw
     load_regs
@@ -492,7 +507,7 @@ refresh_ready:
     pop ds
     mov si,offset text_transfer
     xor di,di
-    mov cx,2000
+    mov cx,cs:text_cells
     pushf
     cli
     rep movsw
@@ -504,8 +519,11 @@ refresh endp
 
 classifier_policy proc near
     mov ax,cs:active_page
-    mov cl,8
-    shl ax,cl
+    push dx
+    mul cs:page_bytes
+    pop dx
+    mov cl,4
+    shr ax,cl
     add ax,0b800h
     mov cs:D_B800,ax
     mov al,cs:direct
@@ -624,6 +642,26 @@ blit_double_zero:
     load_regs
     ret
 blit_cell endp
+
+public draw_half
+draw_half proc near
+    push bp
+    mov bp,sp
+    save_regs
+    call video_begin
+    jc half_done
+    push cs
+    pop ds
+    mov si,[bp+4]
+    mov bx,[bp+6]
+    mov dx,[bp+8]
+    call blit_narrow
+    call video_end
+half_done:
+    load_regs
+    pop bp
+    ret
+draw_half endp
 
 ; Ten-pixel cells share framebuffer bytes. Select the read plane as well as
 ; the write plane, and preserve the neighbor bits on every word store.
@@ -1163,18 +1201,19 @@ boundary proc near
 boundary endp
 
 policy label byte
+XR_ROWS TEXTEQU <cs:text_rows>
+XR_LASTROW TEXTEQU <cs:last_row>
+XR_CELLS TEXTEQU <cs:text_cells>
 include ZJXP.INC
 include HZPOS.INC
 shadow label word
-D_XPQ db 4000 dup (0)
+D_XPQ db 8000 dup (0)
 stack_bottom dw 0a55ah
 db 2048 dup (0)
 stack_top label word
 
-; Installation only, ordered after the resident boundary by the linker.
-_TEXT ends
-INIT_TEXT segment word public 'INIT'
-assume cs:DGROUP
+; A runtime font/row change may select a different physical surface. Re-probe
+; its banks while all 32 KiB of text are backed up outside conventional RAM.
 probe_text_bank proc near
     save_regs
     mov bp,cs:text_bank
@@ -1279,6 +1318,10 @@ probe_exhausted:
     stc
     ret
 probe_text_bank endp
+; Installation only, ordered after the resident boundary by the linker.
+_TEXT ends
+INIT_TEXT segment word public 'INIT'
+assume cs:DGROUP
 install:
     cld
     push cs
@@ -1388,6 +1431,10 @@ options_done:
     int 21h
     mov word ptr old8,bx
     mov word ptr old8+2,es
+    mov ax,3533h
+    int 21h
+    mov word ptr old33,bx
+    mov word ptr old33+2,es
     xor bp,bp
     mov ah,2fh
     int 16h
@@ -1431,6 +1478,10 @@ install_vectors:
     mov dx,offset int8_handler
     mov ax,2508h
     int 21h
+    mov dx,offset int33_handler
+    mov ax,2533h
+    int 21h
+    call mouse_resume
     mov busy,0
     mov ax,ds
     mov bx,cs
@@ -1545,7 +1596,7 @@ resident_end db 0
 _END ends
 _SCRATCH segment para public 'TAIL'
 public text_transfer
-text_transfer db 4096 dup (0)
+text_transfer db 8192 dup (0)
 image_end label byte
 _SCRATCH ends
 DGROUP group _BSS, _END, _SCRATCH, INIT_TEXT

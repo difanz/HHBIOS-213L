@@ -2,7 +2,7 @@
  * No guest keyboard event: FFFFh asks the host to capture and acknowledge.
  * Without SCREEN.KEY this is inert. A missing host fails within five seconds.
  */
-static int hostshot(void)
+static int hostrequest(unsigned request)
 {
     FILE *flag = fopen("SCREEN.KEY", "rb");
     volatile unsigned long __far *clock = MK_FP(0x40, 0x6c);
@@ -17,9 +17,10 @@ static int hostshot(void)
     for (i = 0; i < 2; ++i) {
         while (!(inp(0x3fd) & 0x20))
             if ((unsigned long)(*clock-start) >= 91) return 1;
-        outp(0x3f8, 0xff);
+        outp(0x3f8, i ? request>>8 : request&255);
     }
     while (!(inp(0x3fd) & 1))
         if ((unsigned long)(*clock-start) >= 91) return 1;
     return inp(0x3f8) != 0xa5;
 }
+static int hostshot(void) { return hostrequest(0xffff); }

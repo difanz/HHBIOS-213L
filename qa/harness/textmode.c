@@ -100,7 +100,7 @@ failed:
     fclose(out); return 4;
 }
 
-static int select_mode(const char *name)
+static int select_mode(const char *name, int decorate)
 {
     union REGPACK r;
     unsigned values[6],cols,rows,x,y,offset;
@@ -127,6 +127,7 @@ static int select_mode(const char *name)
     if (fwrite("HHTEXT1\n",1,8,out)!=8 || fwrite(values,2,6,out)!=6 ||
         fwrite(bda,1,sizeof(bda),out)!=sizeof(bda)) { fclose(out); return 7; }
     if (fclose(out)) return 7;
+    if (!decorate) return 0;
     if (values[0]>=0x100 && values[1]!=0x004f) return 0; /* observed unsupported */
     cols=word(bda+0x4a); rows=(unsigned)bda[0x84]+1; offset=word(bda+0x4e);
     if (!cols || cols>255 || !rows || rows>255 ||
@@ -159,9 +160,9 @@ int main(int argc, char **argv)
 {
     int status;
     if (argc==1) return catalog();
-    if (argc!=2 && (argc!=3 || strcmp(argv[2],"audit"))) return 1;
-    status=select_mode(argv[1]);
-    if (status || argc==2) return status;
+    if (argc!=2 && (argc!=3 || (strcmp(argv[2],"audit") && strcmp(argv[2],"select")))) return 1;
+    status=select_mode(argv[1],argc==2 || strcmp(argv[2],"select"));
+    if (status || argc==2 || !strcmp(argv[2],"select")) return status;
     if (!strcmp(argv[1],"25") || !strcmp(argv[1],"43") || !strcmp(argv[1],"50")) return audit();
     /* A rejected VBE mode leaves the previous mode intact; do not audit it
      * under the requested mode's name. Re-query before accessing text RAM. */

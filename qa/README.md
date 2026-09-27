@@ -12,8 +12,9 @@ The [VBE contract](VBE-RULES.md) covers mode ownership, banked framebuffer tests
 the independent VESA renderer, its high-resolution surfaces, interfaces and extension boundaries.
 The [text-mode study](TEXT-MODES.md) records native BIOS and application behavior
 for 80x43/50/60 and 132x25/43/50/60, and the design for rendering existing text
-modes on larger graphics surfaces. These native observations do not imply that
-the Chinese driver already supports those grids.
+modes on larger graphics surfaces. Resident 80x43/50 rendering and mouse tests
+are in `test_resident_text.py`; wider native observations do not imply resident
+support for those grids.
 The [wide rendering study](WIDE-RENDERING.md) adds standalone DOS framebuffer
 experiments for larger and widescreen surfaces, with exact memory and scanout
 checks. Optional emulator profiles are confined to QA; they also allow resident

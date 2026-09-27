@@ -3,6 +3,8 @@
 ; That line may still be B3 or BA, or already 14h / 15h after the
 ; vertical scan rewrites a short stroke. B800 is not rewritten here.
 
+        INCLUDE TEXTGEOM.INC
+
 D_FRMC		LABEL	BYTE
 		DB	0C9H, 0CDH, 3
 		DB	0BBH, 0CDH, 2
@@ -91,7 +93,7 @@ CG_LEFT:	OR	DL,DL
 		JNZ	CG_NO
 CG_VERT:	TEST	CL,2
 		JZ	CG_UP
-		CMP	DH,24
+		CMP	DH,XR_LASTROW
 		JAE	CG_NO
 		MOV	AL,ES:[SI+160]
 		JMP	SHORT CG_LINE
@@ -127,7 +129,7 @@ S_BGEO		PROC	NEAR
 		JNZ	BG_NO
 		TEST	CL,2
 		JZ	BG_UPL
-		CMP	DH,24
+		CMP	DH,XR_LASTROW
 		JAE	BG_NO
 		MOV	AL,ES:[SI-2+160]
 		JMP	SHORT BG_LINE
@@ -141,7 +143,7 @@ BG_RIGHT:	CMP	DL,79
 		JNZ	BG_NO
 		TEST	CL,2
 		JZ	BG_UPR
-		CMP	DH,24
+		CMP	DH,XR_LASTROW
 		JAE	BG_NO
 		MOV	AL,ES:[SI+2+160]
 		JMP	SHORT BG_LINE

@@ -2,6 +2,8 @@
 ;	1995.1.12, 1.18, 2.16
 ;	1996.1.19
 
+        INCLUDE TEXTGEOM.INC
+
 D_ZBFS		DB	3		;=0´¿Î÷ÎÄ·½Ê½,=1²»´¦ÀíÖÆ±í·û
 					;=2´¦Àí²¿·ÖÖÆ±í·û,=3´¦ÀíÈ«²¿ÖÆ±í·û
 D_NUM		DB	0		;×Ö·ûÉÁË¸¼ÆÊý
@@ -26,7 +28,7 @@ L_XRPOL:
 		PUSH	CS
 		POP	ES
 		MOV	DI,OFFSET D_XPQ
-		MOV	CX,2000
+		MOV	CX,XR_CELLS
 		XOR	SI,SI
 L_XRINV:
 		LODSW
@@ -47,7 +49,7 @@ L_XRSCAN:
 L_XR1:
 		MOV	CS:D_COL,0
 		MOV	CS:D_ROW,0
-		MOV	CX,25*80		;ÐéÆÁÇø³¤¶È
+		MOV	CX,XR_CELLS		;ÐéÆÁÇø³¤¶È
 		XOR	SI,SI
 L_XR2:
 		LODSW				;È¡×Ö·û
@@ -122,7 +124,7 @@ L_XRCOL:
 		JZ	L_XR10
 		JMP	L_XR2			;´¦ÀíÏÂÒ»¸ö×Ö·û
 L_XR10:
-		MOV	CX,25*80		;ÐéÆÁÇø³¤¶È
+		MOV	CX,XR_CELLS		;ÐéÆÁÇø³¤¶È
 		PUSH	CS
 		POP	ES
 		MOV	DI,OFFSET D_XPQ
@@ -328,7 +330,10 @@ L_QT5A:
 		CALL	L_QT9			;Ð´Èë
 		INC	BP
 L_QT6:
-		CMP	CS:D_ROW,24
+		PUSH	AX
+		MOV	AH,XR_LASTROW
+		CMP	CS:D_ROW,AH
+		POP	AX
 		JE	L_QT7
 		TEST	DL,0C0H 		;ÅÐÏÂ±ß?
 		JZ	L_QT7
@@ -484,7 +489,7 @@ S_SXSM		PROC	NEAR
 L_SX1:
 		PUSH	SI
 		PUSH	CX
-		MOV	CX,25			;×î´óÐÐºÅ
+		MOV	CX,XR_ROWS			;×î´óÐÐºÅ
 L_SX2:
 		MOV	AL,[SI]
 		CMP	AL,0B3H 		;³

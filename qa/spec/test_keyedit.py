@@ -7,7 +7,7 @@ import struct
 import subprocess
 
 import pytest
-from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
+from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_MEM_READ
 from unicorn import x86_const as reg
 
 from qa.spec.machine import CODE, SCREEN, STACK, blank, put
@@ -34,6 +34,7 @@ class Keyboard:
         self.uc.mem_write(CODE+0x100, binary)
         self.uc.mem_write(CODE+self.enabled, b'\1')
         self.uc.mem_write(0x44a, b'\x50\0')
+        self.uc.mem_write(0x484, b'\x18')
         self.display = display
         self.screen_segment = 0xb800
         self.keys = []
@@ -48,6 +49,10 @@ class Keyboard:
     def interrupt(self, uc, number, _):
         if number == 0x60:
             function = self.get('AX') >> 8
+            if function in (2,0x12):
+                flags=int.from_bytes(uc.mem_read(0x417,2),'little')
+                self.set('AX',flags if function==0x12 else (function<<8)|(flags&255))
+                return
             assert function in (0, 1, 0x10, 0x11)
             if function & 1:
                 self.set('EFLAGS', (self.get('EFLAGS') & ~64) | (0 if self.keys else 64))
@@ -176,6 +181,23 @@ def test_trail_delete_has_same_value_in_peek_and_read(keyboard):
     assert keyboard.call(0x10) == DEL
 
 
+@pytest.mark.parametrize('modifier',[1,4,8])
+def test_completed_edit_precedes_new_modified_input(keyboard,modifier):
+    keyboard.screen('中文abc',6)
+    assert keyboard.call(0x10,0x53e0)==BS
+    keyboard.screen(b'\xd6\xd0\xc4abc',5)
+    keyboard.uc.mem_write(0x417,bytes((0x70|modifier,0x0f)))
+    keyboard.keys.append(0x2100)
+    assert keyboard.call(0x11)==0x53e0
+    assert keyboard.call(0x12)==0x70
+    assert keyboard.call(2)&255==0x70
+    assert keyboard.call(0x10)==0x53e0
+    assert keyboard.call(0x12)==0x70
+    assert keyboard.call(0x10)==0x2100
+    assert keyboard.call(0x12) is None  # use the real BIOS modifier state
+    assert keyboard.uc.mem_read(0x417,2)==bytes((0x70|modifier,0x0f))
+
+
 def test_enhanced_trail_delete_preserves_its_companion_encoding(keyboard):
     keyboard.screen('中文abc', 6)
     assert keyboard.call(0x11, 0x53e0) == BS
@@ -197,6 +219,67 @@ def test_monochrome_screen_and_changed_screen_segment(keyboard):
     keyboard.screen_segment = 0xb800
     keyboard.screen(b'\xd6\xd0\xc4abc', 5)
     assert keyboard.call(1) is None
+
+
+@pytest.mark.parametrize('key,col,updated,newcol,companion',[
+    (DEL,6,b'\xd6\xd0\xc4abc',5,DEL),
+    (BS,7,b'\xd6\xd0\xceabc',6,BS),
+])
+def test_cursor_update_before_text_repaint_keeps_pending_companion(keyboard,key,col,updated,newcol,companion):
+    keyboard.screen('中文abc',col)
+    assert keyboard.call(key=key)==BS
+    # A BIOS cursor update is visible before the application repaints, or
+    # an IRQ consumer queries a renderer snapshot from before that repaint.
+    keyboard.screen('中文abc',newcol)
+    for _ in range(3): assert keyboard.call(1) is None
+    keyboard.screen(updated[:3]+'中文abc'.encode('gb2312')[3:],newcol)
+    assert keyboard.call(1) is None
+    keyboard.screen(updated,newcol)
+    assert keyboard.call(1)==companion
+    assert keyboard.call()==companion
+
+
+@pytest.mark.parametrize('key,col,updated,newcol,companion',[
+    (DEL,6,b'\xd6\xd0\xc4abc',5,DEL),
+    (BS,7,b'\xd6\xd0\xceabc',6,BS),
+])
+def test_text_repaint_before_cursor_update_keeps_pending_companion(keyboard,key,col,updated,newcol,companion):
+    keyboard.screen('中文abc',col)
+    assert keyboard.call(key=key)==BS
+    keyboard.screen(updated,col)
+    for _ in range(3): assert keyboard.call(1) is None
+    keyboard.screen(updated,newcol)
+    assert keyboard.call(1)==companion
+    assert keyboard.call()==companion
+
+
+def test_snapshot_byte_proof_cannot_be_interrupted_by_refresh(keyboard):
+    reads=[]
+    keyboard.uc.hook_add(UC_HOOK_MEM_READ,
+        lambda uc,access,address,size,value,_: reads.append(bool(keyboard.get('EFLAGS')&0x200)),
+        begin=0xb8000,end=0xb8000+3999)
+    keyboard.screen('中文abc',6)
+    assert keyboard.call(1,DEL)==BS
+    assert keyboard.call()==BS
+    keyboard.screen(b'\xd6\xd0\xc4abc',5)
+    assert keyboard.call(1)==DEL
+    assert keyboard.call()==DEL
+    assert reads and not any(reads)
+    assert keyboard.get('EFLAGS')&0x200,'The filter must restore the caller interrupt state'
+
+
+@pytest.mark.parametrize('parked,shape',[(0x00ff,0x0607),(0xff00,0x0607),(0x0405,0x2000)])
+def test_temporary_offscreen_or_hidden_cursor_does_not_cancel_pair_edit(keyboard,parked,shape):
+    keyboard.screen('中文abc',6)
+    assert keyboard.call(0x10,0x53e0)==BS
+    keyboard.screen(b'\xd6\xd0\xc4abc',5)
+    keyboard.uc.mem_write(0x450,struct.pack('<H',parked))
+    keyboard.uc.mem_write(0x460,struct.pack('<H',shape))
+    for _ in range(3): assert keyboard.call(0x11) is None
+    keyboard.uc.mem_write(0x450,struct.pack('<H',0x0405))
+    keyboard.uc.mem_write(0x460,struct.pack('<H',0x0607))
+    assert keyboard.call(0x11)==0x53e0
+    assert keyboard.call(0x10)==0x53e0
 
 
 @pytest.mark.parametrize('policy,value', [('mode', 0), ('direct', 0), ('hanzi_switch', 0xeb)])

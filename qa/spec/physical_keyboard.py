@@ -31,6 +31,7 @@ class PhysicalKeyboard:
         self.xvfb = None
         self.log = None
         self.requests = []
+        self.mouse_step = 0
 
     def __enter__(self):
         try:
@@ -56,6 +57,8 @@ class PhysicalKeyboard:
                                              ctypes.POINTER(ctypes.c_int)]
             self.x.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
             self.t.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+            self.t.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+            self.t.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
             r, w = os.pipe()
             self.log = (self.directory / 'xvfb.log').open('wb')
             try:
@@ -136,6 +139,19 @@ class PhysicalKeyboard:
                 self.capture(key)
             if key == 0xffff:
                 assert self.screenshots, 'Guest requested a screenshot without --screenshots'
+                self.client.sendall(b'\xa5')
+                continue
+            if key == 0xfffe:
+                path=next(p for p in self.directory.iterdir() if p.name.upper()=='MOUSE.JSN')
+                move=json.loads(path.read_text())[self.mouse_step]
+                self.mouse_step+=1
+                assert self.t.XTestFakeMotionEvent(self.display,-1,move['x'],move['y'],0)
+                self.x.XSync(self.display,0)
+                time.sleep(.2)
+                for pressed in (1,0):
+                    assert self.t.XTestFakeButtonEvent(self.display,1,pressed,0)
+                    self.x.XSync(self.display,0)
+                    time.sleep(.15)
                 self.client.sendall(b'\xa5')
                 continue
             names = {0x50: 'Down', 0x48: 'Up', 0x47: 'Home', 0x4f: 'End',

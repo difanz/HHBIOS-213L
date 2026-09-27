@@ -65,7 +65,7 @@ def expected_planes(shot,text,pairs,font):
             glyph+=glyph[-2:] if 0xb0<=code<=0xdf else b'\0\0'
         return colored_rows(glyph,shot.cell_width,shot.cell_height,attr,plane)
     planes=[bytearray(shot.pitch*shot.height) for _ in range(4)]
-    for cell in range(2000):
+    for cell in range(len(text)//2):
         row,col=divmod(cell,80); code,half=pairs.get((row,col),(text[cell*2],0))
         x=shot.origin_x+col*shot.cell_width*shot.scale
         for p,out in enumerate(planes):

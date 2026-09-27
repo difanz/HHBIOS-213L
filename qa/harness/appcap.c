@@ -80,8 +80,17 @@ static void record_step(void)
     unsigned offset = image_size + records*164;
     *(unsigned __far *)MK_FP(capture_seg, offset) = step ? keys[step-1] : 0;
     *(unsigned __far *)MK_FP(capture_seg, offset+2) = cursor;
-    if ((cursor >> 8) < 25)
+    if ((cursor >> 8) <= *(unsigned char __far *)MK_FP(0x40,0x84))
         _fmemcpy(MK_FP(capture_seg, offset+4), MK_FP(0xb800, (cursor >> 8)*160), 160);
+    /* Keep BIOS context separately from the stable public key/row log. */
+    offset=image_size+65*164+records*12;
+    *(unsigned __far *)MK_FP(capture_seg,offset)=*(unsigned __far *)MK_FP(0x40,0x60);
+    *(unsigned __far *)MK_FP(capture_seg,offset+2)=*(unsigned char __far *)MK_FP(0x40,0x84);
+    memset(&view,0,sizeof(view)); view.x.ax=0x1410; view.x.dx=cursor; intr(0x10,&view);
+    *(unsigned __far *)MK_FP(capture_seg,offset+4)=view.x.ax;
+    *(unsigned __far *)MK_FP(capture_seg,offset+6)=view.x.bx;
+    *(unsigned __far *)MK_FP(capture_seg,offset+8)=view.x.cx;
+    *(unsigned __far *)MK_FP(capture_seg,offset+10)=view.x.dx;
     ++records;
     *(unsigned __far *)MK_FP(capture_seg, 8) = records;
 }
@@ -93,7 +102,7 @@ static int row_stable(void)
 {
     unsigned cursor=*(unsigned __far *)MK_FP(0x40,0x50),i;
     unsigned char __far *row;
-    if ((cursor>>8)>=25 || (cursor&255)>=80) { stable_samples=0; return 0; }
+    if ((cursor>>8)>*(unsigned char __far *)MK_FP(0x40,0x84) || (cursor&255)>=80) { stable_samples=0; return 0; }
     row=MK_FP(0xb800,(cursor>>8)*160);
     if (cursor==stable_cursor) {
         for (i=0;i<160 && row[i]==stable_row[i];++i) {}
@@ -235,6 +244,12 @@ int main(int argc, char **argv)
                 if (fwrite(scratch, 164, 1, file) != 1) return 13;
             }
             if (fclose(file)) return 14;
+            file=fopen("KEYMETA.BIN","wb"); if (!file) return 12;
+            for (i=0;i<records;++i) {
+                _fmemcpy(scratch,MK_FP(capture_seg,image_size+65*164+i*12),12);
+                if (fwrite(scratch,12,1,file)!=1) return 13;
+            }
+            if (fclose(file)) return 14;
         }
         return 0;
     }
@@ -279,7 +294,7 @@ int main(int argc, char **argv)
     if (pitch < 80 || pitch > 128) return 8;
     if (!cell_height || cell_height>32) return 8;
     image_size=4016+10*cell_height*pitch;
-    if (_dos_allocmem((image_size+65*164+15)/16, &capture_seg)) return 7;
+    if (_dos_allocmem((image_size+65*(164+12)+15)/16, &capture_seg)) return 7;
     _fmemset(MK_FP(capture_seg, 0), 0, 16);
     _fmemcpy(MK_FP(capture_seg, 1), "HHAPP2", 6);
     *(unsigned __far *)MK_FP(capture_seg,10)=pitch;

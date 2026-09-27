@@ -25,7 +25,7 @@ void CALL raster_cell(const u16 *bits, u16 attribute, u16 position)
     u8 fg, bg, value;
     u8 FAR *v;
     u32 offset;
-    if ((position & 255)>=TEXT_COLS || (position >> 8)>TEXT_ROWS) return;
+    if ((position & 255)>=TEXT_COLS || (position >> 8)>text_rows) return;
     x=viewport_x+(position & 255)*CELL_WIDTH*pixel_scale;
     y=viewport_y+(position >> 8)*raster_height*pixel_scale;
     shift=x & 7; width=CELL_WIDTH*pixel_scale; n=(shift+width+7)>>3;

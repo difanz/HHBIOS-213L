@@ -74,8 +74,9 @@ even-length XMS moves. Chinese occupies the first 20 bits; Western occupies
 the first 10 bits. Identical records, including blanks and unchanged
 traditional forms, share one index.
 
-The committed payload is 733176 bytes: 716 KiB of XMS allocation, or 45 EMS
-pages (720 KiB). The 16-entry resident cache uses 1120 bytes of glyph data
+The committed font payload is 733176 bytes, rounded to 716 KiB. VESA reserves
+another 32 KiB in the same handle for text-page preservation during row changes:
+748 KiB in XMS, or 47 EMS pages (752 KiB). The 16-entry resident cache uses 1120 bytes of glyph data
 plus keys and validity words. No DOS or file calls occur while drawing.
 
 `HZK16` remains the original 16-pixel font used by the legacy drivers and

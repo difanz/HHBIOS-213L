@@ -98,30 +98,36 @@ class Snapshot:
     origin_x: int = 0
     origin_y: int = 0
     scale: int = 1
+    columns: int = 80
+    rows: int = 25
 
     @classmethod
     def read(cls, path):
         raw = path.read_bytes()
-        assert raw[:8] in (b'HHSNAP1\n', b'HHSNAP2\n', b'HHSNAP3\n'), f'unknown snapshot protocol: {path}'
-        geometry=(640,480,80,8,18,0,0,1)
-        if raw[:8] in (b'HHSNAP2\n',b'HHSNAP3\n'):
+        assert raw[:8] in (b'HHSNAP1\n', b'HHSNAP2\n', b'HHSNAP3\n', b'HHSNAP4\n'), f'unknown snapshot protocol: {path}'
+        geometry=(640,480,80,8,18,0,0,1,80,25)
+        if raw[:8]!=b'HHSNAP1\n':
             assert len(raw)>=18, f'truncated geometry: {path}'
-            count=8 if raw[:8]==b'HHSNAP3\n' else 5
+            count=10 if raw[:8]==b'HHSNAP4\n' else 8 if raw[:8]==b'HHSNAP3\n' else 5
             assert len(raw)>=8+count*2
             geometry=struct.unpack_from('<'+str(count)+'H',raw,8)
             if count==5: geometry+= (0,0,1)
-            width,height,pitch,cw,ch,ox,oy,scale=geometry
+            if count<10: geometry+=(80,25)
+            width,height,pitch,cw,ch,ox,oy,scale,cols,rows=geometry
             if count==5: assert width==80*cw and height<=1024
             assert 0 < cw <= 32 and 0 < ch <= 32
-            assert 1<=scale<=4 and ox+80*cw*scale<=width<=4096
-            assert oy+25*ch*scale<=height<=2160
+            assert 1<=cols<=255 and 1<=rows<=255 and cols*rows*2<=32768
+            assert 1<=scale<=4 and ox+cols*cw*scale<=width<=4096
+            assert oy+rows*ch*scale<=height<=2160
             assert width//8 <= pitch <= 512 and width % 8 == 0
             raw=raw[:8]+raw[8+count*2:]
         raw = raw[8:]
         size=geometry[1]*geometry[2]
-        assert len(raw) == 4027 + 4 * size, f'truncated/extra snapshot bytes: {path}'
-        return cls(raw[:4000], (raw[4001], raw[4000]), raw[4002:4027],
-                   [raw[4027+i*size:4027+(i+1)*size] for i in range(4)],*geometry)
+        text_bytes=geometry[8]*geometry[9]*2
+        start=text_bytes+27
+        assert len(raw) == start + 4 * size, f'truncated/extra snapshot bytes: {path}'
+        return cls(raw[:text_bytes], (raw[text_bytes+1], raw[text_bytes]), raw[text_bytes+2:start],
+                   [raw[start+i*size:start+(i+1)*size] for i in range(4)],*geometry)
 
     def glyph(self, row, col, plane=0):
         return plane_bits(self.planes[plane],self.pitch,self.origin_x+col*self.cell_width*self.scale,

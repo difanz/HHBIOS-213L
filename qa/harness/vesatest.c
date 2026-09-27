@@ -8,6 +8,13 @@
 #include "hostshot.h"
 
 static unsigned char buffer[4096];
+static unsigned char state_crtc[2][128];
+static void read_crtc(unsigned char *out)
+{
+    unsigned i,old=inp(0x3d4);
+    for (i=0;i<128;++i) { outp(0x3d4,i); out[i]=inp(0x3d5); }
+    outp(0x3d4,old);
+}
 static int query(unsigned ax,unsigned bx)
 {
     union REGPACK r,records[3];
@@ -30,11 +37,19 @@ static int transition(const char *operation)
 {
     union REGPACK r, result[4];
     FILE *f;
-    unsigned size=0,i;
+    unsigned size=0,i,palette[6];
     memset(result,0,sizeof(result));
     memset(&r,0,sizeof(r));
-    if (strcmp(operation,"state")==0) {
-        r.x.ax=0x4f04; r.x.cx=7; intr(0x10,&r); result[0]=r;
+    if (!strncmp(operation,"state",5)) {
+        unsigned flags=!strcmp(operation,"stateall") ? 15 : 7;
+        read_crtc(state_crtc[0]);
+        if (flags==15) {
+            r.x.ax=0x1015; r.x.bx=1; intr(0x10,&r);
+            palette[0]=r.h.dh; palette[1]=r.h.ch; palette[2]=r.h.cl;
+            r.x.ax=0x1010; r.x.bx=1; r.x.dx=7<<8; r.x.cx=(15<<8)|23; intr(0x10,&r);
+        }
+        memset(&r,0,sizeof(r));
+        r.x.ax=0x4f04; r.x.cx=flags; intr(0x10,&r); result[0]=r;
         if (r.x.ax==0x004f) {
             size=r.x.bx*64;
             if (!size || size>sizeof(buffer)-32) return 8;
@@ -43,8 +58,15 @@ static int transition(const char *operation)
             intr(0x10,&r); result[1]=r;
             if (r.x.ax!=0x004f) return 9;
             r.x.ax=0x4f02; r.x.bx=0x101; intr(0x10,&r); result[2]=r;
-            r.x.ax=0x4f04; r.x.cx=7; r.x.dx=2; r.x.es=FP_SEG(buffer); r.x.bx=FP_OFF(buffer)+16;
+            r.x.ax=0x4f04; r.x.cx=flags; r.x.dx=2; r.x.es=FP_SEG(buffer); r.x.bx=FP_OFF(buffer)+16;
             intr(0x10,&r); result[3]=r;
+            read_crtc(state_crtc[1]);
+            if (flags==15) {
+                r.x.ax=0x1015; r.x.bx=1; intr(0x10,&r);
+                palette[3]=r.h.dh; palette[4]=r.h.ch; palette[5]=r.h.cl;
+                r.x.ax=0x1010; r.x.bx=1;
+                r.x.dx=palette[0]<<8; r.x.cx=(palette[1]<<8)|palette[2]; intr(0x10,&r);
+            }
         }
     } else {
         r.x.ax=0x4f02; r.x.bx=0x101; intr(0x10,&r); result[0]=r;
@@ -58,6 +80,12 @@ static int transition(const char *operation)
     fwrite(result,1,sizeof(result),f);
     if (size) fwrite(buffer,1,size+32,f);
     i=fclose(f)!=0;
+    if (!strcmp(operation,"stateall")) {
+        f=fopen("STATECRT.BIN","wb"); if (!f) return 10;
+        fwrite(state_crtc,1,sizeof(state_crtc),f); i|=fclose(f)!=0;
+        f=fopen("STATEPAL.BIN","wb"); if (!f) return 10;
+        fwrite(palette,1,sizeof(palette),f); i|=fclose(f)!=0;
+    }
     return i;
 }
 

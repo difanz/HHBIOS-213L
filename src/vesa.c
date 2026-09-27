@@ -3,9 +3,6 @@
  * No DOS calls, allocation or C runtime are used after installation. */
 #include "vesa.h"
 
-#ifndef VESA_HOST
-#pragma code_seg("INIT_TEXT", "INIT")
-#endif
 static u16 word(const u8 *p) { return p[0] | ((u16)p[1] << 8); }
 
 int vesa_layout(struct surface *s, const u8 *p, u16 version, u16 mode)
@@ -79,6 +76,11 @@ u16 CALL display_start, split_line;
 u16 CALL text_bank;
 u16 CALL requested_mode=0x102, viewport_x, viewport_y, pixel_scale=1, bank_step=1;
 u16 CALL raster_height=CELL_HEIGHT;
+u16 CALL text_rows=25, text_cells=2000, page_bytes=4096, page_count=8, logical_height=16;
+u8 CALL last_row=24;
+u8 CALL hardware_mode;
+static u16 scan_lines=400, vbe_version;
+static struct surface preferred;
 u32 CALL plane_bytes=60000UL;
 u8 CALL large_surface, mode_selected;
 u8 CALL banked_text_allowed;
@@ -104,10 +106,10 @@ static u8 bda8(u16 off) { return *PTR(u8, 0x40, off); }
 static u16 bda16(u16 off) { return *PTR(u16, 0x40, off); }
 static void put8(u16 off, u8 v) { *PTR(u8, 0x40, off) = v; }
 static void put16(u16 off, u16 v) { *PTR(u16, 0x40, off) = v; }
-static u16 FAR *page(u16 p) { return PTR(u16, 0xb800 + (p & 7)*0x100, 0); }
+static u16 FAR *page(u16 p) { return PTR(u16, 0xb800, p*page_bytes); }
 static u16 position(u16 p) { return bda16(0x50 + (p & 7)*2); }
 static u16 index(u16 pos) { return (pos >> 8)*TEXT_COLS + (pos & 255); }
-static int inside(u16 pos) { return (pos >> 8) < TEXT_ROWS && (pos & 255) < TEXT_COLS; }
+static int inside(u16 pos) { return (pos >> 8) < text_rows && (pos & 255) < TEXT_COLS; }
 
 static void keyboard(void)
 {
@@ -121,6 +123,7 @@ static void hide_cursor(void)
 {
     if (active && cursor_visible) {
         u16 lines=(cursor_shape & 31)-(cursor_shape >> 8 & 31)+1;
+        lines=(lines*16+logical_height-1)/logical_height;
         if (large_surface) raster_cursor(cursor_position,lines);
         else cursor_xor(cursor_position,lines);
     }
@@ -129,8 +132,9 @@ static void hide_cursor(void)
 static void show_cursor(void)
 {
     cursor_position = position(active_page);
-    if (active && cursor_on && !(cursor_shape & 0x2000) && inside(cursor_position)) {
+    if (active && cursor_on && !(cursor_shape & 0x2000) && inside(cursor_position) && !mouse_covers(cursor_position)) {
         u16 lines=(cursor_shape & 31)-(cursor_shape >> 8 & 31)+1;
+        lines=(lines*16+logical_height-1)/logical_height;
         if (large_surface) raster_cursor(cursor_position,lines);
         else cursor_xor(cursor_position,lines);
         cursor_visible = active;
@@ -139,13 +143,15 @@ static void show_cursor(void)
 static void repaint(void)
 {
     if (!active) return;
-    hide_cursor(); refresh(); show_cursor();
+    hide_cursor(); mouse_erase(); refresh(); mouse_poll(); show_cursor(); mouse_paint();
 }
 static u8 suspend(void)
 {
     u8 previous;
     /* Called before a BIOS mode set, when the old aperture is still valid. */
-    hide_cursor(); previous=active; active = 0; keyboard();
+    hide_cursor();
+    if (mouse_erase() && active) refresh();
+    mouse_suspend(); previous=active; active = 0; keyboard();
     /* A failed cursor bank access must remain disabled on BIOS failure. */
     return previous;
 }
@@ -159,6 +165,7 @@ static int activate(u16 preserve)
     else r.ax=preserve ? 0x92 : 0x12;
     bios(&r);
     if (vbe_mode && r.ax != 0x004f) return 0;
+    hardware_mode=bda8(0x49);
     /* Start at graphics bank zero. The aperture probe isolates B800 text
      * from every bank occupied by the visible plane. */
     zero(&r, sizeof(r)); r.ax=0x4f05; r.bx=screen.window; bios(&r);
@@ -167,16 +174,126 @@ static int activate(u16 preserve)
     if (!aperture()) return 0;
     active_page = 0;
     if (!preserve) {
-        for (i=0; i<TEXT_COLS*TEXT_ROWS; ++i) page(0)[i]=0x0720;
+        for (i=0; i<text_cells; ++i) page(0)[i]=0x0720;
         for (i=0; i<8; ++i) put16(0x50+2*i, 0);
     }
     put8(0x49, logical_mode); put16(0x4a, TEXT_COLS);
-    put16(0x4c, 0x1000); put16(0x4e, 0); put8(0x62, 0);
-    put8(0x84, TEXT_ROWS-1); put16(0x85, CELL_HEIGHT);
+    put16(0x4c, page_bytes); put16(0x4e, 0); put8(0x62, 0);
+    put8(0x84, last_row); put16(0x85, logical_height);
     put16(0x60, cursor_shape);
     active = 1; cursor_visible = 0; prompt_open = 0;
+    if (resident_bytes) mouse_resume();
     keyboard(); invalidate(); repaint();
     return 1;
+}
+
+static void geometry(u16 rows,u16 height)
+{
+    u16 n;
+    text_rows=rows; last_row=(u8)(rows-1); text_cells=80*rows;
+    logical_height=height; page_bytes=rows>25 ? 8192 : 4096;
+    page_count=banked_text ? 32768U/page_bytes : 1;
+    large_surface=(u8)(rows!=25 || screen.width!=800 || screen.height!=600 || screen.pitch!=100);
+    plane_bytes=wide_product(screen.pitch,screen.height);
+    raster_height=screen.height>=CELL_HEIGHT*(rows+1) ? CELL_HEIGHT : GLYPH_HEIGHT;
+    pixel_scale=1;
+    for (n=2;n<=4 && screen.width>=800*n;++n) {
+        if (screen.height>=CELL_HEIGHT*(rows+1)*n) { pixel_scale=n; raster_height=CELL_HEIGHT; }
+        else if (screen.height>=GLYPH_HEIGHT*(rows+1)*n) { pixel_scale=n; raster_height=GLYPH_HEIGHT; }
+    }
+    viewport_x=(screen.width-800*pixel_scale)/2;
+    viewport_y=large_surface ? (screen.height-raster_height*(rows+1)*pixel_scale)/2 : 0;
+    bank_step=64/screen.granularity_kb;
+    text_bank=(u16)((plane_bytes+65535UL)>>16)*bank_step;
+}
+
+static int saved_surface(const struct surface *s,u16 rows)
+{
+    return s->width>=800 && s->width<=4096 && !(s->width&7) &&
+        s->height>=600 && s->height<=2160 && s->height>=GLYPH_HEIGHT*(rows+1) &&
+        s->pitch>=s->width/8 && s->pitch<=512 && !(s->pitch&1) &&
+        s->segment==0xa000 && s->window_kb==64 && s->granularity_kb &&
+        s->granularity_kb<=64 && !(64%s->granularity_kb) && s->window<2 &&
+        s->format==FORMAT_PLANAR4 && s->bpp==4 && s->planes==4;
+}
+
+static u8 in8(u16 port);
+#pragma aux in8 = "in al,dx" parm [dx] value [al];
+static void out8(u16 port,u8 value);
+#pragma aux out8 = "out dx,al" parm [dx] [al];
+
+/* Native state restore is still responsible for the caller's opaque buffer.
+ * Re-establish our owned surface through the mode API afterwards: some BIOSes
+ * restore VGA registers but lose extended timing or mode bookkeeping. Preserve
+ * the resulting BIOS data and palette, including components not requested by
+ * the caller's mask. Only our validated console records take this path. */
+static int restore_surface(void)
+{
+    u8 bda[37], colors[768], attributes[21],mask,index,dac_index;
+    u16 i;
+    struct registers r;
+    for (i=0;i<30;++i) bda[i]=bda8(0x49+i);
+    for (i=0;i<7;++i) bda[30+i]=bda8(0x84+i);
+    index=in8(0x3c0); mask=in8(0x3c6); dac_index=in8(0x3c8);
+    for (i=0;i<21;++i) { in8(0x3da); out8(0x3c0,(u8)i); attributes[i]=in8(0x3c1); }
+    in8(0x3da); out8(0x3c0,index);
+    out8(0x3c7,0);
+    for (i=0;i<768;++i) colors[i]=in8(0x3c9);
+    zero(&r,sizeof(r)); r.ax=0x4f02; r.bx=screen.mode|0x8000; bios(&r);
+    for (i=0;i<30;++i) put8(0x49+i,bda[i]);
+    for (i=0;i<7;++i) put8(0x84+i,bda[30+i]);
+    out8(0x3c8,0);
+    for (i=0;i<768;++i) out8(0x3c9,colors[i]);
+    out8(0x3c6,mask); out8(0x3c8,dac_index);
+    for (i=0;i<21;++i) { in8(0x3da); out8(0x3c0,(u8)i); out8(0x3c0,attributes[i]); }
+    in8(0x3da); out8(0x3c0,index);
+    display_pitch=screen.pitch;
+    return r.ax==0x004f;
+}
+
+/* A ROM-font change is a logical text operation. Keep text bytes intact even
+ * when the physical surface must grow to retain complete native glyphs. */
+static int rows_mode(u16 rows,u16 height,u16 preserve)
+{
+    struct surface candidate=preferred, previous=screen;
+    struct registers r;
+    u8 info[256], was_active=active;
+    u16 old_rows=text_rows,old_height=logical_height,old_page=active_page,i;
+    u16 cursors[8];
+    if (!rows || rows>MAX_TEXT_ROWS || (!banked_text && rows!=25)) return 0;
+    if (candidate.height<GLYPH_HEIGHT*(rows+1)) {
+        for (i=0;i<2;++i) {
+            zero(&r,sizeof(r)); zero(info,sizeof(info));
+            r.ax=0x4f01; r.cx=i ? 0x106 : 0x104;
+            r.es=resident_segment; r.di=(u16)info; bios(&r);
+            if (r.ax==0x004f && info[29] &&
+                vesa_console_layout(&candidate,info,vbe_version,r.cx) &&
+                (info[2+candidate.window]&1) && candidate.height>=GLYPH_HEIGHT*(rows+1)) break;
+        }
+        if (i==2) return 0;
+    }
+    suspend();
+    for (i=0;i<8;++i) cursors[i]=position(i);
+    if (preserve && !font_text(1)) {
+        active=was_active; keyboard(); if (active) { mouse_resume(); repaint(); } return 0;
+    }
+    screen=candidate; geometry(rows,height);
+    reprobe();
+    if (!activate(1)) {
+        screen=previous; geometry(old_rows,old_height); reprobe();
+        if (!activate(1)) { active=0; keyboard(); return 0; }
+    }
+    active=0;
+    if (preserve) {
+        if (!font_text(0)) { keyboard(); return 0; }
+    } else for (i=0;i<text_cells;++i) page(0)[i]=0x0720;
+    for (i=0;i<8;++i) put16(0x50+i*2,preserve && inside(cursors[i]) ? cursors[i] : 0);
+    active_page=preserve && old_page<page_count ? old_page : 0;
+    cursor_shape=((logical_height-2)<<8)|(logical_height-1);
+    put16(0x60,cursor_shape);
+    put8(0x62,(u8)active_page); put16(0x4e,active_page*page_bytes);
+    active=1; keyboard(); invalidate(); repaint();
+    return text_rows==rows;
 }
 
 #pragma code_seg("INIT_TEXT", "INIT")
@@ -191,6 +308,7 @@ u16 CALL initialize(void)
     if (r.ax != 0x004f || controller[0]!='V' || controller[1]!='E' ||
         controller[2]!='S' || controller[3]!='A' || (controller[10] & 2)) return 1;
     version = word(controller+4);
+    vbe_version=version;
     if (version < 0x100) return 1;
     modes_off=word(controller+14); modes_seg=word(controller+16);
     /* An explicit /M selects one mode. Otherwise try 102h and a bounded
@@ -209,15 +327,8 @@ u16 CALL initialize(void)
         if (r.ax==0x004f && vesa_console_layout(&screen, mode_info, version, number)) { vbe_mode=1; break; }
     }
     if (!vbe_mode) return 1;
-    large_surface=(u8)(screen.width!=800 || screen.height!=600 || screen.pitch!=100);
-    plane_bytes=wide_product(screen.pitch,screen.height);
-    pixel_scale=1; raster_height=CELL_HEIGHT;
-    for (n=2;n<=4 && screen.width>=800*n;++n) {
-        if (screen.height>=CELL_HEIGHT*26*n) { pixel_scale=n; raster_height=CELL_HEIGHT; }
-        else if (screen.height>=GLYPH_HEIGHT*26*n) { pixel_scale=n; raster_height=GLYPH_HEIGHT; }
-    }
-    viewport_x=(screen.width-800*pixel_scale)/2;
-    viewport_y=large_surface ? (screen.height-raster_height*26*pixel_scale)/2 : 0;
+    preferred=screen;
+    geometry(25,16);
     banked_text_allowed=(u8)(version>=0x102 && mode_info[29]>0 &&
                             (mode_info[2+screen.window] & 1) &&
                             !(64 % screen.granularity_kb));
@@ -227,6 +338,7 @@ u16 CALL initialize(void)
     /* Put all eight logical text pages in spare VRAM where available. This
      * also avoids page 1..7 aliasing visible pixels on 64 KiB VGA mappings. */
     banked_text=banked_text_allowed;
+    page_count=banked_text ? 8 : 1;
     /* On a 64 KiB aliasing aperture, reserve B800's first 4 KiB and place
      * scanout across a line-aligned wrap. The CPU start must be paragraph
      * aligned too. Geometry is kept out of the character classifier. */
@@ -257,9 +369,9 @@ static void scroll(u16 p, u8 down, u16 count, u16 attribute, u16 top, u16 bottom
 {
     u16 x, y, left=top & 255, right=bottom & 255, first=top >> 8, last=bottom >> 8;
     u16 FAR *text=page(p);
-    if (left>=80 || first>=25 || left>right || first>last) return;
+    if (left>=80 || first>=text_rows || left>right || first>last) return;
     if (right>79) right=79;
-    if (last>24) last=24;
+    if (last>=text_rows) last=text_rows-1;
     if (!count || count>last-first+1) count=last-first+1;
     for (y=0; y<=last-first; ++y) {
         u16 row=down ? last-y : first+y;
@@ -276,7 +388,7 @@ static void tty(u8 ch, u16 p)
 {
     u16 pos=position(p), col=pos & 255, row=pos >> 8;
     u16 FAR *text=page(p);
-    if (row>=25 || col>=80) return;
+    if (row>=text_rows || col>=80) return;
     if (ch==7) { call(0x0e07, 0, 0, 0); return; }
     if (ch==8) { if (col) --col; }
     else if (ch==13) col=0;
@@ -285,7 +397,7 @@ static void tty(u8 ch, u16 p)
         text[row*80+col]=(text[row*80+col] & 0xff00) | ch;
         if (++col==80) { col=0; ++row; }
     }
-    if (row==25) { scroll(p, 0, 1, text[24*80] >> 8, 0, 0x184f); --row; }
+    if (row==text_rows) { scroll(p, 0, 1, text[(text_rows-1)*80] >> 8, 0, (last_row << 8)|79); --row; }
     put16(0x50+(p & 7)*2, (row << 8) | col);
 }
 
@@ -294,6 +406,7 @@ static void tty(u8 ch, u16 p)
 static void state(void)
 {
     struct registers size;
+    struct surface saved;
     u16 action=request.dx & 255, flags=request.cx, offset, i;
     u8 was_active=active, was_cursor=cursor_visible;
     u8 FAR *record;
@@ -313,6 +426,7 @@ static void state(void)
     bios(&request);
     if (request.ax!=0x004f) {
         active=was_active; keyboard();
+        if (action==2 && (flags & 9) && active) mouse_resume();
         if (was_cursor && !cursor_visible) show_cursor();
         return;
     }
@@ -324,6 +438,11 @@ static void state(void)
         record[10]=(u8)cursor_shape; record[11]=(u8)(cursor_shape >> 8);
         record[12]=cursor_on; record[13]=(u8)flags; record[14]=traditional;
         record[15]=blink;
+        record[16]=(u8)text_rows; record[17]=(u8)logical_height;
+        record[18]=(u8)scan_lines; record[19]=(u8)(scan_lines>>8);
+        for (i=0;i<sizeof(screen);++i) record[20+i]=((u8 *)&screen)[i];
+        record[48]=(u8)text_bank; record[49]=(u8)(text_bank>>8);
+        record[50]=hardware_mode;
         if (was_cursor) show_cursor();
     } else if (flags & 9) {
         if (record[0]=='H' && record[1]=='H' && record[2]=='V' && record[3]==1 &&
@@ -332,13 +451,36 @@ static void state(void)
             active_page=record[7]; policy=record[8]; hanzi=record[9];
             cursor_shape=record[10] | ((u16)record[11] << 8);
             cursor_on=record[12]; traditional=record[14]; blink=record[15];
+            if (record[16]) {
+                if (record[16]>MAX_TEXT_ROWS ||
+                    (record[17]!=8 && record[17]!=14 && record[17]!=16)) {
+                    active=0; request.ax=0x014f; keyboard(); return;
+                }
+                for (i=0;i<sizeof(saved);++i) ((u8 *)&saved)[i]=record[20+i];
+                if (!saved_surface(&saved,record[16]) || record[7]>=
+                    (record[16]>25 ? 4 : 8)) {
+                    active=0; request.ax=0x014f; keyboard(); return;
+                }
+                screen=saved;
+                geometry(record[16],record[17]);
+                text_bank=record[48]|((u16)record[49]<<8);
+                scan_lines=record[18]|((u16)record[19]<<8);
+                hardware_mode=record[50];
+            }
             cursor_visible=0;
             if (active) {
+                if (record[16] && !restore_surface()) { active=0; request.ax=0x014f; keyboard(); return; }
                 if (!aperture()) { active=0; request.ax=0x014f; }
-                else { put8(0x49, logical_mode); invalidate(); }
+                else {
+                    put8(0x49, logical_mode); put8(0x84,last_row);
+                    put16(0x85,logical_height); put16(0x4c,page_bytes);
+                    put8(0x62,(u8)active_page); put16(0x4e,active_page*page_bytes);
+                    invalidate();
+                }
             }
         }
         keyboard();
+        if (active) mouse_resume();
     }
 }
 
@@ -349,9 +491,9 @@ static void prompt_draw(void)
     for (i=0; i<80; ++i) {
         u16 c=prompt[i] & 255, attr=prompt[i] >> 8;
         if (c>=0xa1 && c<=0xf7 && i<79 && (prompt[i+1] & 255)>=0xa1 && (prompt[i+1] & 255)<=0xfe) {
-            draw((c << 8) | (prompt[i+1] & 255), (attr << 8) | (prompt[i+1] >> 8), 0x1900+i);
+            draw((c << 8) | (prompt[i+1] & 255), (attr << 8) | (prompt[i+1] >> 8), (text_rows << 8)+i);
             ++i;
-        } else draw(c, attr, 0x1900+i);
+        } else draw(c, attr, (text_rows << 8)+i);
     }
     end_draw();
 }
@@ -376,13 +518,13 @@ static void extended(void)
     } else if (op==2) { if ((pos & 255)<80) prompt_col=(u8)pos; }
     else if (op==4) {
         if (begin_draw()) {
-            for (i=0; i<80; ++i) draw(32, 0, 0x1900+i);
+            for (i=0; i<80; ++i) draw(32, 0, (text_rows << 8)+i);
             end_draw();
         }
         prompt_open=0;
     } else if (op==5) prompt_attr=(u8)request.bx;
     else if (op==6) {
-        request.ax=0x0f12; request.bx=0x1904; request.cx=(raster_height << 8) | 26;
+        request.ax=0x0f12; request.bx=(text_rows << 8)|4; request.cx=(raster_height << 8) | (text_rows+1);
         request.dx=0x80 | traditional; request.si=screen.width-1;
         request.di=screen.height-1; request.bp=framebuffer;
     } else if (op==7) { logical_mode=(u8)(request.bx >> 8); put8(0x49, logical_mode); }
@@ -396,7 +538,7 @@ static void extended(void)
         if (inside(pos)) { page(active_page)[index(pos)]=(request.bx << 8) | (request.bx >> 8); repaint(); }
     } else if (op==10) {
         if (request.si<=0xffc0 && (pos & 255)<80)
-            bitmap(request.bp, request.si, request.bx & 255, 0x1900 | (pos & 255));
+            bitmap(request.bp, request.si, request.bx & 255, (text_rows << 8) | (pos & 255));
     } else if (op==11) { blink=(u8)(request.bx >> 8); }
     else if (op==12) { request.bx=resident_segment; request.ax=(u16)shadow; }
     else if (op==13) { period=(u8)(request.bx >> 8); if (!period) period=1; }
@@ -461,8 +603,13 @@ u16 CALL dispatch(void)
             u16 mode=request.bx & 0x3fff;
             previous=suspend(); bios(&request);
             if (request.ax==0x004f) {
-                if (mode<=3) { logical_mode=3; direct=1; if (!activate(0)) request.ax=0x014f; }
-            } else { active=previous; keyboard(); if (previous_cursor) show_cursor(); }
+                if (mode<=3) {
+                    logical_mode=3; direct=1;
+                    if (text_rows!=25 && banked_text) {
+                        if (!rows_mode(25,scan_lines/25,0)) request.ax=0x014f;
+                    } else if (!activate(0)) request.ax=0x014f;
+                }
+            } else { active=previous; keyboard(); if (active) mouse_resume(); if (previous_cursor) show_cursor(); }
         } else {
             /* BX is an input subfunction, but 4F06 returns a byte pitch in
              * the same register. Classify ownership before entering BIOS.
@@ -477,6 +624,7 @@ u16 CALL dispatch(void)
             bios(&request);
             if (changes && request.ax!=0x004f) {
                 active=previous; keyboard();
+                if (active) mouse_resume();
                 if (previous_cursor) show_cursor();
             }
         }
@@ -490,14 +638,15 @@ u16 CALL dispatch(void)
         if ((lo & 127)<=3 || (lo & 127)==0x12) {
             logical_mode=(lo & 127)==0x12 ? 0x12 : 3;
             direct=logical_mode==3;
-            activate(lo & 128);
+            if (text_rows!=25 && banked_text) rows_mode(25,scan_lines/25,lo & 128);
+            else { logical_height=scan_lines/25; activate(lo & 128); }
         } else bios(&request);
         return 1;
     }
     if (!active) return 0;
     /* A one-image adapter can expose only page zero without overlapping
      * scanout. Never accept an inaccessible page and overwrite graphics. */
-    if ((p>7 || (!banked_text && p)) && (function==2 || function==3 || function==8 ||
+    if ((p>=page_count || (!banked_text && p)) && (function==2 || function==3 || function==8 ||
         function==9 || function==10 || function==0x13)) return 1;
     switch (function) {
     case 1:
@@ -508,9 +657,9 @@ u16 CALL dispatch(void)
         hide_cursor(); put16(0x50+(p & 7)*2, request.dx); show_cursor(); break;
     case 3: request.dx=position(p); request.cx=cursor_shape; break;
     case 5:
-        if (lo>7 || (!banked_text && lo)) break;
+        if (lo>=page_count) break;
         hide_cursor(); active_page=lo & 7; put8(0x62, (u8)active_page);
-        put16(0x4e, active_page*0x1000); invalidate(); repaint(); break;
+        put16(0x4e, active_page*page_bytes); invalidate(); repaint(); break;
     case 6: case 7:
         scroll(active_page, function==7, lo, p, request.cx, request.dx); repaint(); break;
     case 8:
@@ -519,7 +668,7 @@ u16 CALL dispatch(void)
         pos=position(p);
         if (!inside(pos)) break;
         i=index(pos); count=request.cx;
-        if (count>2000-i) count=2000-i;
+        if (count>text_cells-i) count=text_cells-i;
         while (count--) { page(p)[i]=(function==9 ? request.bx << 8 : page(p)[i] & 0xff00) | lo; ++i; }
         repaint(); break;
     case 0x0e: tty((u8)lo, active_page); repaint(); break;
@@ -535,8 +684,18 @@ u16 CALL dispatch(void)
         if (lo==3) break; /* keep sixteen background colors */
         bios(&request); break;
     case 0x11:
-        if (lo==0x30) bios(&request);
-        break; /* fixed console grid; no BIOS text font reprogramming */
+        if (lo==0x30) { bios(&request); request.cx=logical_height; request.dx=(request.dx & 0xff00)|last_row; }
+        else if (lo==0x11 || lo==0x12 || lo==0x14) {
+            u16 height=lo==0x12 ? 8 : lo==0x11 ? 14 : 16;
+            rows_mode(scan_lines/height,height,1);
+        }
+        break;
+    case 0x12:
+        if ((request.bx & 255)==0x30 && lo<=2) {
+            scan_lines=lo==0 ? 200 : lo==1 ? 350 : 400;
+            request.ax=(request.ax & 0xff00)|0x12;
+        } else return 0;
+        break;
     case 0x13: {
         u16 saved=position(p), off=request.bp;
         put16(0x50+(p & 7)*2, request.dx);
@@ -576,9 +735,10 @@ void CALL tick(void)
 {
     if (!active || ++counter<period) return;
     counter=0;
-    hide_cursor(); refresh();
+    hide_cursor(); mouse_erase(); refresh(); mouse_poll();
     if (!active) { keyboard(); return; }
     /* Keep blink phase independent of dirty text. */
     if (!blink || (bda8(0x6c) & 8)) show_cursor();
+    mouse_paint();
 }
 #endif

@@ -189,7 +189,7 @@ class Driver:
     def read(self,name,n=1): return bytes(self.uc.mem_read(0x10000+self.symbols[name],n))
 
     def run(self,entry='int10_handler',limit=300000,**registers):
-        near=entry!='int10_handler'
+        near=entry not in ('int10_handler','int33_handler')
         context=dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
                      SP=0xe000,EFLAGS=0x202)
         context.update(registers)
@@ -226,26 +226,28 @@ def test_unavailable_text_pages_do_not_alias_valid_pages(vesa_driver,banked,page
 
 @pytest.mark.parametrize('drawing',[False,True])
 @pytest.mark.parametrize('col,role',[(3,1),(4,2),(5,0)])
-def test_keyboard_query_uses_live_text_or_banked_snapshot_without_c_reentry(vesa_driver,drawing,col,role):
-    from qa.spec.machine import blank, put
+@pytest.mark.parametrize('row,rows',[(4,25),(31,50),(42,43),(49,50)])
+def test_keyboard_query_uses_live_text_or_banked_snapshot_without_c_reentry(vesa_driver,drawing,col,role,row,rows):
     banks=[]
     def bios(m):
         assert m.get('AX')==0x4f05
         banks.append(m.get('DX')); m.put('AX',0x004f)
     m=Driver(vesa_driver,bios)
     m.write('active',b'\1'); m.write('banked_text',b'\1')
-    text=blank(); put(text,4,3,'中a')
+    m.write('text_rows',struct.pack('<H',rows)); m.write('last_row',bytes([rows-1]))
+    m.write('text_cells',struct.pack('<H',rows*80))
+    text=bytearray(b' \x07'*(80*rows)); text[(row*80+3)*2:(row*80+6)*2]=b'\xd6\x07\xd0\x07a\x07'
     m.uc.mem_write(0xb8000,bytes(text))
     if drawing:
         m.run('begin_draw')
         assert banks==[0]
         m.write('busy',b'\1')
         # While A000 is selected, reading B800 does not expose the text page.
-        m.uc.mem_write(0xb8000,b'\xa5'*4000)
+        m.uc.mem_write(0xb8000,b'\xa5'*len(text))
     m.write('request',b'\xa5'*20)
     bottom,top=m.symbols['stack_bottom'],m.symbols['stack_top']
     stack=bytes(m.uc.mem_read(0x10000+bottom,top-bottom))
-    initial=dict(AX=0x1410,BX=0,CX=0x5678,DX=0x400+col,
+    initial=dict(AX=0x1410,BX=0,CX=0x5678,DX=row*256+col,
                  SI=0x1234,DI=0x3456,BP=0x4567,DS=0x3000,ES=0x4000)
     m.run(**initial)
     assert (m.get('AX'),m.get('BX'),m.get('CX'))==(role,0x4b48,0x1000+m.symbols['text_transfer']//16)
@@ -254,7 +256,7 @@ def test_keyboard_query_uses_live_text_or_banked_snapshot_without_c_reentry(vesa
     assert m.read('busy')==bytes([drawing])
     assert m.get('SS')==0x8000 and m.get('EFLAGS')==0x202
     assert bytes(m.uc.mem_read(0x10000+bottom,top-bottom))==stack
-    assert m.read('text_transfer',4000)==bytes(text)
+    assert m.read('text_transfer',len(text))==bytes(text)
     assert banks==([0] if drawing else [])
 
 

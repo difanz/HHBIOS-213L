@@ -1,9 +1,9 @@
 # VBE coexistence and rendering
 
 `VGA.COM` retains its 640x480 renderer. The independent `VESA.COM`, built from
-`vesa.c`, `vesa.asm` and `vesa_raster.c`, draws a planar 16-color console. Load one display
+`vesa.c`, `vesa.asm` and `vesa_raster.c`, draws a planar 16-color console. Its mouse adapter is in `vesa_mouse.c`/`.asm`. Load one display
 driver at a time, after a font reader and optionally CKBD. The logical screen
-remains 80x25 cells. At the default 800x600 size, cells are 10x23 pixels and
+starts at 80x25 cells. At the default 800x600 size, cells are 10x23 pixels and
 the input-method row starts at y=575.
 Chinese uses native 16x16 Unifont bitmaps centered in fullwidth 20x23 slots;
 Western/CP437 uses Terminus 10x20 bitmaps. Box strokes extend through the row spacing. Font generation,
@@ -11,8 +11,8 @@ licenses, traditional mapping and file format are in [fonts/README.md](../fonts/
 At the default 800x600 size, the final two scanlines remain available to pixel APIs.
 
 `VESA /M:hex` selects a BIOS-provided physical mode, for example 104h for
-1024x768 or 106h for 1280x1024. Larger surfaces retain the 80x25 B800 interface,
-eight 4 KiB pages and logical BIOS character height. The viewport is centered,
+1024x768 or 106h for 1280x1024. Selecting a larger surface alone retains the
+logical text geometry. The viewport is centered,
 including the input-method row. Native glyphs use the largest integer scale
 from 1 through 4 that fits. If necessary to fit a larger integer scale, only
 the three spacing rows are removed; the complete 20-row font ink is retained.
@@ -49,13 +49,17 @@ includes it in size queries. It validates size/segment bounds and returns native
 BIOS errors. Restoration of either controller hardware (CX bit 0) or extended
 register state (CX bit 3) changes display ownership. A valid private record can
 restore the console; an unrelated or invalid record leaves rendering suspended.
+For a validated console record, restoration re-establishes its physical mode
+with the preserve-memory flag after the native restore, retaining the resulting
+BIOS data and VGA palette. This avoids relying on a BIOS's extended-register
+restore to reproduce the console's timing. External state buffers remain native.
 Saved state does not include pixel
 memory, just as the underlying VBE service does not save it. Successful external
 bank, stride or display-start changes also relinquish console ownership,
 including VBE 3.0 scheduled and stereoscopic display-start operations. Read-only
 queries retain ownership. The input subfunction determines this policy; the
 returned BX from 4F06h contains bytes per scanline, not a subfunction number.
-The software cursor is erased before a layout change, while its original bank
+The text and mouse cursors are erased before a layout change, while their original bank
 and stride are valid. Failed BIOS calls restore ownership and the cursor unless
 erasing it already failed a bank operation; that failure must leave rendering
 and CKBD interception disabled.
@@ -66,13 +70,14 @@ integrate arbitrary `4F04h` restoration with its renderer.
 
 ## Memory and interrupt boundary
 
-Where an extra image page and relocatable window are available, VESA keeps eight
-4 KiB text pages in spare VRAM. B800 is
+Where an extra image page and relocatable window are available, VESA keeps 32 KiB
+of text pages in spare VRAM: eight 4 KiB pages at 25 rows, four 8 KiB pages above 25 rows. B800 is
 mapped while applications run. Each outer drawing transaction snapshots the
-active 4000-byte text page in the existing resident transfer buffer before
+active text page (up to 8000 bytes) in the resident transfer buffer before
 switching to graphics bank zero. Refresh draws changed
 cells, and restores the text bank. Classification conversions are copied back
-to the text page. The original `ZJXP.INC` and `HZPOS.INC` are included unchanged.
+to the text page. The shared `ZJXP.INC`, `FRM.INC` and `HZPOS.INC` use overridable
+row bounds; their legacy defaults and classification rules are retained.
 The installer starts beyond the complete visible plane and tests up to four candidate banks by
 writing distinct words across all 32 KiB of B800 and clearing the complete
 visible plane through A000, including every graphics bank on larger surfaces.
@@ -92,13 +97,16 @@ write through it. A query outside drawing first refreshes the snapshot from
 B800. Queries run on the caller's stack and preserve the occupied renderer
 stack, so keyboard IRQ consumers such as EDIT 2.x can still complete a paired
 deletion while a font read is in progress. Interrupts are masked only during
-the bounded 4000-byte snapshot/copy-back operations, not during rasterization
-or XMS/EMS calls. No additional resident text buffer is allocated.
+the bounded text snapshot/copy-back operations, not during rasterization
+or XMS/EMS calls. The shadow is 8000 bytes and the banked snapshot is 8192 bytes.
 
 HH20.FNT is loaded before mode installation into XMS, or EMS 4.0 using its
 mapping-preserving move-region service. The resident cache holds 16 packed
 glyphs (1120 bitmap bytes plus 64 bytes of keys/validity). Simplified and
 traditional slot maps share deduplicated glyphs in the external allocation.
+An additional 32 KiB in that same allocation preserves all text pages across
+font/row changes that require a physical mode switch. No DOS allocation occurs
+during those transitions.
 The loader closes its file and releases its allocation on installation failure.
 No full framebuffer or font copy occupies conventional memory. Font lookup
 failures leave the cache entry invalid and set the diagnostic error flag.
@@ -119,7 +127,7 @@ code performs no DOS allocation or file I/O.
 
 DOS 5 UMBs are preferred; `/N` forces conventional memory. Allocation strategy
 and UMB linkage are restored, and installer code/buffers and the DOS environment
-are released. The extra 4 KiB text transfer buffer is retained only by the
+are released. The 8 KiB text transfer buffer is retained only by the
 banked backend. `AX=1411h` reports the actual resident byte count including PSP.
 
 Uncoordinated TSRs that directly touch B800 or VGA ports during another
@@ -132,14 +140,46 @@ detected.
 
 VESA provides text/cursor/page/scroll, teletype, string, palette and pixel BIOS
 operations used by the console, plus HHBIOS font, prompt, bitmap, wide-text,
-redraw, policy and Chinese-boundary interfaces. Font reprogramming is unsupported;
-`AH=11h/AL=30h` still forwards the ROM font query. The compatible `AH=16h`
+redraw, policy and Chinese-boundary interfaces. `AH=12h/BL=30h` selects
+200/350/400 logical scanlines. `AX=1111h/1112h/1114h` selects the ROM
+14/8/16-line font geometry, including the usual 80x43 and 80x50 sequences.
+The resident limit is 50 rows and 80 columns. More than 25 rows requires banked
+text storage. A taller physical mode is selected when necessary to fit native
+glyphs and the prompt row; failed selection retains the previous grid.
+`AX=1130h` forwards the ROM font pointer while returning logical height and last
+row. Custom uploaded fonts are unsupported. The compatible `AH=16h`
 bitmap query uses the existing 16-pixel reader; the 8x16 input bitmap API
 scales at the rendering boundary. Normal text draws directly from HH20.FNT.
 `AX=1406h` reports CX=171Ah (23 scanlines, 26 rows) and maximum pixel
 coordinates 799/599 at the default size. Larger surfaces report their physical
 pixel limits and unscaled raster height (20 or 23). Its framebuffer segment is diagnostic, not a promise of a
 permanently mapped graphics window.
+
+## Mouse contract
+
+Load a native INT 33h mouse driver before VESA. It retains hardware input,
+buttons, event timing, mickeys and sensitivity. While the Chinese console is
+active, its native cursor stays hidden. HHBIOS paints a software text cursor
+(AND/XOR masks) or a scanline-shaped text cursor, preserving Chinese halves
+and all B800 bytes. The ordinary BIOS caret is suppressed where it overlaps.
+
+Position queries/setters, button press/release positions, ranges, callbacks
+(`0Ch`/`14h`) and maximum coordinates use logical 8x8 units per cell. Physical
+viewport, scale and raster height are internal. The native driver's range
+covers the complete physical surface; logical clipping happens after
+translation so absolute mouse input is not rescaled to a cropped viewport.
+Show/hide nesting, conditional exclusion (`10h`), cursor page (`1Dh`/`1Eh`)
+and state save/restore (`15h`–`17h`, with an appended 64-byte record) are handled.
+See Microsoft's [mouse function reference](https://msarchive.pcjs.org/mspl13/msdos/advdos/).
+
+INT 33h and callback entry points use the caller's stack and explicit far
+register packets. Callbacks translate coordinates and return to the application;
+only the serialized renderer draws. Mouse reset temporarily exposes the physical
+BIOS mode to the native driver. External graphics-mode ownership restores the
+application callback and native cursor. Alternate modifier-specific callbacks
+(`18h`/`19h`), light-pen emulation, direct mouse-driver entry calls and loading a
+replacement mouse driver after VESA have not been validated. Emulator runtime
+checks do not establish compatibility with every hardware mouse driver.
 
 | VESA extension | Contract |
 | --- | --- |

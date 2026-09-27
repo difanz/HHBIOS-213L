@@ -166,7 +166,7 @@ def test_borland_dpmi_font_memory(pytestconfig, dosbox_binary, application_dir, 
     exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, True, 'movement', loader)
 
 
-def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario, loader=None, display='VGA', display_size=None):
+def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario, loader=None, display='VGA', display_size=None, text_setup=None, leading_rows=0):
     tmp_path = application_dir
     command = 'TVEDIT VIEW.TXT'
     if editor == 'tvedit':
@@ -219,7 +219,8 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
         'files': {p.name: digest(p) for p in tmp_path.iterdir()
                   if p.suffix in ('.EXE', '.OVL', '.DLL', '.CFG', '.MND', '.MNC') or p.name == 'EDIT.COM'},
     }, indent=2)+'\n')
-    original = 'HHBIOS-QA\r\n中文测试abc\r\n'.encode('gb2312')
+    prefix=b'HHBIOS-QA\r\n'+b'padding\r\n'*leading_rows
+    original = prefix+'中文测试abc\r\n'.encode('gb2312')
     (tmp_path / 'VIEW.TXT').write_bytes(original)
     if editor == 'pct9':
         subprocess.run(['mformat', '-C', '-i', str(tmp_path / 'DATA.IMG'), '-f', '1440', '::'], check=True)
@@ -237,6 +238,8 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
         keys = [k | 0xe0 if k in (0x5000, 0x4700, 0x4d00, 0x4b00, 0x5300) else k for k in keys]
     elif editor == 'pct9':
         keys.append(0x1c0d)  # Acknowledge "File saved successfully."
+    prekeys=[0x50e0 if editor in ('msedit','edit2') else 0x5000]*leading_rows
+    keys=prekeys+keys
     (tmp_path / 'KEYS.BIN').write_bytes(struct.pack(f'<{len(keys)}H', *keys))
     keyboard_config(tmp_path)
     switch = '/E' if enabled else '/B'
@@ -246,8 +249,8 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
     assert (tmp_path / (loader+'.COM')).is_file(), f'missing font reader: {loader}'
     files = run_dos(dosbox_binary, tmp_path, setup+['SNAPSHOT font', 'CKBD > CKBD.LOG',
                       f'{loader} > FONTLOAD.LOG', display+' > DISPLAY.LOG', ('CMODE 3 > CMODE.LOG', 3),
-                      f'CKBD {switch} > KEYMODE.LOG',
-                      'APPCAP install', command, 'C:', 'APPCAP dump'], timeout=45,
+                      f'CKBD {switch} > KEYMODE.LOG']+(text_setup or [])+[
+                      'APPCAP install', command, 'C:', 'APPCAP dump'], timeout=45+leading_rows*2,
                       physical_keys=True,
                       screenshots=pytestconfig.getoption('--screenshots'),
                       settings='\n[dosbox]\nmachine=svga_s3\n' if display.split()[0]=='VESA' else '')
@@ -262,6 +265,12 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
     records = [(struct.unpack_from('<HH', log, i), log[i+4:i+164])
                for i in range(0, len(log), 164)]
     assert [key for (key, cursor), row in records] == [0]+keys
+    records=records[leading_rows:]
+    if leading_rows:
+        assert records[3][0][1]>>8>=25,'The edit must exercise a screen row beyond the old limit'
+        meta=struct.unpack_from('<6H',files['KEYMETA.BIN'].read_bytes(),(leading_rows+3)*12)
+        assert meta[1]==49 and meta[2:4]==(2,0x4b48)
+        assert not meta[0]&0x2000,'A hidden BIOS cursor deliberately disables keyboard adaptation'
     if scenario == 'movement':
         initial_col = records[2][0][1] & 255
         width = 2 if enabled else 1
@@ -270,17 +279,17 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
             initial_col+width, initial_col]
         after_delete = '中测试abc'.encode('gb2312') if enabled else b'\xd6'+'文测试abc'.encode('gb2312')
         result = ('测试abc' if enabled else '文测试abc').encode('gb2312')
-        assert after_delete in records[6][1][::2]
-        assert result in records[7][1][::2]
+        assert records[6][1][::2][initial_col:initial_col+len(after_delete)+1]==after_delete+b' '
+        assert records[7][1][::2][initial_col:initial_col+len(result)+1]==result+b' '
     else:
         initial_col = records[1][0][1] & 255
         assert records[3][0][1] & 255 == initial_col+1
         result = '文测试abc'.encode('gb2312')
         if not enabled:
             result = (b'\xd6' if scenario == 'trail-delete' else b'\xd0')+result
-        assert result in records[4][1][::2]
+        assert records[4][1][::2][initial_col:initial_col+len(result)+1]==result+b' '
         assert records[4][0][1] & 255 == initial_col+(not enabled and scenario == 'trail-delete')
-    expected = b'HHBIOS-QA\r\n'+result+b'\r\n'
+    expected = prefix+result+b'\r\n'
     if editor in ('tc201', 'pct9'):
         expected += b'\x1a'  # These editors write the DOS text EOF marker.
     saved = files['VIEW.TXT'].read_bytes()

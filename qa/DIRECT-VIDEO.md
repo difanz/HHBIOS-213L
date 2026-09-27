@@ -1,6 +1,6 @@
 # Direct text-memory writes
 
-The resident 80x25 console observes foreground stores to color text memory at
+The resident console observes foreground stores to color text memory at
 `B800:0000`. An application does not need to call BIOS text-output functions or
 an HHBIOS repaint function after changing the text cells. Timer refresh compares
 the active page with the saved screen and draws the changed cells.
@@ -58,6 +58,7 @@ directory. This tests eventual refresh, not a maximum redraw-latency bound.
 | Banked VESA, 800x600 / 80x25 | Active pages 0 and 7; preservation of all eight 4 KiB pages | The bank-isolation probe must succeed. |
 | Banked VESA, 1024x768 and 1280x1024 / 80x25 | Active page 7, every operation above, all eight pages and full-window pixels | A BIOS-provided planar mode and isolated text bank are required. |
 | Banked VESA, 1920x1080 / 80x25 | The same stores with native glyphs at 2x and centered 20x40 physical cells | The test discovers the vendor mode; unavailable geometry is reported separately. |
+| Banked VESA, 80x43 / 80x50 | Full visible B800 image, page isolation, four corners, mouse cursor and complete planar image | Standard VGA font/scanline selection; four 8 KiB text pages. See `test_resident_text.py`. |
 | Legacy VGA, 640x480 / 80x25 | Active pages 0 and 5; preservation of pages 0 through 5 on the aliased aperture | The AE020 framebuffer aliases text pages 6/7 on a 64 KiB aperture. |
 | One-image VESA fallback | Not exercised by this direct-write matrix | Its existing contract permits page 0 only. |
 
@@ -74,9 +75,9 @@ recognized CP437 frame characters may be converted to the documented legacy
 aliases in text memory; applications must not assume those bytes are untouched.
 The tests hide the software cursor to isolate glyph and attribute updates.
 
-Direct CRTC/GC reprogramming, monochrome B000 applications, physical mouse
-callbacks and protected-mode mapping policies are separate compatibility
-questions. These results do not establish them. Widescreen physical surfaces
-can host the resident 80x25 console; larger logical grids such as 132x50 remain
+Direct CRTC/GC reprogramming, monochrome B000 applications and protected-mode
+mapping policies are separate compatibility questions. Physical mouse events
+have separate tests in `test_resident_text.py`. Widescreen physical surfaces
+can host the resident console; wider logical grids such as 132x50 remain
 foreground rendering experiments and are not yet advertised as resident text
 modes. These are distinct features.

@@ -5,15 +5,39 @@ Pixel resolution, font strike and integer enlargement are backend choices.
 Increasing the framebuffer size must not invent a new application-visible mode
 or force a program to accept more columns.
 
-The resident VESA driver can render its existing 80x25 B800 interface on larger
-physical surfaces using `/M:hex`, with bank-spanning stores and integer bitmap
-enlargement. Direct-memory programs do not need to be modified for that path.
-This document concerns extending the logical text grid itself. The shipping
-HHBIOS drivers still expose 80x25; resident wider/taller Chinese rendering, mouse
-translation and virtual VBE text-mode enumeration are not implemented yet.
+The resident VESA driver supports standard VGA ROM-font row changes, including
+80x43 and 80x50, with B800, BIOS, keyboard and mouse using the same geometry.
+`/M:hex` independently selects the preferred physical surface. Bank-spanning
+stores and integer bitmap enlargement preserve complete glyphs. Direct-memory
+programs do not need to change their ordinary BIOS/B800 interface.
+The legacy display drivers remain 80x25. Wider resident grids and virtual VBE
+108h..10Ch text-mode enumeration are not implemented yet.
 The [wide framebuffer experiments](WIDE-RENDERING.md) exercise larger bitmap
 grids, integer enlargement, bank crossings and several pixel formats in a
 foreground DOS program. They also extend the native mouse/page observations.
+
+## Resident VGA row selection
+
+`AH=12h, BL=30h` selects the logical scanline count; mode 03h and
+`AX=1112h` select the usual 350/8 (43-row) or 400/8 (50-row) layout.
+ROM 14/16-line selections work as well; the transition test includes 80x28.
+BIOS font queries return logical character height, independent of physical
+glyph enlargement. More than 25 rows uses four 8 KiB text pages. Full 32 KiB
+preservation during font changes uses external XMS/EMS backup, including inactive
+pages and padding.
+
+The current native 10x20 glyph cells plus prompt row need at least 880 pixels
+for 43 rows and 1020 for 50 rows. Extra spacing is used where it fits. If the
+preferred surface is too short, the driver tries BIOS modes 104h and 106h;
+it retains the previous grid if no suitable surface is available. No custom
+mode number is substituted for an application's VGA row-selection sequence.
+
+`test_resident_text.py` checks row/page/font agreement, text preservation and
+all four graphics planes, plus real mouse movement, press/release callbacks,
+cursor masks/shapes and exclusion areas after VBE state restoration.
+`test_vesa_application.py -k 50_row` runs TVEDIT and EDIT 2 with Chinese below
+row 25 and checks Delete/Backspace results in both screen rows and saved files.
+These are separate from the native BIOS observations below.
 
 ## Mode families
 
@@ -148,16 +172,18 @@ list; no assumption that a DOS VBE BIOS supplies widescreen or 4K modes.
 
 ## Memory and incremental implementation
 
-`vesa.c` currently assumes 80x25, 4 KiB page strides and eight pages.
-`vesa.asm` has a 4000-byte shadow and a 4096-byte transfer buffer. Its 800x600
+`vesa.c` has variable row count, page stride/count and BIOS font height, with
+80 columns and a maximum of 50 rows. `vesa.asm` has an 8000-byte shadow and an
+8192-byte banked transfer buffer. Its 800x600
 fast path uses 16-bit offsets; `vesa_raster.c` handles larger planes with 32-bit
-offsets and bank-spanning stores. `KEYEDIT.INC` keeps an 80-byte row and rejects other
-geometries. The shared mixed-text classifier and legacy drawing paths also
-contain 80/25/160/2000 constants. These contracts must change together.
+offsets and bank-spanning stores. `KEYEDIT.INC` keeps an 80-byte row and checks
+the BDA row limit. Shared classification has overridable row bounds, preserving
+25-row legacy defaults. Extending column count still requires coordinated
+changes to classification, BIOS, keyboard, buffers and mouse coordinates.
 
 A 132x50 text image is 13200 bytes; 132x60 is 15840. Eight such pages cannot
 fit the 32 KiB B800 aperture. A full shadow plus reentrant snapshot would add
-roughly 23 KiB at 132x60 over the existing two buffers. Prefer bounded row work
+roughly 15 KiB at 132x60 over the existing two buffers. Prefer bounded row work
 buffers and external shadow storage, but first preserve the AX=1410h read-only
 snapshot contract: its caller currently receives a pointer to a complete text
 image. A row-only replacement needs an explicit new query, not a silently
@@ -170,12 +196,11 @@ including glyphs crossing that boundary. This wider arithmetic does not
 require a 386. Logical-grid extensions must retain that behavior and the
 existing 800x600 fast path.
 
-Implement in small stages: first the logical descriptor and 80x43/50 selection
-contract; then 108h..10Ch emulation using the bank-spanning backend; then mouse and
-application return paths, with each mode advertised only when its required
-services work. Retain the old VGA path and shared classifier behavior while
-making specific geometry assumptions explicit. Later backends can add packed
-pixels and larger bitmap strikes.
+The next logical-grid extension is 108h..10Ch emulation using the bank-spanning
+backend, with each mode advertised only when its required services work.
+Retain the old VGA path and shared classifier behavior while making specific
+geometry assumptions explicit. Later backends can add packed pixels and larger
+bitmap strikes.
 
 For each stage test mode-query/BDA agreement, all four corners, tabs and mixed
 frames, orphan bytes at both row ends, whole-character Delete/Backspace, scroll
@@ -188,6 +213,9 @@ the two have already exposed different bugs in this project.
 Use the normal QA toolchain and a fresh evidence directory created by the runner:
 
 ```sh
+python qa/run.py dos qa/spec/test_resident_text.py --screenshots --dosbox /path/to/dosbox
+python qa/run.py application qa/spec/test_vesa_application.py -k 50_row --screenshots \
+    --dosbox /path/to/dosbox --msedit2 /path/to/EDIT.COM
 python qa/run.py dos qa/spec/test_text_modes.py --screenshots --dosbox /path/to/dosbox
 python qa/run.py application qa/spec/test_application_modes.py --screenshots \
     --dosbox /path/to/dosbox-with-vbe-text-modes \

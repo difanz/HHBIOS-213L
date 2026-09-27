@@ -11,9 +11,10 @@
 u32 CALL font_entry;
 u16 CALL font_kind, font_handle, font_kb, font_fault;
 static u16 records, next_slot;
+static u32 text_storage;
 static u16 keys[FONT_CACHE], valid[FONT_CACHE];
 static u8 cache[FONT_CACHE][FONT_RECORD];
-extern u8 CALL text_transfer[4096];
+extern u8 CALL text_transfer[8192];
 void CALL font_service(u16 kind, struct registers *r);
 
 #pragma pack(push, 1)
@@ -100,6 +101,20 @@ void CALL font_bitmap(u8 *source, u16 *out)
     for (; y<CELL_HEIGHT; ++y) out[y]=0;
 }
 
+/* Preserve the entire B800 aperture across a physical mode/bank probe. The
+ * extra 32 KiB lives in the existing XMS/EMS allocation, not conventional RAM. */
+u16 CALL font_text(u16 saving)
+{
+    u16 off,i;
+    u8 FAR *text=PTR(u8,0xb800,0);
+    for (off=0;off<32768;off+=4096) {
+        if (saving) for (i=0;i<4096;++i) text_transfer[i]=text[off+i];
+        if (!transfer(text_storage+off,text_transfer,4096,saving)) return 0;
+        if (!saving) for (i=0;i<4096;++i) text[off+i]=text_transfer[i];
+    }
+    return 1;
+}
+
 #pragma code_seg("INIT_TEXT", "INIT")
 void CALL font_close(void)
 {
@@ -155,7 +170,8 @@ u16 CALL font_open(void)
     if (!records || records>FONT_SLOTS*2 ||
         length!=FONT_MAP_BYTES+RECORD_OFFSET(records)) goto done;
     font_kb=(u16)((length+1023) >> 10);
-    if (!allocate(font_kb)) goto done;
+    text_storage=length;
+    if (!allocate(font_kb+32)) goto done;
     for (offset=0; offset<length; offset+=count) {
         count=length-offset>4096 ? 4096 : (u16)(length-offset);
         r.ax=0x3f00; r.bx=file; r.cx=count; r.dx=(u16)text_transfer;

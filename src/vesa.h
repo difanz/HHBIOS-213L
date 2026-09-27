@@ -9,9 +9,10 @@ typedef unsigned int u32;
 typedef unsigned long u32;
 #endif
 
-/* The console remains 80x25. Pixel geometry is a separate contract. */
+/* Logical text geometry is independent of the physical surface. */
 #define TEXT_COLS 80
 #define TEXT_ROWS 25
+#define MAX_TEXT_ROWS 50
 #define CELL_WIDTH 10
 #define CELL_HEIGHT 23
 #define GLYPH_HEIGHT 20
@@ -56,22 +57,28 @@ extern u16 CALL display_start, split_line;
 extern u16 CALL text_bank;
 extern u16 CALL requested_mode, viewport_x, viewport_y, pixel_scale, bank_step;
 extern u16 CALL raster_height;
+extern u16 CALL text_rows, text_cells, page_bytes, page_count, logical_height;
+extern u8 CALL last_row;
+extern u8 CALL hardware_mode;
+extern u8 CALL mouse_native;
 extern u32 CALL plane_bytes;
 extern u8 CALL large_surface;
 extern u16 CALL mapped_block;
 extern u8 CALL banked_text_allowed;
 extern u8 CALL active, busy, policy, hanzi, traditional;
-extern u16 CALL shadow[TEXT_COLS*TEXT_ROWS];
+extern u16 CALL shadow[TEXT_COLS*MAX_TEXT_ROWS];
 extern u16 CALL frame_alias_offset;
 void CALL font_get(u16 code, u16 *out);
 u16 CALL font_open(void);
 void CALL font_close(void);
+u16 CALL font_text(u16 saving);
 extern u16 CALL font_kind, font_kb, font_fault;
 void CALL bios(struct registers *r);
 void CALL refresh(void);
 void CALL invalidate(void);
 void CALL boundary(struct registers *r);
 u16 CALL aperture(void);
+void CALL reprobe(void);
 u16 CALL begin_draw(void);
 void CALL end_draw(void);
 void CALL draw(u16 code, u16 attribute, u16 position);
@@ -89,5 +96,12 @@ void CALL raster_cell(const u16 *bits, u16 attribute, u16 position);
 void CALL raster_cursor(u16 position, u16 lines);
 u16 CALL raster_pixel(u16 x, u16 y, u16 color, u16 writing);
 void CALL raster_read(u16 plane, u32 offset, u16 segment, u16 destination, u16 count);
+void CALL mouse_resume(void);
+void CALL mouse_suspend(void);
+u16 CALL mouse_erase(void);
+void CALL mouse_poll(void);
+void CALL mouse_paint(void);
+u16 CALL mouse_covers(u16 position);
+void CALL draw_half(const u16 *bits,u16 attribute,u16 position);
 #endif
 #endif
