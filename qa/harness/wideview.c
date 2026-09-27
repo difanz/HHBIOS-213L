@@ -32,15 +32,15 @@ static int discover(void)
     memset(&r,0,sizeof(r)); memcpy(controller,"VBE2",4);
     r.x.ax=0x4f00; r.x.es=FP_SEG(controller); r.x.di=FP_OFF(controller); intr(0x10,&r);
     if (r.x.ax!=0x004f || memcmp(controller,"VESA",4)) return 0;
-    version=word(controller+4);
-    address=(u32)word(controller+16)*16+word(controller+14);
+    version=ReadLittleEndianWord(controller+4);
+    address=(u32)ReadLittleEndianWord(controller+16)*16+ReadLittleEndianWord(controller+14);
     for (n=0;n<512 && address<=0xffffeUL;++n,address+=2) {
         mode=*(u16 __far *)MK_FP((u16)(address>>4),(u16)(address&15));
         if (mode==0xffff) break;
         memset(info,0,sizeof(info)); memset(&r,0,sizeof(r));
         r.x.ax=0x4f01; r.x.cx=mode; r.x.es=FP_SEG(info); r.x.di=FP_OFF(info); intr(0x10,&r);
-        if (r.x.ax!=0x004f || word(info+18)!=cfg[0] || word(info+20)!=cfg[1] || info[25]!=cfg[5]) continue;
-        if (word(info)&0x40 || (cfg[5]==4 && word(info)&0x20)) continue;
+        if (r.x.ax!=0x004f || ReadLittleEndianWord(info+18)!=cfg[0] || ReadLittleEndianWord(info+20)!=cfg[1] || info[25]!=cfg[5]) continue;
+        if (ReadLittleEndianWord(info)&0x40 || (cfg[5]==4 && ReadLittleEndianWord(info)&0x20)) continue;
         if (!DecodeVbeModeInfo(&surface,info,version,mode)) continue;
         if (surface.pitch>sizeof(line) || !(info[2+surface.window]&1)) continue;
         window_bytes=(u32)surface.window_kb*1024; gran_bytes=(u32)surface.granularity_kb*1024;
@@ -95,7 +95,7 @@ static int palette(void)
     memset(&r,0,sizeof(r)); r.x.ax=0x4f09; r.x.cx=16;
     r.x.es=FP_SEG(dac); r.x.di=FP_OFF(dac); intr(0x10,&r);
     if (r.x.ax!=0x004f) {
-        if (word(info)&0x20) return 0; /* no VGA ports on non-VGA hardware */
+        if (ReadLittleEndianWord(info)&0x20) return 0; /* no VGA ports on non-VGA hardware */
         r.x.ax=0x1012; r.x.bx=0; r.x.cx=16;
         r.x.es=FP_SEG(vga_dac); r.x.dx=FP_OFF(vga_dac); intr(0x10,&r);
     }

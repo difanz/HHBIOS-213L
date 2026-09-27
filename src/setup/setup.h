@@ -1,4 +1,4 @@
-/* Setup policy is ordinary C++98/C89, independent of DOS and Turbo Vision. */
+/* Setup policy is ordinary C, independent of DOS and the UI library. */
 #ifndef HHBIOS_SRC_SETUP_SETUP_H_
 #define HHBIOS_SRC_SETUP_SETUP_H_
 #include <stdio.h>
@@ -35,7 +35,7 @@ enum {
   kFileCount
 };
 enum { kBatchSize = 4096, kIniSize = 8192 };
-struct MachineCapabilities {
+typedef struct MachineCapabilities {
   unsigned dos_major;
   unsigned dos_minor;
   unsigned conventional_kb;
@@ -55,17 +55,17 @@ struct MachineCapabilities {
   unsigned loaded;
   unsigned alloc_strategy;
   unsigned umb_link;
-};
-struct InstallationFiles {
+} MachineCapabilities;
+typedef struct InstallationFiles {
   unsigned long size[kFileCount];
-};
-struct SetupChoices {
+} InstallationFiles;
+typedef struct SetupChoices {
   unsigned font;
   unsigned low;
   unsigned video;
   unsigned ime;
   unsigned paired;
-};
+} SetupChoices;
 extern const char* const kFileNames[kFileCount];
 extern const char* const kFontNames[kFontCount];
 extern const char* const kVideoNames[kVideoCount];

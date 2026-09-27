@@ -13,15 +13,16 @@ static unsigned char before[32768];
 int main(int argc, char **argv)
 {
     union REGPACK r,record[3];
-    unsigned rows,cell,ox,oy,scale,x,y,i;
+    unsigned rows,cell,width,ox,oy,scale,x,y,i;
     volatile unsigned long __far *clock=MK_FP(0x40,0x6c);
     unsigned long start;
     FILE *out;
     memset(&r,0,sizeof(r)); r.x.ax=0x1406; intr(0x10,&r); cell=r.x.cx>>8;
     rows=*(unsigned char __far *)MK_FP(0x40,0x84)+1;
+    r.x.ax=0x1413; intr(0x10,&r); width=r.x.si;
     r.x.ax=0x1415; intr(0x10,&r); if (r.x.ax!=0x5650) return 1;
     ox=r.x.bx; oy=r.x.cx; scale=r.x.dx;
-    x=ox+79*10*scale-1; y=oy+(rows-1)*cell*scale-1;
+    x=ox+79*width*scale-1; y=oy+(rows-1)*cell*scale-1;
     out=fopen("MOUSE.JSN","wb"); if (!out) return 2;
     fprintf(out,"[{\"x\":%u,\"y\":%u}]\n",x,y); if (fclose(out)) return 3;
     _disable(); _fmemcpy(before,MK_FP(0xb800,0),32768); _enable();

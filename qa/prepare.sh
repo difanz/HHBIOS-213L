@@ -102,6 +102,7 @@ for source in "$root"/src/*.ASM; do
     modules+=("$run/$name.COM")
 done
 [[ ! -f $root/build/SETUP.EXE ]] || cp "$root/build/SETUP.EXE" "$run/"
+[[ ! -f $root/build/SETUP.LIC ]] || cp "$root/build/SETUP.LIC" "$run/"
 
 # Preserve the original binary distribution, including its optional utilities,
 # code tables and both 16-pixel fonts; overlay rebuilt modules in the disk.

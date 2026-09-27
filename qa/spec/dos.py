@@ -115,7 +115,7 @@ class Snapshot:
             if count<10: geometry+=(80,25)
             width,height,pitch,cw,ch,ox,oy,scale,cols,rows=geometry
             if count==5: assert width==80*cw and height<=1024
-            assert 0 < cw <= 32 and 0 < ch <= 32
+            assert 0 < cw <= 32 and 0 < ch <= 64
             assert 1<=cols<=255 and 1<=rows<=255 and cols*rows*2<=32768
             assert 1<=scale<=4 and ox+cols*cw*scale<=width<=4096
             assert oy+rows*ch*scale<=height<=2160

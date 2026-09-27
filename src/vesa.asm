@@ -1,9 +1,10 @@
-; Independent 8086 display driver. No C runtime and no dependency on VGA.COM.
+; Independent 386 real-mode display driver. No C runtime or VGA.COM dependency.
 ; C uses near __cdecl calls, DS=SS=CS on our private resident stack.
 ; IRQ0/INT10 preserve the interrupted stack and all registers; nested BIOS
 ; INT10 calls chain directly while busy. No DOS service is called resident.
 .model tiny, c
 .code
+include vesa_cpu.inc
 org 100h
 public start
 public int10_handler, int8_handler, old10, old8, stack_bottom, stack_top
@@ -27,6 +28,7 @@ extrn direct:byte
 extrn prompt_notify:byte
 extrn font_get:near, font_open:near, font_close:near, font_bitmap:near
 extrn font_sync:near, font_custom:byte
+extrn font_extended:byte, font_name:byte, font_draw:near, font_bitmap_draw:near
 CELL_WIDTH equ 10
 CELL_HEIGHT equ 23
 GLYPH_HEIGHT equ 20
@@ -104,6 +106,7 @@ int10_handler proc far
     cmp cs:busy,0
     jne busy10
     mov cs:busy,1
+    pushad
     save_regs
     cld
     mov cs:saved_ss,ss
@@ -117,7 +120,7 @@ int10_handler proc far
     mov cx,10
     rep movsw
     ; The saved CPU FLAGS, not the flags modified by entry comparisons.
-    mov ax,[si+4]
+    mov ax,[si+36]              ; skip PUSHAD before the CPU's IRET frame
     mov word ptr es:request+18,ax
     mov ax,cs
     mov ss,ax
@@ -137,13 +140,14 @@ dispatch_interrupts:
     rep movsw
     ; Return flags belong to the interrupt frame as well.
     mov ax,word ptr request+18
-    mov es:[di+4],ax
+    mov es:[di+36],ax
     mov ss,cs:saved_ss
     mov sp,cs:saved_sp
     mov cs:busy,0
     cmp cs:handled,0
     je pass10
     load_regs
+    restore_dword_regs
     ; CKBD reenters INT 10h to paint AH=14h. Only notify after restoring the
     ; caller's stack and releasing busy; its nested calls own the C stack.
     cmp cs:prompt_notify,0
@@ -157,6 +161,7 @@ prompt_notified:
     iret
 pass10:
     load_regs
+    restore_dword_regs
     jmp short chain10
 busy10:
     ; Capture may be requested by another timer TSR while rendering. It must
@@ -227,6 +232,7 @@ int8_handler proc far
     cmp cs:busy,0
     jne timer_done
     mov cs:busy,1
+    pushad
     save_regs
     mov cs:saved_ss,ss
     mov cs:saved_sp,sp
@@ -243,6 +249,7 @@ int8_handler proc far
     mov sp,cs:saved_sp
     mov cs:busy,0
     load_regs
+    restore_dword_regs
 timer_done:
     popf
     iret
@@ -490,8 +497,9 @@ snapshot_text proc near
     xor si,si
     mov di,offset text_transfer
     mov cx,cs:text_cells
+    shr cx,1                    ; 80 columns: copy two text cells per dword
     cld
-    rep movsw
+    rep movsd
     load_regs
     ret
 snapshot_text endp
@@ -521,7 +529,8 @@ refresh proc near
     xor si,si
     mov di,offset D_XPQ
     mov cx,cs:text_cells
-    repe cmpsw
+    shr cx,1
+    repe cmpsd
     je refresh_done
 refresh_changed:
     cmp cs:banked_text,0
@@ -549,9 +558,10 @@ refresh_ready:
     mov si,offset text_transfer
     xor di,di
     mov cx,cs:text_cells
+    shr cx,1
     pushf
     cli
-    rep movsw
+    rep movsd
     popf
 refresh_done:
     load_regs
@@ -761,6 +771,11 @@ classifier_policy endp
 ; Each glyph has a planar backend. Pixel pitch is explicit; classifier
 ; row/column values never stand for framebuffer byte offsets.
 S_XSZF proc near
+    cmp cs:font_extended,0
+    je ascii_fixed_font
+    xor ah,ah
+    jmp draw_large_font
+ascii_fixed_font:
     push dx
     push bx
     xor ah,ah
@@ -781,6 +796,8 @@ S_XSZF proc near
 S_XSZF endp
 
 S_XSHZ proc near
+    cmp cs:font_extended,0
+    jne draw_large_font
     push dx
     push bx
     push cs
@@ -806,6 +823,22 @@ S_XSHZ proc near
     call blit_cell
     ret
 S_XSHZ endp
+
+draw_large_font proc near
+    save_regs
+    push cs
+    pop ds
+    xor cx,cx
+    mov cl,cs:glyph_width
+    push cx
+    push dx
+    push bx
+    push ax
+    call font_draw
+    add sp,8
+    load_regs
+    ret
+draw_large_font endp
 
 ; DS:SI is 23 left-aligned ten-bit words. Wide text doubles each pixel and
 ; splits at a cell boundary; the ten-pixel grid is unchanged.
@@ -1051,6 +1084,18 @@ bitmap_column:
     pop ds
     push bx
     push dx
+    cmp cs:font_extended,0
+    je bitmap_fixed_font
+    push dx
+    push bx
+    mov ax,offset legacy_bits
+    push ax
+    call font_bitmap_draw
+    add sp,6
+    pop dx
+    pop bx
+    jmp short bitmap_next
+bitmap_fixed_font:
     mov ax,offset glyph_bits
     push ax
     mov ax,offset legacy_bits
@@ -1061,6 +1106,7 @@ bitmap_column:
     pop bx
     mov si,offset glyph_bits
     call blit_cell
+bitmap_next:
     pop si
     pop ds
     inc dl
@@ -1638,6 +1684,7 @@ probe_text_bank endp
 ; Installation only, ordered after the resident boundary by the linker.
 _TEXT ends
 INIT_TEXT segment word public 'INIT'
+.8086
 assume cs:DGROUP
 install:
     cld
@@ -1675,6 +1722,8 @@ parse_option:
     mov force_low,1
     jmp short parse_option
 parse_mode:
+    cmp al,'F'
+    je parse_font
     cmp al,'M'
     jne bad_option
     or cx,cx
@@ -1723,7 +1772,57 @@ parse_mode_done:
     mov requested_mode,bx
     mov mode_selected,1
     jmp parse_option
+parse_font:
+    or cx,cx
+    jz bad_option
+    lodsb
+    dec cx
+    cmp al,':'
+    jne bad_option
+    mov di,offset font_name
+    xor bx,bx
+parse_font_character:
+    jcxz parse_font_done
+    lodsb
+    dec cx
+    cmp al,' '
+    je parse_font_done
+    cmp al,21h
+    jb bad_option
+    cmp bx,63
+    jae bad_option
+    stosb
+    inc bx
+    jmp short parse_font_character
+parse_font_done:
+    or bx,bx
+    jz bad_option
+    mov byte ptr [di],0
+    jmp parse_option
 options_done:
+    ; A VBE BIOS alone does not identify the CPU. Reject an 8086/286 before
+    ; entering compiler-generated 386 code or installing interrupt vectors.
+    pushf
+    pop dx
+    mov ax,dx
+    and ax,0fffh
+    push ax
+    popf
+    pushf
+    pop ax
+    and ax,0f000h
+    cmp ax,0f000h
+    je old_processor
+    mov ax,dx
+    or ax,7000h
+    push ax
+    popf
+    pushf
+    pop ax
+    and ax,7000h
+    jz old_processor
+    push dx
+    popf
     mov ah,0ffh
     int 10h
     cmp ax,56h
@@ -1834,6 +1933,14 @@ no_vbe:
     call font_close
     mov dx,offset msg_vbe
     jmp short install_error
+old_processor:
+    push dx
+    popf
+    mov dx,offset msg_cpu
+    mov ah,9
+    int 21h
+    mov ax,4c01h
+    int 21h
 bad_option:
     mov dx,offset msg_usage
 install_error:
@@ -1905,10 +2012,11 @@ umb_segment dw 0
 resident_paragraphs dw 0
 force_low db 0
 msg_loaded db 'A HHBIOS display driver is already installed.',13,10,'$'
+msg_cpu db 'VESA requires a 386 or newer CPU. Use VGA on older machines.',13,10,'$'
 msg_font db 'Load a HHBIOS font reader before VESA.',13,10,'$'
-msg_font20 db 'VESA needs HH20.FNT and enough XMS or EMS 4.0 memory.',13,10,'$'
+msg_font20 db 'Cannot load font file into XMS or EMS 4.0 memory.',13,10,'$'
 msg_vbe db 'VESA needs a supported planar VBE mode and isolated text memory.',13,10,'$'
-msg_usage db 'VESA [/N] [/M:hex]  /M selects a planar VBE mode (default 102).',13,10
+msg_usage db 'VESA [/N] [/M:hex] [/F:file]  VBE mode and font (102, HH20.FNT).',13,10
           db '/N keeps the driver in conventional memory.',13,10,'$'
 INIT_TEXT ends
 

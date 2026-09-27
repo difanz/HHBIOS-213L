@@ -47,7 +47,7 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
     resident=files['RESIDENT.BIN'].read_bytes()
     abi=struct.unpack_from('<10H',resident)
     assert abi[:3]==(0x5356,1,28) and abi[4]==1
-    assert 0 < abi[5] < 42*1024  # 50-row buffers, mouse, font cache and downloaded-font adapter
+    assert 0 < abi[5] < 50*1024  # 50 rows, variable fonts, mouse and shared raster scratch
     assert (abi[8]<0xa000)==bool(residency)
     owner,paragraphs=struct.unpack_from('<HH',resident,49)
     assert owner==abi[8] and paragraphs==(abi[5]+15)//16
@@ -87,6 +87,15 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
                 expected=colored_rows(native_rows(code,half),10,23,0x4a,p)
                 assert plane_bits(plane,100,(col+half)*10,575,10,23)==expected
         assert not any(plane[59800:])
+
+
+@pytest.mark.parametrize('cpu',['8086','286'])
+def test_vesa_rejects_old_cpu_before_entering_386_code(dosbox_binary,vesa_build,tmp_path,cpu):
+    shutil.copy2(vesa_build/'VESA.COM',tmp_path)
+    files=run_dos(dosbox_binary,tmp_path,['VESA /? > HELP.TXT',('VESA > CPU.TXT',1)],
+                  settings=f'\n[dosbox]\nmachine=svga_s3\n[cpu]\ncore=normal\ncputype={cpu}\n')
+    assert 'VESA [/N]' in files['HELP.TXT'].read_text()
+    assert 'requires a 386' in files['CPU.TXT'].read_text()
 
 
 @pytest.mark.parametrize('operation',['text','legacy','state','ports'])
@@ -187,17 +196,19 @@ def test_vesa_text_pages_and_offscreen_scrolling(dosbox_binary,vesa_build,tmp_pa
             assert plane_bits(raw[plane*2300:(plane+1)*2300],100,(20+half)*10,0,10,23)==expected
 
 
-def test_scroll_pixels_match_complete_redraw(dosbox_binary,vesa_build,tmp_path):
+@pytest.mark.parametrize('mode,plane_bytes', [('102',60000),('104',98304),('106',163840)])
+def test_scroll_pixels_match_complete_redraw(dosbox_binary,vesa_build,tmp_path,mode,plane_bytes):
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     for name in ('HZK16','HH20.FNT'): shutil.copy2(ROOT/'fonts'/name,tmp_path)
     keyboard_config(tmp_path)
-    files=run_dos(dosbox_binary,tmp_path,['READ5','CKBD /E','VESA','VESATEST scroll'],
-                  settings='\n[dosbox]\nmachine=svga_s3\n',timeout=60)
+    files=run_dos(dosbox_binary,tmp_path,['READ5','CKBD /E',f'VESA /M:{mode}','VESATEST scroll'],
+                  settings='\n[dosbox]\nmachine=svga_s3\n',timeout=120)
     raw=files['SCROLL.BIN'].read_bytes()
     operations=[(False,1,0,24,0,79),(True,3,0,24,0,79),
                 (False,2,3,20,0,79),(True,1,3,20,0,79),
                 (False,1,3,20,5,74),(False,25,0,24,0,79)]
-    size=4000+2*(4000+240000)
+    capture_size=4000+4*plane_bytes
+    size=4000+2*capture_size
     assert len(raw)==len(operations)*size
     for step,(down,count,top,bottom,left,right) in enumerate(operations):
         record=raw[step*size:(step+1)*size]
@@ -208,8 +219,8 @@ def test_scroll_pixels_match_complete_redraw(dosbox_binary,vesa_build,tmp_path):
             for col in range(left,right+1):
                 expected[row*80+col]=before[source*80+col] if top<=source<=bottom else 0x1e20
         assert struct.unpack_from('<2000H',record,4000)==tuple(expected),step
-        # Includes all four planes and all 600 scanlines, including the IME.
-        assert record[4000:248000]==record[248000:],step
+        # Every pixel, including bank edges, margins and the IME strip.
+        assert record[4000:4000+capture_size]==record[4000+capture_size:],step
 
 
 def test_ckbd_help_keeps_streamed_hanzi(dosbox_binary,vesa_build,tmp_path,pytestconfig):

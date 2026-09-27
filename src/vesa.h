@@ -20,6 +20,8 @@ typedef unsigned long u32;
 #define CELL_WIDTH 10
 #define CELL_HEIGHT 23
 #define GLYPH_HEIGHT 20
+#define MAX_FONT_WIDTH 24
+#define MAX_FONT_HEIGHT 64
 #define FORMAT_PLANAR4 3
 
 /* An 8086 MUL already yields the full 32-bit address without a CRT helper. */
@@ -122,6 +124,14 @@ u16 CALL font_text(u16 saving);
 extern u16 CALL font_kind;
 extern u16 CALL font_kb;
 extern u16 CALL font_fault;
+extern u16 CALL font_width;
+extern u16 CALL font_height;
+extern u16 CALL font_body_height;
+extern u8 CALL font_extended;
+extern char CALL font_name[64];
+void CALL font_get_large(u16 code, u32* out);
+void CALL font_draw(u16 code, u16 attribute, u16 position, u16 wide);
+void CALL font_bitmap_draw(const u8* source, u16 attribute, u16 position);
 void CALL bios(struct BiosRegisters* r);
 void CALL refresh(void);
 u16 CALL text_ready(void);
@@ -146,6 +156,8 @@ u16 CALL dispatch(void);
 void CALL tick(void);
 u16 CALL graphics_bank(u16 block);
 void CALL raster_cell(const u16* bits, u16 attribute, u16 position);
+void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position);
+u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down);
 void CALL raster_cursor(u16 position, u16 lines);
 u16 CALL raster_pixel(u16 x, u16 y, u16 color, u16 writing);
 void CALL raster_read(u16 plane, u32 offset, u16 segment, u16 destination,

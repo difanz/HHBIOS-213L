@@ -142,6 +142,9 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
            "manually.";
   }
   if (choices->video >= kVideo102 && choices->video <= kVideo106) {
+    if (machine->cpu < 386) {
+      return "VESA requires a 386 or newer CPU. Select VGA on older machines.";
+    }
     if (!(machine->modes & (1U << (choices->video - kVideo102)))) {
       return "BIOS does not report a compatible planar VBE mode.";
     }

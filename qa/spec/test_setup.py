@@ -26,7 +26,7 @@ class Choices(C.Structure):
 def setup_policy(tmp_path_factory,source_dir):
     out=tmp_path_factory.mktemp('setup-host')/'setup.so'
     result=subprocess.run(['c++','-std=c++98','-shared','-fPIC','-Wall','-Wextra','-Werror',
-        '-I'+str(source_dir/'setup'), str(source_dir/'setup/config.cpp'),
+        '-I'+str(source_dir/'setup'), str(source_dir/'setup/config.c'),
         str(ROOT/'qa/harness/setup_host.cpp'),'-o',str(out)],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     lib=C.CDLL(str(out))
@@ -132,6 +132,16 @@ def test_monochrome_equipment_does_not_imply_hercules(setup_policy):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize('cpu',[86,186,286])
+def test_older_cpu_uses_vga_even_when_vbe_is_present(setup_policy,cpu):
+    m,f=capable();m.cpu=cpu
+    c=Choices();setup_policy.hh_recommend(m,f,c)
+    assert c.video==0
+    c.video=1
+    assert b'386' in setup_policy.hh_validate(m,f,c)
+
+
+@pytest.mark.unit
 def test_missing_assets_and_unavailable_managers_block_save(setup_policy):
     m,f=capable();c=Choices(0,0,1,0,1)
     for asset in (0,3,5,9,10):
@@ -148,7 +158,7 @@ def test_missing_assets_and_unavailable_managers_block_save(setup_policy):
 def setup_guest(tmp_path,pytestconfig):
     exe=pytestconfig.getoption('--setup-exe')
     if exe is None:
-        pytest.skip('Optional Borland setup build: pass --setup-exe or SETUP_EXE')
+        pytest.skip('Optional SETUP build: pass --setup-exe or SETUP_EXE')
     assert exe.is_file(),f'SETUP.EXE does not exist: {exe}'
     shutil.copy2(exe,tmp_path)
     for name in ('READ2','READ4','READ5','CKBD','VGA','VESA','EGA','HGA','CGA','WBX'):

@@ -1,4 +1,4 @@
-# HH Console 20
+# Console fonts
 
 `HH20.FNT` supplies the VESA console with native 16x16 Chinese and 10x20
 Western bitmaps, in 10x23 cells. The 80x25 text area occupies 800x575 pixels;
@@ -75,9 +75,63 @@ the first 10 bits. Identical records, including blanks and unchanged
 traditional forms, share one index.
 
 The committed font payload is 733176 bytes, rounded to 716 KiB. VESA reserves
-another 32 KiB in the same handle for text-page preservation during row changes:
-748 KiB in XMS, or 47 EMS pages (752 KiB). The 16-entry resident cache uses 1120 bytes of glyph data
-plus keys and validity words. No DOS or file calls occur while drawing.
+another 36 KiB in the same handle for text-page and downloaded-font preservation:
+752 KiB in XMS, or 47 EMS pages. Its 16 cached records occupy 1120 bytes
+of the shared 2048-byte cache, plus keys and validity words. No DOS or file
+calls occur while drawing.
 
 `HZK16` remains the original 16-pixel font used by the legacy drivers and
 the compatible INT 10h/AH=16h bitmap query. It is not the source of HH20.FNT.
+
+## Variable sizes from Linux fonts
+
+`VESA /F:file` selects a font at installation. `HH20.FNT` remains the default.
+`tools/build-font.py` exports an explicitly selected TTF, OTF, TTC face or
+bitmap strike at the requested pixel size. It uses FreeType's monochrome
+renderer; DOS loads the resulting bitmaps into XMS/EMS and does no outline
+rasterization. Bitmap fonts must contain the requested native strike.
+
+For example, Noto Sans CJK SC and Terminus at 32 pixels fit an 80x25 console
+plus its IME row in 1280x1024, using 16x39 halfwidth cells:
+
+```sh
+python tools/build-font.py \
+    --cjk /path/to/NotoSansCJK-Regular.ttc --cjk-index 2 \
+    --terminal /path/to/terminus-normal.otb \
+    --size 32 --cell 16x39 --output HH32.FNT
+```
+
+The TTC face index depends on the supplied collection. The JSON sidecar
+records the selected family, index, input hashes, geometry and output hash.
+Copy `HH32.FNT` to DOS and select it with `VESA /M:106 /F:HH32.FNT`.
+The font must fit all 80 columns and 26 rows, including the IME. A mode too
+small for the selected font is rejected before installation. Changing the
+font file/size requires a clean DOS session; `/F` does not reload a resident
+driver. SETUP continues to generate configurations for the bundled HH20 font.
+
+Halfwidth cells may be 8..24 pixels wide and 16..64 pixels high; Chinese
+occupies two cells. `--size` selects the source font's pixel size; `--cell`
+sets the grid and line spacing. The default baseline fits all mapped glyphs
+without clipping; `--baseline` overrides it. Missing or overflowing glyphs
+are errors. No host font fallback silently substitutes a different family.
+Terminal box rules extend to cell edges. Larger physical modes may enlarge
+the complete cell by an integer factor, without changing the B800 layout.
+
+Use font files under an appropriate redistribution license and include their
+license when distributing generated data. The exporter does not bundle or
+download fonts. The existing Unifont/Terminus HH20 pixels are unchanged.
+FreeType's [glyph loading](https://freetype.org/freetype2/docs/reference/ft2-glyph_retrieval.html)
+and [sizing](https://freetype.org/freetype2/docs/reference/ft2-sizing_and_scaling.html)
+interfaces define the bitmap/outline selection and monochrome rendering.
+
+Version 2 has the same 32-byte header and two GB2312/CP437 slot maps as above,
+with signature `HHFONT2` followed by LF. Width and height contain the chosen
+halfwidth dimensions; bytes 20..31 remain zero. A record has
+`ceil(2 * width / 8)` bytes per row, MSB first, padded to an even total size.
+Western characters occupy the left half of the record. Record size follows
+the header geometry; it is not fixed at 70 bytes. The loader validates the
+dimensions and exact payload length before allocating memory.
+
+The resident packed-glyph cache occupies 2048 bytes and holds up to 16
+records (five at the maximum 48x64 fullwidth size). The complete font and
+the additional 36 KiB text/font backup remain in XMS or EMS.

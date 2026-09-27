@@ -2,6 +2,7 @@
 ; pointer to saved registers; no global request packet or renderer stack is used.
 .model tiny,c
 .code
+include vesa_cpu.inc
 public old33, int33_handler, mouse_callback, mouse_bios, mouse_thunk_offset
 extrn mouse_dispatch:near, mouse_event:near, mouse_target:dword
 old33 dd 0
@@ -31,6 +32,7 @@ load_mouse macro
     popf
 endm
 int33_handler proc far
+    pushad
     save_mouse
     mov ax,sp
     push cs
@@ -41,9 +43,11 @@ int33_handler proc far
     call mouse_dispatch
     add sp,4
     load_mouse
+    restore_dword_regs
     iret
 int33_handler endp
 mouse_callback proc far
+    pushad
     save_mouse
     mov ax,sp
     push cs
@@ -56,9 +60,11 @@ mouse_callback proc far
     or ax,ax
     jz mouse_no_callback
     load_mouse
+    restore_dword_regs
     jmp cs:mouse_target
 mouse_no_callback:
     load_mouse
+    restore_dword_regs
     retf
 mouse_callback endp
 

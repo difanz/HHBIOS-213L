@@ -373,22 +373,22 @@ static void SetTextGeometry(u16 rows, u16 height) {
   logical_height = height;
   page_bytes = rows > 25 ? 8192 : 4096;
   page_count = banked_text ? 32768U / page_bytes : 1;
-  large_surface = (u8)(rows != 25 || screen.width != 800 ||
+  large_surface = (u8)(font_extended || rows != 25 || screen.width != 800 ||
                        screen.height != 600 || screen.pitch != 100);
   plane_bytes = MultiplyWide(screen.pitch, screen.height);
-  raster_height =
-      screen.height >= CELL_HEIGHT * (rows + 1) ? CELL_HEIGHT : GLYPH_HEIGHT;
+  raster_height = screen.height >= font_height * (rows + 1) ? font_height
+                                                            : font_body_height;
   pixel_scale = 1;
-  for (n = 2; n <= 4 && screen.width >= 800 * n; ++n) {
-    if (screen.height >= CELL_HEIGHT * (rows + 1) * n) {
+  for (n = 2; n <= 4 && screen.width >= TEXT_COLS * font_width * n; ++n) {
+    if (screen.height >= font_height * (rows + 1) * n) {
       pixel_scale = n;
-      raster_height = CELL_HEIGHT;
-    } else if (screen.height >= GLYPH_HEIGHT * (rows + 1) * n) {
+      raster_height = font_height;
+    } else if (screen.height >= font_body_height * (rows + 1) * n) {
       pixel_scale = n;
-      raster_height = GLYPH_HEIGHT;
+      raster_height = font_body_height;
     }
   }
-  viewport_x = (screen.width - 800 * pixel_scale) / 2;
+  viewport_x = (screen.width - TEXT_COLS * font_width * pixel_scale) / 2;
   viewport_y =
       large_surface
           ? (screen.height - raster_height * (rows + 1) * pixel_scale) / 2
@@ -400,7 +400,8 @@ static void SetTextGeometry(u16 rows, u16 height) {
 static int IsSavedSurfaceValid(const struct VbeSurface* saved, u16 rows) {
   return saved->width >= 800 && saved->width <= 4096 && !(saved->width & 7) &&
          saved->height >= 600 && saved->height <= 2160 &&
-         saved->height >= GLYPH_HEIGHT * (rows + 1) &&
+         saved->height >= font_body_height * (rows + 1) &&
+         saved->width >= TEXT_COLS * font_width &&
          saved->pitch >= saved->width / 8 && saved->pitch <= 512 &&
          !(saved->pitch & 1) && saved->segment == 0xa000 &&
          saved->window_kb == 64 && saved->granularity_kb &&
@@ -490,7 +491,7 @@ static int SetTextRows(u16 rows, u16 height, u16 preserve) {
   if (!rows || rows > MAX_TEXT_ROWS || (!banked_text && rows != 25)) {
     return 0;
   }
-  if (candidate.height < GLYPH_HEIGHT * (rows + 1)) {
+  if (candidate.height < font_body_height * (rows + 1)) {
     for (i = 0; i < 2; ++i) {
       ClearBytes(&bios_registers, sizeof(bios_registers));
       ClearBytes(info, sizeof(info));
@@ -503,7 +504,8 @@ static int SetTextRows(u16 rows, u16 height, u16 preserve) {
           DecodeConsoleModeInfo(&candidate, info, vbe_version,
                                 bios_registers.cx) &&
           (info[2 + candidate.window] & 1) &&
-          candidate.height >= GLYPH_HEIGHT * (rows + 1)) {
+          candidate.height >= font_body_height * (rows + 1) &&
+          candidate.width >= TEXT_COLS * font_width) {
         break;
       }
     }
@@ -619,7 +621,9 @@ u16 CALL initialize(void) {
     bios_registers.di = (u16)mode_info;
     bios(&bios_registers);
     if (bios_registers.ax == 0x004f &&
-        DecodeConsoleModeInfo(&screen, mode_info, version, number)) {
+        DecodeConsoleModeInfo(&screen, mode_info, version, number) &&
+        screen.width >= TEXT_COLS * font_width &&
+        screen.height >= font_body_height * (TEXT_ROWS + 1)) {
       vbe_mode = 1;
       break;
     }
@@ -713,17 +717,20 @@ static void ScrollText(u16 page_number, u8 down, u16 count, u16 attribute,
   if (!count || count > last - first + 1) {
     count = last - first + 1;
   }
-  /* Whole scanlines on the native 800x600 surface can move all four
-   * planes through VGA latches. Keep the shadow paired with those pixels;
+  /* Full-width scrolls move pixels, keeping the shadow paired with them;
    * pending direct B800 writes are still detected by the next refresh. */
-  if (active && page_number == active_page && !large_surface && !left &&
-      right == 79 && count <= last - first) {
+  if (active && page_number == active_page && !left && right == 79 &&
+      count <= last - first) {
     HideCursor();
     if (mouse_erase()) {
       refresh();
     }
-    scroll_pixels(first, last, count, down);
-    copied = active;
+    if (large_surface) {
+      copied = raster_scroll(first, last, count, down);
+    } else {
+      scroll_pixels(first, last, count, down);
+      copied = active;
+    }
   }
   for (y = 0; y <= last - first; ++y) {
     u16 row = down ? last - y : first + y;
@@ -1115,8 +1122,8 @@ u16 CALL dispatch(void) {
     request.bx = font_kind;
     request.cx = font_kb;
     request.dx = font_fault;
-    request.si = CELL_WIDTH;
-    request.di = CELL_HEIGHT;
+    request.si = font_width;
+    request.di = font_height;
     return 1;
   }
   if (function == 0x14 && subfunction == 21) {

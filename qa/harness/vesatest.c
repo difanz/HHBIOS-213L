@@ -36,13 +36,17 @@ static void ticks(unsigned n)
 static int scroll_capture(FILE *out)
 {
     union REGPACK r;
-    unsigned plane,y,count;
+    unsigned plane,count;
+    unsigned long offset,bytes;
+    memset(&r,0,sizeof(r)); r.x.ax=0x1415; intr(0x10,&r);
+    bytes=((unsigned long)r.x.di<<16)|r.x.si;
     _fmemcpy(buffer,MK_FP(0xb800,0),4000);
     if (fwrite(buffer,1,4000,out)!=4000) return 1;
-    for (plane=0;plane<4;++plane) for (y=0;y<600;y+=32) {
-        count=(600-y<32 ? 600-y : 32)*100;
-        memset(&r,0,sizeof(r)); r.x.ax=0x1412; r.x.bx=plane;
-        r.x.si=y*100; r.x.cx=count; r.x.es=FP_SEG(buffer); r.x.di=FP_OFF(buffer);
+    for (plane=0;plane<4;++plane) for (offset=0;offset<bytes;offset+=count) {
+        count=bytes-offset<sizeof(buffer) ? (unsigned)(bytes-offset) : sizeof(buffer);
+        memset(&r,0,sizeof(r)); r.x.ax=0x1414; r.x.bx=plane;
+        r.x.dx=(unsigned)(offset>>16); r.x.si=(unsigned)offset;
+        r.x.cx=count; r.x.es=FP_SEG(buffer); r.x.di=FP_OFF(buffer);
         intr(0x10,&r);
         if (r.x.ax || fwrite(buffer,1,count,out)!=count) return 1;
     }

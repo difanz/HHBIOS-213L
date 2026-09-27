@@ -1,4 +1,5 @@
 #include <dos.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "setup.h"
@@ -13,9 +14,8 @@ static void CallInterrupt(unsigned number, unsigned ax) {
 
 static unsigned DetectProcessor() {
   unsigned result;
-  // Borland's inline assembly uses line breaks to separate instructions.
   // clang-format off
-  asm {
+  __asm {
     pushf
     pop dx
     mov ax,dx
@@ -38,9 +38,7 @@ static unsigned DetectProcessor() {
     mov bx,286
     jz cpu_done
     mov bx,386
-  }
   cpu_done:
-  asm {
     push dx
     popf
     mov result,bx
@@ -135,7 +133,7 @@ static void ProbeExtendedMemory(MachineCapabilities* machine) {
     CallInterrupt(0x2f, 0x4310);
     xms_entry = (void(far*)())MK_FP(segments.es, bios_registers.x.bx);
     // clang-format off
-    asm {
+    __asm {
       xor ah,ah
       call dword ptr xms_entry
       mov version,ax

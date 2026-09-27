@@ -1,6 +1,6 @@
 # SETUP.EXE
 
-独立的 DOS Turbo Vision 安装程序。检测机器和可用模块，选择字库存储、程序驻留、显示驱动和输入法，预览并生成 `HHBIOS.BAT` 与 `213L.INI`。安装程序不加载 TSR，不修改 `CONFIG.SYS` 或 `AUTOEXEC.BAT`。
+独立的 DOS Open Watcom UI 安装程序。检测机器和可用模块，选择字库存储、程序驻留、显示驱动和输入法，预览并生成 `HHBIOS.BAT` 与 `213L.INI`。安装程序不加载 TSR，不修改 `CONFIG.SYS` 或 `AUTOEXEC.BAT`。
 
 将 `SETUP.EXE` 放到 HHBIOS 安装目录，与 COM 模块、`HZK16`、输入码表放在一起。VESA 还需要 `HH20.FNT`。使用 DOS 短目录名，完整路径最多 32 字节，以适应原有字库加载器的路径缓冲区。
 
@@ -15,7 +15,7 @@ HHBIOS.BAT
 
 程序为 **16 位实模式 EXE**，不需要 DPMI、XMS、EMS 或 HHBIOS 常驻接口。中文界面使用 VGA 640×480，逻辑网格为 80×30；西文采用 VGA ROM 8×16 点阵，中文直接读取 `HZK16` 的 16×16 点阵。整套字库放在进程的常规内存中，退出时释放。源代码字符串使用 UTF-8，构建时转换为 GB2312。
 
-Turbo Vision 仍管理窗口、对话框、焦点和控件；安装程序将其字符缓冲区绘制到 VGA。中文双字节在交给 Turbo Vision 前使用私有显示编码，避免把 CP437 框线误识别为汉字。此编码仅存在于界面缓冲区，配置文件仍使用原有格式。
+Open Watcom UI 仍管理窗口、对话框、焦点和控件；安装程序将其字符缓冲区绘制到 VGA。中文双字节在交给 Open Watcom UI 前使用私有显示编码，避免把 CP437 框线误识别为汉字。此编码仅存在于界面缓冲区，配置文件仍使用原有格式。
 
 `SETUP /EN` 使用英文文本界面；`SETUP /ZH` 要求中文界面。默认在 VGA、字库及空闲内存满足条件时显示中文，否则使用英文。CGA、EGA、MDA 的设置界面使用英文文本模式；Hercules 驱动需手动选择，不能仅根据单色设备标志推断。程序按 8086 指令集构建；中文显示是否可用由显卡和内存决定，并非由是否为 PC/XT 决定。
 
@@ -43,24 +43,23 @@ SETUP /AUTO /LOW /FONT:EMS /VIDEO:VGA /BYTE
 
 ## 构建
 
-需要开发者自行提供 **Borland C++ 3.1、Turbo Assembler**，以及可运行 DOS 编译器的 DOSBox。没有捆绑编译器。普通的 COM/VESA 构建不受此可选目标影响。
-
-Turbo Vision 使用上游历史中的公开 **2.0** 源码，固定提交 [`222c5042bd4ffd0ac8fb673c680d0d9301a2ab23`](https://github.com/magiblot/tvision/tree/222c5042bd4ffd0ac8fb673c680d0d9301a2ab23)。构建脚本仅对 BC++ 3.1 不支持的数组分配重载、重复的 signed-char 流重载作条件适配；库按原有对象列表编译。编译器和库保存在外部路径或忽略的缓存中。
+需要 [Open Watcom](https://github.com/open-watcom/open-watcom-v2) 的宿主平台工具链及其 UI 源码。直接在宿主机运行 `wcc`、`wlib`、`wlink`，生成 8086 实模式程序。
 
 ```sh
-export BORLAND_DIR=/path/to/borland-cpp-3.1
-export DOSBOX=/path/to/dosbox
-bash tools/build-setup.sh --fetch     # 显式下载固定版本并构建
-make setup                          # 后续使用缓存，生成 build/SETUP.EXE
+export WATCOM=/path/to/open-watcom
+bash tools/build-setup.sh --fetch     # 首次取得上游默认分支源码
+make setup                          # 使用本地源码，生成 build/SETUP.EXE
 ```
 
-也可设置 `TVISION_DIR` 指向自行取得的同一份源码，完全离线构建。构建时所有 DOS 路径都映射到固定客机盘符，不把开发者的宿主路径写入 EXE 或生成的 BAT。发布 Turbo Vision 派生程序时保留上游 [Borland 声明](https://github.com/magiblot/tvision/blob/master/COPYRIGHT)。
+也可设置 `WATCOM_SOURCE` 或使用 `--watcom-source DIR` 指向自己的 Open Watcom 源码目录，离线构建。依赖不固定提交；更新源码后会自动重建 UI 库。编译选项由构建脚本传入，上游源文件保持原样。
+
+UI 使用上游 `bld/ui` 的 DOS 控件。发布程序时附带生成的 `build/SETUP.LIC`，许可见 [Sybase Open Watcom Public License](https://github.com/open-watcom/open-watcom-v2/blob/master/license.txt)。
 
 ## 验证
 
-配置策略、文件备份及原 INI 保留使用主机测试；DOS 测试实际运行生成的 BAT，并检查查询前后的内存管理器状态。可选的 Borland 构建通过参数提供，不要求普通显示驱动测试安装 Borland。
+配置策略、文件备份及原 INI 保留使用主机测试；DOS 测试实际运行生成的 BAT，并检查查询前后的内存管理器状态。交互测试覆盖键盘选择、取消和保存，以及 8086 上的中英文界面。
 
 ```sh
 python3 -m pytest qa/spec/test_setup.py -m unit
-python3 -m pytest qa/spec/test_setup.py -m dos --setup-exe build/SETUP.EXE --dosbox "$DOSBOX"
+python3 -m pytest qa/spec/test_setup.py qa/spec/test_setup_ui.py -m dos --setup-exe build/SETUP.EXE --dosbox "$DOSBOX"
 ```

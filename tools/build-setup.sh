@@ -1,143 +1,100 @@
 #!/usr/bin/env bash
-# Real-mode Turbo Vision SETUP.EXE, built with a user-supplied BC++ 3.1.
+# Native host build of an 8086 DOS executable and Open Watcom's C UI library.
 set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tv_rev=222c5042bd4ffd0ac8fb673c680d0d9301a2ab23
-compiler=${BORLAND_DIR:-}
-tv=${TVISION_DIR:-}
-dosbox=${DOSBOX:-dosbox}
+source_dir=${WATCOM_SOURCE:-"$root/qa/.cache/setup/open-watcom-v2"}
 output="$root/build/SETUP.EXE"
 fetch=false
 die() { echo "$*" >&2; exit 1; }
-usage() {
-    echo "Usage: $0 [--borland DIR] [--tvision DIR] [--dosbox EXE] [--output EXE] [--fetch]"
-    echo 'Defaults: BORLAND_DIR, TVISION_DIR, DOSBOX; --fetch downloads pinned TV 2.0 sources.'
-}
 while (($#)); do
     case $1 in
-        --borland|--tvision|--dosbox|--output)
+        --watcom-source|--output)
             (($# >= 2)) || die "Missing value for $1"
             case $1 in
-                --borland) compiler=$2;; --tvision) tv=$2;;
-                --dosbox) dosbox=$2;; --output) output=$2;;
+                --watcom-source) source_dir=$2;;
+                --output) output=$2;;
             esac
             shift 2;;
         --fetch) fetch=true; shift;;
-        -h|--help) usage; exit 0;;
+        -h|--help)
+            echo "Usage: $0 [--watcom-source DIR] [--output EXE] [--fetch]"
+            echo 'Set WATCOM for the compiler; WATCOM_SOURCE supplies Open Watcom sources.'
+            echo '--fetch obtains the current upstream default branch if sources are absent.'
+            exit 0;;
         *) die "Unknown option: $1";;
     esac
 done
-[[ -n $compiler ]] || die 'Set BORLAND_DIR or pass --borland (Borland C++ 3.1 with TASM).'
-compiler=$(realpath "$compiler")
-for name in BCC TASM TLIB; do
-    [[ -f $compiler/BIN/$name.EXE ]] || die "Missing $compiler/BIN/$name.EXE"
+[[ -n ${WATCOM:-} ]] || die 'Set WATCOM to the Open Watcom installation directory.'
+export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
+export INCLUDE="$WATCOM/h"
+for tool in wcc wlib wlink; do
+    command -v "$tool" >/dev/null || die "Open Watcom tool not found: $tool"
 done
-dosbox=$(command -v "$dosbox") || die 'DOSBox executable not found.'
-dosbox=$(realpath "$dosbox")
-cache="$root/qa/.cache/setup"
-if $fetch; then
-    mkdir -p "$cache"
-    curl -fL "https://github.com/magiblot/tvision/archive/$tv_rev.tar.gz" -o "$cache/tvision.tar.gz"
-    tar -xzf "$cache/tvision.tar.gz" -C "$cache" --no-same-owner
-    tv="$cache/tvision-$tv_rev"
+if $fetch && [[ ! -d $source_dir ]]; then
+    git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/open-watcom/open-watcom-v2.git "$source_dir"
+    git -C "$source_dir" sparse-checkout set bld/ui bld/watcom/h \
+        bld/clib/mbyte/h bld/trmem
 fi
-tv=${tv:-"$cache/tvision-$tv_rev"}
-[[ -f $tv/source/tvision/geninc.cpp ]] || die 'Set TVISION_DIR or use --fetch to obtain Turbo Vision 2.0.'
-tv=$(realpath "$tv")
-work="$root/build/setup"
-mkdir -p "$work" "$(dirname -- "$output")"
+[[ -f $source_dir/bld/ui/master.mif ]] || die 'Set WATCOM_SOURCE or use --fetch to obtain Open Watcom UI sources.'
+source_dir=$(realpath "$source_dir")
+ui="$source_dir/bld/ui"
+work="$root/build/setup-ui"
+mkdir -p "$work/ui" "$(dirname -- "$output")"
 output=$(realpath -m "$output")
-for path in "$work" "$compiler"; do
-    [[ $path != *'"'* && $path != *$'\n'* && $path != *$'\r'* ]] || die 'Invalid DOSBox mount path.'
-done
-
-# Cache libraries by content, compiler and recipe, independent of mtimes.
+flags=(-q -0 -bt=dos -ml -os -dNDEBUG -dCHARMAP
+    -i="$ui/h" -i="$ui/dos/h" -i="$source_dir/bld/watcom/h"
+    -i="$source_dir/bld/clib/mbyte/h" -i="$source_dir/bld/trmem")
+# Follow upstream's platform object list, not every .c file in the tree.
+mapfile -t objects < <(awk '
+    /^common_objs =/ { common = 1; next }
+    common && !NF { common = 0 }
+    common { for (i = 1; i <= NF; ++i) if ($i ~ /\.obj$/) print $i }
+    /^!inject / && $3 == "dos" { print $2 }
+' "$ui/master.mif" | sed 's/\.obj$//' | LC_ALL=C sort -u)
+((${#objects[@]})) || die 'Empty Open Watcom UI object list.'
 fingerprint=$({
-    sha256sum "$root/tools/build-setup.sh" "$root/tools/tvision-bc31.patch"
-    (cd "$tv"; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
-    (cd "$compiler"; sha256sum BIN/BCC.EXE BIN/TASM.EXE BIN/TLIB.EXE)
+    sha256sum "$0" "$(command -v wcc)" "$(command -v wlib)"
+    find "$ui" "$source_dir/bld/watcom/h" "$source_dir/bld/clib/mbyte/h" \
+        "$source_dir/bld/trmem" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 } | sha256sum | cut -d' ' -f1)
-rebuild=true
-if [[ -s $work/TV0.LIB && -s $work/TV1.LIB && -f $work/tv.sha256 ]] &&
-        [[ $(<"$work/tv.sha256") == "$fingerprint" ]]; then
-    rebuild=false
-fi
-if $rebuild; then
-    mkdir -p "$work/tv/include" "$work/tv/src"
-    cp -R "$tv/include/." "$work/tv/include/"
-    cp -R "$tv/source/tvision/." "$work/tv/src/"
-    for name in new.cpp tobjstrm.cpp; do
-        tr -d '\r' < "$work/tv/src/$name" > "$work/$name.lf"
-        mv "$work/$name.lf" "$work/tv/src/$name"
+if [[ ! -s $work/ui.lib || ! -f $work/ui.sha256 ]] ||
+        [[ $(<"$work/ui.sha256") != "$fingerprint" ]]; then
+    echo 'Building Open Watcom UI (8086, large model).'
+    library_objects=()
+    for name in "${objects[@]}" uialloc; do
+        # SETUP supplies character decoding and mouse coordinates for its VGA buffer.
+        [[ $name != uichlen && $name != uimous ]] || continue
+        source="$ui/dos/c/$name.c"
+        [[ -f $source ]] || source="$ui/c/$name.c"
+        [[ -f $source ]] || die "Missing UI source: $name"
+        extra=()
+        # Initialize the text backend before SETUP optionally selects graphics.
+        [[ $name != uibios ]] || extra=(-dinitbios=InitTextBios)
+        wcc "${flags[@]}" "${extra[@]}" -fo="$work/ui/$name.obj" "$source"
+        library_objects+=("+$work/ui/$name.obj")
     done
-    patch --batch --fuzz=0 -d "$work/tv/src" -p1 < "$root/tools/tvision-bc31.patch"
+    rm -f "$work/ui.lib"
+    wlib -q -b "$work/ui.lib" "${library_objects[@]}"
+    printf '%s\n' "$fingerprint" > "$work/ui.sha256"
 fi
-for source in "$root"/src/setup/*.cpp "$root"/src/setup/*.h; do
-    iconv -f UTF-8 -t GB2312 "$source" | sed 's/$/\r/' > "$work/$(basename "$source")"
+app_objects=()
+for source in "$root"/src/setup/*.c; do
+    name=$(basename "$source" .c)
+    # Source stays UTF-8 in Git; the standalone DOS UI displays GB2312 glyphs.
+    iconv -f UTF-8 -t GB2312 "$source" > "$work/$name.c"
+    wcc "${flags[@]}" -za99 -zt=4096 -i="$root/src/setup" -i="$root/src" \
+        -fo="$work/$name.obj" "$work/$name.c"
+    app_objects+=("$work/$name.obj")
 done
-cp "$root/src/vesa.h" "$work/vesa.h"
-cp "$root/src/vesa.c" "$work/vlayout.cpp"
-rm -f "$work"/{DONE.TXT,FAIL.TXT,BUILD.LOG,SETUP.EXE,TVBUILT.TXT}
-flags='-ml -P -O1 -DNDEBUG -IB:\INCLUDE;C:\TV\INCLUDE -LB:\LIB'
-dos_line() { printf '%s\r\n' "$@"; }
-step() { dos_line "$* >> C:\BUILD.LOG" 'if errorlevel 1 goto failed'; }
+wcc "${flags[@]}" -dVESA_HOST -fo="$work/vlayout.obj" "$root/src/vesa.c"
 {
-    dos_line '@echo off' 'set PATH=B:\BIN' 'set INCLUDE=B:\INCLUDE' 'set LIB=B:\LIB'
-    if $rebuild; then
-        dos_line 'cd \tv\src'
-        step "bcc $flags -egeninc.exe geninc.cpp"
-        dos_line 'geninc > tvwrite.inc'
-        # Only upstream's object list: the tree also has obsolete .cpp files.
-        mapfile -t objects < <(grep -oE 'pfx[[:alnum:]_]+\.OBJ' "$tv/source/tvision/makefile" |
-                              sed 's/^pfx//; s/\.OBJ$//' | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort -u)
-        ((${#objects[@]})) || die 'Empty Turbo Vision object list.'
-        for name in "${objects[@]}"; do
-            if [[ -f $work/tv/src/$name.cpp ]]; then
-                step "bcc $flags -c $name.cpp"
-            elif [[ -f $work/tv/src/$name.asm ]]; then
-                step "tasm /ml /m2 $name.asm"
-            else
-                die "Missing Turbo Vision source: $name"
-            fi
-        done
-        # TLIB 3.02 holds an archive in conventional memory. Split the library.
-        for n in 0 1; do
-            rm -f "$work/TV$n.LIB"
-            start=$((n * ${#objects[@]} / 2))
-            end=$(((n + 1) * ${#objects[@]} / 2))
-            chunk=0
-            while ((start < end)); do
-                count=$((end - start)); ((count <= 12)) || count=12
-                response="L${n}_${chunk}.RSP"
-                { printf '+%s.obj ' "${objects[@]:start:count}"; printf '\r\n'; } > "$work/tv/src/$response"
-                step "tlib /P128 /0 C:\TV$n.LIB @$response"
-                start=$((start + count)); chunk=$((chunk + 1))
-            done
-        done
-        dos_line 'echo done>C:\TVBUILT.TXT'
-    fi
-    dos_line 'cd \'
-    step "bcc $flags -DVESA_HOST -c vlayout.cpp"
-    # Response file avoids DOS's 126-byte command-tail limit.
-    dos_line "$flags" '-esetup.exe' \
-        'main.cpp probe.cpp config.cpp screen.cpp vlayout.obj tv0.lib tv1.lib' > "$work/SETUP.RSP"
-    step 'bcc @SETUP.RSP'
-    dos_line 'echo done>DONE.TXT' 'goto end' ':failed' 'echo failed>FAIL.TXT' ':end'
-} > "$work/BUILD.BAT"
-{
-    printf '%s\n' '[sdl]' 'output=surface' '[cpu]' 'core=dynamic' 'cycles=max' '[autoexec]'
-    printf 'mount c "%s"\nmount b "%s"\n' "$work" "$compiler"
-    printf '%s\n' 'c:' 'call BUILD.BAT' 'exit'
-} > "$work/build.conf"
-echo "Building SETUP.EXE (Turbo Vision rebuild: $rebuild); log: $work/BUILD.LOG"
-(
-    cd "$work"
-    SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout -k 5 3600 "$dosbox" -conf "$work/build.conf"
-) > "$work/emulator.log" 2>&1 || { tail -60 "$work/emulator.log" >&2; exit 1; }
-[[ ! -f $work/TVBUILT.TXT ]] || printf '%s\n' "$fingerprint" > "$work/tv.sha256"
-if [[ ! -f $work/DONE.TXT || -f $work/FAIL.TXT || ! -s $work/SETUP.EXE ]]; then
-    tail -80 "$work/BUILD.LOG" >&2
-    exit 1
-fi
-cp "$work/SETUP.EXE" "$output"
-printf '%s: %s bytes (16-bit real-mode DOS)\n' "$output" "$(wc -c < "$output")"
+    printf '%s\n' 'system dos' 'option quiet' 'option stack=32768'
+    printf "name '%s'\noption map='%s/setup.map'\n" "$output" "$work"
+    printf "file '%s'\n" "${app_objects[@]}" "$work/vlayout.obj"
+    printf "library '%s/ui.lib'\n" "$work"
+    printf "libpath '%s/lib286/dos'\nlibpath '%s/lib286'\n" "$WATCOM" "$WATCOM"
+} > "$work/setup.lnk"
+wlink @"$work/setup.lnk"
+cp "$source_dir/license.txt" "$(dirname -- "$output")/SETUP.LIC"
+printf '%s: %s bytes (8086 real-mode DOS)\n' "$output" "$(wc -c < "$output")"

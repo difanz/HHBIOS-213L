@@ -1,2 +1,2 @@
-freetype-py==2.5.1
-opencc-python-reimplemented==0.1.7
+freetype-py
+opencc-python-reimplemented

@@ -1,4 +1,4 @@
-"""Execute the linked production 8086 C/ASM driver across its IRQ boundary."""
+"""Execute the linked production real-mode C/ASM driver across its IRQ boundary."""
 import ctypes
 import os
 import re
@@ -53,6 +53,8 @@ def test_vesa_interrupt_context_and_failed_modes(vesa_driver,status,active):
         assert uc.mem_read(base+s['busy'],1)==b'\1'
         put('AX',status if function==0x4f02 else 0x004f)
     uc.hook_add(UC_HOOK_INTR,bios)
+    upper={name: 0xa100+i for i,name in enumerate(('EAX','EBX','ECX','EDX','ESI','EDI','EBP'))}
+    for name,value in upper.items(): put(name,value<<16)
     for name,value in dict(initial,CS=base//16,SS=0x8000,SP=0xff00,EFLAGS=0x602).items(): put(name,value)
     uc.mem_write(0x8ff00,struct.pack('<HHH',0xff00,base//16,0x602))
     uc.emu_start(base+s['int10_handler'],base+0xff00,count=100000)
@@ -61,6 +63,7 @@ def test_vesa_interrupt_context_and_failed_modes(vesa_driver,status,active):
     assert get('EFLAGS') & 0x600 == 0x600
     for name,value in initial.items():
         if name!='AX': assert get(name)==value,name
+    for name,value in upper.items(): assert get(name)>>16==value,name
     assert uc.mem_read(base+s['active'],1)==bytes([0 if status==0x004f else active])
     assert uc.mem_read(base+s['busy'],1)==b'\0'
     assert uc.mem_read(base+s['stack_bottom'],2)==b'\x5a\xa5'
@@ -192,7 +195,7 @@ class Driver:
     def read(self,name,n=1): return bytes(self.uc.mem_read(0x10000+self.symbols[name],n))
 
     def run(self,entry='int10_handler',limit=300000,**registers):
-        near=entry not in ('int10_handler','int33_handler')
+        near=entry not in ('int10_handler','int33_handler','int8_handler')
         context=dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
                      SP=0xe000,EFLAGS=0x202)
         context.update(registers)
@@ -204,6 +207,17 @@ class Driver:
         assert self.get('IP')==0xff00
         assert self.get('SP')==0xe000+len(frame)
         assert self.read('stack_bottom',2)==b'\x5a\xa5'
+
+
+def test_timer_preserves_full_registers_on_foreign_stack(vesa_driver):
+    m=Driver(vesa_driver,lambda m: pytest.fail('inactive timer must not call BIOS'))
+    m.write('old8',struct.pack('<HH',0xf100,0x1000))
+    m.uc.mem_write(0x1f100,b'\xcf')
+    initial={name: 0xa1234567+i*0x1111 for i,name in
+             enumerate(('EAX','EBX','ECX','EDX','ESI','EDI','EBP'))}
+    m.run('int8_handler',DS=0x3000,ES=0x4000,**initial)
+    assert all(m.get(name)==value for name,value in initial.items())
+    assert (m.get('DS'),m.get('ES'),m.get('SS'))==(0x3000,0x4000,0x8000)
 
 
 @pytest.mark.parametrize('color',[0,6,15,31])
@@ -437,7 +451,7 @@ def test_bank_failure_stops_access_and_disables_renderer(vesa_driver,failed_bank
     m.uc.mem_write(0x30000,b'\xa5'*16)
     accesses=[]
     m.uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE,
-                  lambda uc,access,address,size,value,_: accesses.append((address,tuple(calls))),
+                  lambda uc,access,address,size,value,_: accesses.append((address,size,tuple(calls))),
                   begin=0xa0000,end=0xbffff)
     m.run(AX=0x1412,BX=0,SI=0,CX=16,ES=0x3000,DI=0)
     assert m.get('AX')==1 and m.read('active')==b'\0'
@@ -446,7 +460,8 @@ def test_bank_failure_stops_access_and_disables_renderer(vesa_driver,failed_bank
     if failed_bank==0:
         # The pre-switch text snapshot is safe; no framebuffer access may
         # occur after the BIOS rejects the switch to graphics bank zero.
-        assert accesses==[(address,()) for address in range(0xb8000,0xb8000+4000,2)]
+        assert accesses and all(not banks for _,_,banks in accesses)
+        assert [byte for address,size,_ in accesses for byte in range(address,address+size)] == list(range(0xb8000,0xb8000+4000))
         assert m.uc.mem_read(0x30000,16)==b'\xa5'*16
 
 

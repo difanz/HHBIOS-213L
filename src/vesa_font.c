@@ -5,7 +5,6 @@
 #define FONT_SLOTS 8434U
 #define FONT_MAP_BYTES (FONT_SLOTS * 4UL)
 #define FONT_RECORD 70U
-#define RECORD_OFFSET(n) (((u32)(n) << 6) + ((u32)(n) << 2) + ((u32)(n) << 1))
 #define FONT_CACHE 16U
 
 u32 CALL font_entry;
@@ -13,6 +12,13 @@ u16 CALL font_kind;
 u16 CALL font_handle;
 u16 CALL font_kb;
 u16 CALL font_fault;
+u16 CALL font_width = CELL_WIDTH;
+u16 CALL font_height = CELL_HEIGHT;
+u16 CALL font_body_height = GLYPH_HEIGHT;
+u8 CALL font_extended;
+char CALL font_name[64] = "HH20.FNT";
+static u16 record_bytes = FONT_RECORD;
+static u16 cache_slots = FONT_CACHE;
 static u16 record_count;
 static u16 next_slot;
 static u32 text_storage;
@@ -20,10 +26,15 @@ u8 CALL font_custom[256]; /* bit 0: application bitmap, bit 1: changed */
 static u16 custom_active;
 static u16 keys[FONT_CACHE];
 static u16 valid[FONT_CACHE];
-static u8 cache[FONT_CACHE][FONT_RECORD];
+/* Small fonts retain 16 slots; the largest 48x64 font has five. */
+static u8 cache[2048];
+static u32 large_glyph[MAX_FONT_HEIGHT * 2];
+static u32 doubled_glyph[MAX_FONT_HEIGHT * 2];
 extern u8 CALL text_transfer[8192];
 void CALL font_service(u16 kind, struct BiosRegisters* bios_registers);
 u16 CALL font_snapshot(void);
+void CALL font_unpack(const u8* source, u32* out, u16 width, u16 height,
+                      u16 stride);
 
 #pragma pack(push, 1)
 struct XmsMoveRequest {
@@ -98,54 +109,63 @@ static int TransferFontBytes(u32 offset, void* buffer, u16 size, u16 writing) {
   return !(bios_registers.ax & 0xff00);
 }
 
-void CALL font_get(u16 code, u16* out) {
+static u8* LoadGlyph(u16 code) {
   u16 slot;
   u16 i;
   u16 record_index;
-  u16 y;
-  u16 x;
-  u16 bits;
   u8* glyph_data;
-  ClearBytes(out, CELL_HEIGHT * 4);
   if (code < 256) {
     slot = (font_custom[code] & 1) ? code | 0x8000 : code;
   } else {
     if ((code >> 8) < 0xa1 || (code >> 8) > 0xf7 || (code & 255) < 0xa1 ||
         (code & 255) > 0xfe) {
-      return;
+      return 0;
     }
     slot = 256 + ((code >> 8) - 0xa1) * 94 + (code & 255) - 0xa1;
     if (!traditional) {
       slot += FONT_SLOTS;
     }
   }
-  for (i = 0; i < FONT_CACHE; ++i) {
+  for (i = 0; i < cache_slots; ++i) {
     if (valid[i] && keys[i] == slot) {
       break;
     }
   }
-  if (i == FONT_CACHE) {
+  if (i == cache_slots) {
     i = next_slot;
-    next_slot = (next_slot + 1) % FONT_CACHE;
+    next_slot = (next_slot + 1) % cache_slots;
     valid[i] = 0;
+    glyph_data = cache + i * record_bytes;
     if (slot & 0x8000) {
-      if (!TransferFontBytes(text_storage + 32768UL + (u32)code * 16, cache[i],
-                             16, 0)) {
+      if (!TransferFontBytes(text_storage + 32768UL + (u32)code * 16,
+                             glyph_data, 16, 0)) {
         font_fault = 1;
-        return;
+        return 0;
       }
     } else if (!TransferFontBytes((u32)slot * 2, &record_index, 2, 0) ||
                record_index >= record_count ||
-               !TransferFontBytes(FONT_MAP_BYTES + RECORD_OFFSET(record_index),
-                                  cache[i], FONT_RECORD, 0)) {
+               !TransferFontBytes(
+                   FONT_MAP_BYTES + MultiplyWide(record_index, record_bytes),
+                   glyph_data, record_bytes, 0)) {
       font_fault = 1;
-      return;
+      return 0;
     }
     keys[i] = slot;
     valid[i] = 1;
   }
-  glyph_data = cache[i];
-  if (slot & 0x8000) {
+  return cache + i * record_bytes;
+}
+
+void CALL font_get(u16 code, u16* out) {
+  u16 x;
+  u16 y;
+  u16 bits;
+  u8* glyph_data = LoadGlyph(code);
+  ClearBytes(out, CELL_HEIGHT * 4);
+  if (!glyph_data) {
+    return;
+  }
+  if (code < 256 && (font_custom[code] & 1)) {
     /* Downloaded UI glyphs fill the complete cell, including its edges. */
     for (y = 0; y < CELL_HEIGHT; ++y) {
       bits = 0;
@@ -163,6 +183,72 @@ void CALL font_get(u16 code, u16* out) {
     out[y + CELL_HEIGHT] =
         ((u16)glyph_data[1] << 10) | ((u16)glyph_data[2] << 2);
   }
+}
+
+static void ScaleBitmap(const u8* source, u32* out) {
+  u16 x;
+  u16 y;
+  for (y = 0; y < font_height; ++y) {
+    u32 bits = 0;
+    for (x = 0; x < font_width; ++x) {
+      bits = (bits << 1) |
+             ((source[y * 16 / font_height] >> (7 - x * 8 / font_width)) & 1);
+    }
+    out[y] = bits << (32 - font_width);
+  }
+}
+
+void CALL font_get_large(u16 code, u32* out) {
+  u16 stride = (font_width * 2 + 7) / 8;
+  u8* pixels = LoadGlyph(code);
+  if (!pixels) {
+    ClearBytes(out, MAX_FONT_HEIGHT * 8);
+    return;
+  }
+  if (code < 256 && (font_custom[code] & 1)) {
+    ClearBytes(out, MAX_FONT_HEIGHT * 8);
+    ScaleBitmap(pixels, out);
+    return;
+  }
+  font_unpack(pixels, out, font_width, font_height, stride);
+}
+
+static void DrawLargeHalf(const u32* bits, u16 attribute, u16 position,
+                          u16 wide) {
+  u16 x;
+  u16 y;
+  if (!wide) {
+    raster_large_cell(bits, attribute, position);
+    return;
+  }
+  ClearBytes(doubled_glyph, sizeof(doubled_glyph));
+  for (y = 0; y < font_height; ++y) {
+    for (x = 0; x < font_width * 2; ++x) {
+      if (bits[y] & (0x80000000UL >> (x / 2))) {
+        doubled_glyph[y + (x >= font_width ? MAX_FONT_HEIGHT : 0)] |=
+            0x80000000UL >> (x % font_width);
+      }
+    }
+  }
+  raster_large_cell(doubled_glyph, attribute, position);
+  if ((position & 255) < TEXT_COLS - 1) {
+    raster_large_cell(doubled_glyph + MAX_FONT_HEIGHT, attribute, position + 1);
+  }
+}
+
+void CALL font_draw(u16 code, u16 attribute, u16 position, u16 wide) {
+  font_get_large(code, large_glyph);
+  DrawLargeHalf(large_glyph, code < 256 ? attribute : attribute >> 8, position,
+                wide == 2);
+  if (code >= 256 && (position & 255) + wide < TEXT_COLS) {
+    DrawLargeHalf(large_glyph + MAX_FONT_HEIGHT, attribute & 255,
+                  position + wide, wide == 2);
+  }
+}
+
+void CALL font_bitmap_draw(const u8* source, u16 attribute, u16 position) {
+  ScaleBitmap(source, large_glyph);
+  raster_large_cell(large_glyph, attribute, position);
 }
 
 /* Reuse the bank-switch scratch buffer to compare downloaded VGA font RAM
@@ -345,7 +431,7 @@ u16 CALL font_open(void) {
   ClearBytes(&bios_registers, sizeof(bios_registers));
   bios_registers.ax = 0x3d00;
   bios_registers.ds = resident_segment;
-  bios_registers.dx = (u16) "HH20.FNT";
+  bios_registers.dx = (u16)font_name;
   font_service(0, &bios_registers);
   if (bios_registers.flags & 1) {
     return 0;
@@ -359,20 +445,43 @@ u16 CALL font_open(void) {
   if ((bios_registers.flags & 1) || bios_registers.ax != 32) {
     goto done;
   }
+  font_extended = 1;
   for (i = 0; i < 8; ++i) {
-    if (text_transfer[i] != "HH20F01\n"[i]) {
+    if (text_transfer[i] != "HHFONT2\n"[i]) {
+      font_extended = 0;
+    }
+  }
+  if (!font_extended) {
+    for (i = 0; i < 8; ++i) {
+      if (text_transfer[i] != "HH20F01\n"[i]) {
+        goto done;
+      }
+    }
+  }
+  font_width = *(u16*)(text_transfer + 8);
+  font_height = *(u16*)(text_transfer + 10);
+  if (font_width < 8 || font_width > MAX_FONT_WIDTH || font_height < 16 ||
+      font_height > MAX_FONT_HEIGHT ||
+      (!font_extended &&
+       (font_width != CELL_WIDTH || font_height != CELL_HEIGHT)) ||
+      *(u16*)(text_transfer + 12) != FONT_SLOTS) {
+    goto done;
+  }
+  for (i = 20; i < 32; ++i) {
+    if (text_transfer[i]) {
       goto done;
     }
   }
-  if (*(u16*)(text_transfer + 8) != CELL_WIDTH ||
-      *(u16*)(text_transfer + 10) != CELL_HEIGHT ||
-      *(u16*)(text_transfer + 12) != FONT_SLOTS) {
-    goto done;
+  font_body_height = font_extended ? font_height : GLYPH_HEIGHT;
+  record_bytes = (((font_width * 2 + 7) / 8) * font_height + 1) & ~1U;
+  cache_slots = sizeof(cache) / record_bytes;
+  if (cache_slots > FONT_CACHE) {
+    cache_slots = FONT_CACHE;
   }
   record_count = *(u16*)(text_transfer + 14);
   length = *(u32*)(text_transfer + 16);
   if (!record_count || record_count > FONT_SLOTS * 2 ||
-      length != FONT_MAP_BYTES + RECORD_OFFSET(record_count)) {
+      length != FONT_MAP_BYTES + MultiplyWide(record_count, record_bytes)) {
     goto done;
   }
   font_kb = (u16)((length + 1023) >> 10);

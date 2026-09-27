@@ -112,7 +112,9 @@ prepare_image() {
         copy_missing "$path" ::QA
     done
     mcopy -o -i "$volume" "${modules[@]}" "$run/HH20.FNT" ::HHBIOS/
-    [[ ! -f $run/SETUP.EXE ]] || mcopy -o -i "$volume" "$run/SETUP.EXE" ::HHBIOS/
+    for path in "$run/SETUP.EXE" "$run/SETUP.LIC"; do
+        [[ ! -f $path ]] || mcopy -o -i "$volume" "$path" ::HHBIOS/
+    done
     mcopy -s -o -i "$volume" "$drive/PROBES" "$drive"/*.BAT ::QA/
     if [[ $mouse_driver == vbmouse ]]; then
         mcopy -o -i "$volume" "$mouse" ::DOS/VBMOUSE.EXE

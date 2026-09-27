@@ -65,7 +65,7 @@ static u16 ToLogicalCoordinate(u16 value, u16 origin, u16 cell_pixels, u16 low,
 }
 static void TranslateCoordinates(struct BiosRegisters FAR* bios_registers) {
   bios_registers->cx = ToLogicalCoordinate(
-      bios_registers->cx, viewport_x, CELL_WIDTH * pixel_scale, min_x, max_x);
+      bios_registers->cx, viewport_x, font_width * pixel_scale, min_x, max_x);
   bios_registers->dx =
       ToLogicalCoordinate(bios_registers->dx, viewport_y,
                           raster_height * pixel_scale, min_y, max_y);
@@ -280,7 +280,7 @@ void CALL mouse_dispatch(struct BiosRegisters FAR* bios_registers) {
        * quantization without falling into the preceding logical cell. */
       bios_registers->cx = viewport_x +
                            ((ClampCoordinate(x, min_x, max_x) & ~7U) + 8) *
-                               CELL_WIDTH * pixel_scale / 8 -
+                               font_width * pixel_scale / 8 -
                            1;
       bios_registers->dx = viewport_y +
                            ((ClampCoordinate(y, min_y, max_y) & ~7U) + 8) *
@@ -400,6 +400,7 @@ void CALL mouse_paint(void) {
   /* Only the serialized renderer calls this; callbacks never draw. */
   static struct BiosRegisters bios_registers;
   static u16 bits[CELL_HEIGHT * 2];
+  static u32 large_bits[MAX_FONT_HEIGHT * 2];
   u16 value;
   u16 changed;
   u16 code;
@@ -424,6 +425,25 @@ void CALL mouse_paint(void) {
       code = ((text[i - 1] & 255) << 8) | (value & 255);
       half = 1;
     }
+  }
+  if (font_extended) {
+    font_get_large(code, large_bits);
+    if (cursor_type) {
+      for (i = 0; i < font_body_height; ++i) {
+        u16 line = i * logical_height / font_body_height;
+        if (line >= cursor_first && line <= cursor_last) {
+          large_bits[half * MAX_FONT_HEIGHT + i] = 0xffffffffUL
+                                                   << (32 - font_width);
+        }
+      }
+    }
+    if (begin_draw()) {
+      raster_large_cell(large_bits + half * MAX_FONT_HEIGHT, changed >> 8,
+                        (mouse_y << 8) | mouse_x);
+      end_draw();
+    }
+    drawn_position = (mouse_y << 8) | mouse_x;
+    return;
   }
   font_get(code, bits);
   if (cursor_type) {

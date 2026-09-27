@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Freestanding 8086 COM: no CRT, heap, extender or installed absolute paths.
+# Freestanding 386 real-mode COM: no CRT, heap, extender or absolute paths.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 out=${1:-"$root/build/VESA.COM"}
@@ -19,14 +19,15 @@ work=$(mktemp -d "$(dirname -- "$out")/.vesa-XXXXXX")
 trap 'rm -rf "$work"' EXIT
 (
     cd "$work"
-    wcc -q -0 -bt=dos -ms -s -os -zl -zlf -fo=vesac.obj "$source_dir/vesa.c"
-    wcc -q -0 -bt=dos -ms -s -os -zl -zlf -fo=fontc.obj "$source_dir/vesa_font.c"
-    wcc -q -0 -bt=dos -ms -s -os -zl -zlf -fo=rasterc.obj "$source_dir/vesa_raster.c"
-    wcc -q -0 -bt=dos -ms -zu -s -os -zl -zlf -fo=mousec.obj "$source_dir/vesa_mouse.c"
-    env -u JWASM "$assembler" -q -0 -Zm -omf -Fomousea.obj "$source_dir/vesa_mouse.asm"
+    wcc -q -3 -bt=dos -ms -s -os -zl -zlf -fo=vesac.obj "$source_dir/vesa.c"
+    wcc -q -3 -bt=dos -ms -s -os -zl -zlf -fo=fontc.obj "$source_dir/vesa_font.c"
+    wcc -q -3 -bt=dos -ms -s -os -zl -zlf -fo=rasterc.obj "$source_dir/vesa_raster.c"
+    wcc -q -3 -bt=dos -ms -zu -s -os -zl -zlf -fo=mousec.obj "$source_dir/vesa_mouse.c"
+    env -u JWASM "$assembler" -q -0 -Zm -omf -I"$source_dir" -Fomousea.obj "$source_dir/vesa_mouse.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -I"$source_dir" -Fovesaa.obj "$source_dir/vesa.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Fofonta.obj "$source_dir/vesa_font.asm"
-    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj,mousea.obj,mousec.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
+    env -u JWASM "$assembler" -q -0 -Zm -omf -Forastera.obj "$source_dir/vesa_raster.asm"
+    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj,rastera.obj,mousea.obj,mousec.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
     cp vesa.com "$out"
     cp vesa.map "${out%.*}.map"
 )

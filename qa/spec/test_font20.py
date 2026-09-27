@@ -18,7 +18,7 @@ class FontMachine:
         self.uc=Uc(UC_ARCH_X86,UC_MODE_16); self.uc.mem_map(0,0x100000)
         self.uc.mem_write(0x10100,raw)
         self.buffer=(len(raw)+0x10f)&~15
-        assert self.buffer+256<0xe000, 'Test buffer must fit below the test stack'
+        assert self.buffer+520<0xe000, 'Test buffer must fit below the test stack'
         self.kind,self.failure=kind,failure
         self.data=data if data is not None else (ROOT/'fonts/HH20.FNT').read_bytes()
         self.position=0; self.moves=0; self.closed=0; self.allocated=False
@@ -100,6 +100,73 @@ class FontMachine:
         assert self.get('IP')==0xff00 and self.get('SP')==0xe002
         assert self.get('DS')==self.get('SS')==0x1000
         return self.get('AX')
+
+
+def sized_font(width, height):
+    """Small format fixture: blank, asymmetric ASCII A and Chinese 中."""
+    stride = (2 * width + 7) // 8
+    record_size = (stride * height + 1) & ~1
+    maps = [0] * (8434 * 2)
+    slot = 256 + (0xd6 - 0xa1) * 94 + 0xd0 - 0xa1
+    for bank in (0, 8434):
+        maps[bank + 65] = 1
+        maps[bank + slot] = 2
+    records = [bytes(record_size)]
+    for columns in (width, 2 * width):
+        rows = [sum(1 << (stride * 8 - 1 - x) for x in range(columns)
+                    if (x * 3 + y * 5) % 11 < 4)
+                for y in range(height)]
+        records.append(b''.join(row.to_bytes(stride, 'big') for row in rows).ljust(record_size, b'\0'))
+    payload = struct.pack(f'<{len(maps)}H', *maps) + b''.join(records)
+    return struct.pack('<8s4HI12x', b'HHFONT2\n', width, height, 8434, 3, len(payload)) + payload
+
+
+@pytest.mark.parametrize('kind', ['xms', 'ems'])
+@pytest.mark.parametrize('width,height', [(8, 16), (9, 23), (10, 20), (12, 29), (16, 39), (23, 63), (24, 64)])
+def test_variable_font_cache_and_half_boundaries(vesa_driver, kind, width, height):
+    m = FontMachine(vesa_driver, kind, sized_font(width, height))
+    assert m.call('font_open') == 1 and m.closed == 1
+    assert (m.word('font_width'), m.word('font_height')) == (width, height)
+    for code in (32, 65, 0xd6d0):
+        m.uc.mem_write(0x10000 + m.buffer, b'\xa5' * 516)
+        m.call('font_get_large', code, m.buffer + 2)
+        result = bytes(m.uc.mem_read(0x10000 + m.buffer, 516))
+        assert result[:2] == result[-2:] == b'\xa5\xa5'
+        expected = []
+        for half in range(2):
+            for y in range(64):
+                expected.append(sum(1 << (31 - x) for x in range(width)
+                    if y < height and code != 32 and (half == 0 or code >= 256)
+                    and ((x + half * width) * 3 + y * 5) % 11 < 4))
+        assert struct.unpack('<128I', result[2:-2]) == tuple(expected)
+        moves = m.moves
+        m.call('font_get_large', code, m.buffer + 2)
+        assert m.moves == moves
+
+
+@pytest.mark.parametrize('offset,value', [(8, 7), (8, 25), (10, 15), (10, 65), (20, 1), (14, 0), (16, 0)])
+def test_invalid_variable_font_is_rejected_before_allocation(vesa_driver, offset, value):
+    data = bytearray(sized_font(12, 29))
+    struct.pack_into('<H', data, offset, value)
+    m = FontMachine(vesa_driver, data=bytes(data))
+    assert m.call('font_open') == 0 and m.closed == 1 and not m.allocated
+
+
+@pytest.mark.parametrize('width,height', [(12, 29), (16, 39), (24, 64)])
+def test_variable_font_downloaded_bitmap_fills_cell(vesa_driver, width, height):
+    m = FontMachine(vesa_driver, data=sized_font(width, height))
+    assert m.call('font_open') == 1
+    code = 65
+    bitmap = bytes((y * 13 + 0x81) & 255 for y in range(16))
+    offset = len(m.data) - 32 + 32768 + code * 16
+    m.payload[offset:offset + 16] = bitmap
+    m.uc.mem_write(0x10000 + m.symbols['font_custom'] + code, b'\1')
+    m.call('font_get_large', code, m.buffer)
+    result = struct.unpack('<128I', m.uc.mem_read(0x10000 + m.buffer, 512))
+    expected = [sum(1 << (31 - x) for x in range(width)
+                    if bitmap[y * 16 // height] & (128 >> (x * 8 // width)))
+                for y in range(height)]
+    assert result == tuple(expected + [0] * (128 - height))
 
 
 @pytest.mark.parametrize('kind',['xms','ems'])

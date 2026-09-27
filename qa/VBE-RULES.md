@@ -1,7 +1,7 @@
 # VBE coexistence and rendering
 
 `VGA.COM` retains its 640x480 renderer. The independent `VESA.COM`, built from
-`vesa.c`, `vesa.asm` and `vesa_raster.c`, draws a planar 16-color console. Its mouse adapter is in `vesa_mouse.c`/`.asm`. Load one display
+`vesa.c`, `vesa.asm` and `vesa_raster.c`/`.asm`, draws a planar 16-color console. Its mouse adapter is in `vesa_mouse.c`/`.asm`. Load one display
 driver at a time, after a font reader and optionally CKBD. The logical screen
 starts at 80x25 cells. At the default 800x600 size, cells are 10x23 pixels and
 the input-method row starts at y=575.
@@ -33,7 +33,14 @@ logical text geometry. The viewport is centered,
 including the input-method row. Native glyphs use the largest integer scale
 from 1 through 4 that fits. If necessary to fit a larger integer scale, only
 the three spacing rows are removed; the complete 20-row font ink is retained.
-The 800x600 assembly path remains separate from the bank-spanning C rasterizer.
+`/F:file` selects an alternative font and cell geometry. Version 2 fonts keep
+every row; only the default HH20 font permits removing its three spacing rows.
+The 800x600 assembly path remains separate from the bank-spanning rasterizer.
+The latter maps a bank once per glyph span and uses 386 word/dword loops,
+preserving neighboring pixels and splitting stores exactly at bank boundaries.
+Full-width scrolling copies retained pixels and their text shadow; same-bank
+copies use byte-wide VGA latches across all four planes, while cross-bank
+scanlines pass through a 2 KiB buffer. No latch copy uses MOVSW or MOVSD.
 No protected-mode switch or framebuffer-sized conventional-memory allocation
 is needed. Vendor widescreen mode numbers must be discovered, not assumed.
 
@@ -132,9 +139,9 @@ only affected cached glyphs and cells, including software mouse cursors. The
 only a 256-byte glyph flag table is added to conventional data. A keyboard query
 uses the still-mapped B800 page while that scratch buffer is in use.
 
-HH20.FNT is loaded before mode installation into XMS, or EMS 4.0 using its
-mapping-preserving move-region service. The resident cache holds 16 packed
-glyphs (1120 bitmap bytes plus 64 bytes of keys/validity). Simplified and
+The selected font is loaded before mode installation into XMS, or EMS 4.0 using its
+mapping-preserving move-region service. The 3072-byte resident cache holds up to
+16 packed glyphs, with 64 bytes of keys/validity. Simplified and
 traditional slot maps share deduplicated glyphs in the external allocation.
 An additional 36 KiB in that same allocation holds the downloaded font and
 preserves all text pages across font/row changes that require a physical mode switch. No DOS allocation occurs

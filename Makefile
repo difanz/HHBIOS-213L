@@ -22,12 +22,12 @@ QA_PYTHON ?= python3
 
 all: $(COMS) $(BUILD)/VESA.COM
 
-# Optional real-mode Turbo Vision installer. See src/setup/README.md.
-# BORLAND_DIR, TVISION_DIR and DOSBOX are supplied by the developer.
+# Optional 8086 installer using Open Watcom UI. See src/setup/README.md.
+# WATCOM and WATCOM_SOURCE are supplied by the developer.
 setup:
 	bash tools/build-setup.sh --output "$(BUILD)/SETUP.EXE"
 
-$(BUILD)/VESA.COM: $(SRC)/vesa.c $(SRC)/vesa.asm $(SRC)/vesa.h $(SRC)/vesa_font.c $(SRC)/vesa_font.asm $(SRC)/vesa_raster.c $(SRC)/vesa_mouse.c $(SRC)/vesa_mouse.asm $(INCS) tools/build-vesa.sh | $(BUILD)
+$(BUILD)/VESA.COM: $(SRC)/vesa.c $(SRC)/vesa.asm $(SRC)/vesa.h $(SRC)/vesa_cpu.inc $(SRC)/vesa_font.c $(SRC)/vesa_font.asm $(SRC)/vesa_raster.c $(SRC)/vesa_raster.asm $(SRC)/vesa_mouse.c $(SRC)/vesa_mouse.asm $(INCS) tools/build-vesa.sh | $(BUILD)
 	JWASM="$(JWASM)" bash tools/build-vesa.sh "$@" "$(SRC)"
 
 $(BUILD):

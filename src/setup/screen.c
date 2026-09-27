@@ -1,32 +1,25 @@
-/* Standalone 8086 VGA backend. Turbo Vision still owns layout, focus,
- * dialogs and events; only its final character buffer is rasterized here.
- * No hooks, TSR, XMS, EMS or protected mode. HZK16 is normal process memory. */
-#define Uses_TScreen
-#define Uses_TEvent
-#define Uses_TEventQueue
+/* Standalone 8086 VGA output for Watcom UI. HZK16 lives in process memory;
+ * no HHBIOS hooks, TSR, XMS, EMS or protected mode are needed. */
 #include "screen.h"
 
-#include <alloc.h>
+#include <conio.h>
 #include <dos.h>
 #include <stdio.h>
 #include <string.h>
-#include <tvision/tv.h>
 
-static ushort far cells[80 * 30], previous[80 * 30];
+#include "uidef.h"
+#include "uimouse.h"
+#include "uirefrhk.h"
+
+static unsigned short far cells[80 * 30], previous[80 * 30];
 static short far previous_glyph[80 * 30];
 static unsigned char far latin[256 * 16];
 static int active;
-static int mouse_present;
 static unsigned old_mode;
-static unsigned mouse_buttons;
-static unsigned mouse_x;
-static unsigned mouse_y;
-static unsigned last_down;
-static unsigned repeat_at;
-static ushort* old_buffer;
+static int graphics_requested;
 static unsigned char far* font_blocks[8];
 /* CP437 frames and GB2312 share byte values. Encode Chinese UI characters
- * into unused Western slots before giving strings to Turbo Vision. Each Han
+ * into unused Western slots before giving strings to Watcom UI. Each Han
  * still occupies exactly two cells. Frame bytes B0..DF are never ambiguous.
  * This maps character codes, not font subsets; all HZK16 glyphs are loaded. */
 static unsigned far han_codes[4096];
@@ -80,7 +73,7 @@ const char* EncodeScreenText(const char* text) {
 static void FreeFont() {
   for (unsigned i = 0; i < 8; ++i) {
     if (font_blocks[i]) {
-      farfree(font_blocks[i]);
+      _dos_freemem(FP_SEG(font_blocks[i]));
       font_blocks[i] = 0;
     }
   }
@@ -93,7 +86,12 @@ static int LoadFont() {
   }
   for (unsigned i = 0; i < 8; ++i) {
     unsigned block_bytes = i == 7 ? 32320U : 32768U;
-    font_blocks[i] = (unsigned char far*)farmalloc(block_bytes);
+    unsigned segment;
+    /* Allocate exact DOS blocks: a 32 KiB heap request plus heap metadata can
+     * otherwise consume most of a 64 KiB far-heap segment per font chunk. */
+    if (!_dos_allocmem((block_bytes + 15) / 16, &segment)) {
+      font_blocks[i] = (unsigned char far*)MK_FP(segment, 0);
+    }
     if (!font_blocks[i] ||
         fread(font_blocks[i], 1, block_bytes, file) != block_bytes) {
       fclose(file);
@@ -105,30 +103,21 @@ static int LoadFont() {
   return 1;
 }
 
-static void CallMouse(unsigned ax, unsigned cx = 0, unsigned dx = 0) {
+static int StartScreen(void) {
   union REGS bios_registers;
-  memset(&bios_registers, 0, sizeof(bios_registers));
-  bios_registers.x.ax = ax;
-  bios_registers.x.cx = cx;
-  bios_registers.x.dx = dx;
-  int86(0x33, &bios_registers, &bios_registers);
-}
-
-int StartScreen() {
-  union REGS bios_registers;
-  struct REGPACK font;
+  union REGPACK font;
   if (!LoadFont()) {
     return 0;
   }
   memset(&font, 0, sizeof(font));
-  font.r_ax = 0x1130;
-  font.r_bx = 0x0600;
+  font.w.ax = 0x1130;
+  font.w.bx = 0x0600;
   intr(0x10, &font);
-  _fmemcpy(latin, MK_FP(font.r_es, font.r_bp), sizeof(latin));
-  old_mode = TScreen::screenMode;
-  old_buffer = TScreen::screenBuffer;
-  TEventQueue::suspend();
+  _fmemcpy(latin, MK_FP(font.w.es, font.w.bp), sizeof(latin));
   memset(&bios_registers, 0, sizeof(bios_registers));
+  bios_registers.h.ah = 0x0f;
+  int86(0x10, &bios_registers, &bios_registers);
+  old_mode = bios_registers.h.al & 0x7f;
   bios_registers.x.ax = 0x12;
   int86(0x10, &bios_registers, &bios_registers);
   bios_registers.h.ah = 0x0f;
@@ -136,26 +125,20 @@ int StartScreen() {
   if ((bios_registers.h.al & 0x7f) != 0x12) {
     bios_registers.x.ax = old_mode & 255;
     int86(0x10, &bios_registers, &bios_registers);
-    TEventQueue::resume();
     FreeFont();
     return 0;
   }
   memset(cells, 0, sizeof(cells));
   memset(previous, 0xff, sizeof(previous));
   memset(previous_glyph, 0xff, sizeof(previous_glyph));
-  TScreen::screenBuffer = cells;
-  TScreen::screenWidth = 80;
-  TScreen::screenHeight = 30;
-  TScreen::checkSnow = False;
+  UIData->screen.origin = (LP_PIXEL)cells;
+  UIData->screen.increment = 80;
+  UIData->width = 80;
+  UIData->height = 30;
+  UIData->colour = M_VGA;
+  UIData->no_snow = true;
+  UIData->desqview = false;
   active = 1;
-  bios_registers.x.ax = 0;
-  int86(0x33, &bios_registers, &bios_registers);
-  mouse_present = bios_registers.x.ax == 0xffff;
-  if (mouse_present) {
-    CallMouse(7, 0, 639);
-    CallMouse(8, 0, 479);
-    CallMouse(1);
-  }
   return 1;
 }
 
@@ -192,7 +175,7 @@ static void PaintCell(unsigned index, int hanzi_slot, unsigned half) {
   }
   unsigned char far* vram = (unsigned char far*)MK_FP(0xa000, row * 1280 + col);
   for (plane_index = 0; plane_index < 4; ++plane_index) {
-    outport(0x3c4, 2 | ((1U << plane_index) << 8));
+    outpw(0x3c4, 2 | ((1U << plane_index) << 8));
     for (y = 0; y < 16; ++y) {
       unsigned char bits =
           hanzi_slot < 0 ? latin[character * 16 + y] : bits16[y * 2 + half];
@@ -220,14 +203,11 @@ void PaintScreen() {
   if (!dirty) {
     return;
   }
-  if (mouse_present) {
-    CallMouse(2);
-  }
   /* Mouse drivers may change VGA registers; establish all write-mode inputs. */
-  outport(0x3ce, 0x0001); /* disable set/reset */
-  outport(0x3ce, 0x0003); /* rotate=0, replace */
-  outport(0x3ce, 0x0005); /* write mode 0 */
-  outport(0x3ce, 0xff08); /* full bit mask */
+  outpw(0x3ce, 0x0001); /* disable set/reset */
+  outpw(0x3ce, 0x0003); /* rotate=0, replace */
+  outpw(0x3ce, 0x0005); /* write mode 0 */
+  outpw(0x3ce, 0xff08); /* full bit mask */
   for (i = 0; i < 80 * 30; ++i) {
     int han = -1;
     if (i % 80 != 79) {
@@ -251,67 +231,122 @@ void PaintScreen() {
       previous_glyph[i] = -1;
     }
   }
-  outport(0x3c4, 0x0f02);
-  if (mouse_present) {
-    CallMouse(1);
-  }
+  outpw(0x3c4, 0x0f02);
 }
 
-void ReadScreenMouse(TEvent& event) {
-  union REGS bios_registers;
-  unsigned x;
-  unsigned y;
-  unsigned buttons;
-  unsigned ticks;
-  if (!active || !mouse_present) {
-    return;
-  }
-  memset(&bios_registers, 0, sizeof(bios_registers));
-  bios_registers.x.ax = 3;
-  int86(0x33, &bios_registers, &bios_registers);
-  x = bios_registers.x.cx / 8;
-  y = bios_registers.x.dx / 16;
-  buttons = bios_registers.x.bx & 3;
-  ticks = *(unsigned far*)MK_FP(0x40, 0x6c);
-  event.mouse.eventFlags = 0;
-  if (buttons && !mouse_buttons) {
-    event.what = evMouseDown;
-    if (x == mouse_x && y == mouse_y && (unsigned)(ticks - last_down) < 8) {
-      event.mouse.eventFlags = meDoubleClick;
-    }
-    last_down = ticks;
-    repeat_at = ticks + 8;
-  } else if (!buttons && mouse_buttons) {
-    event.what = evMouseUp;
-  } else if (x != mouse_x || y != mouse_y) {
-    event.what = evMouseMove;
-  } else if (buttons && (int)(ticks - repeat_at) >= 0) {
-    event.what = evMouseAuto;
-    repeat_at = ticks + 1;
-  } else {
-    return;
-  }
-  event.mouse.where.x = x;
-  event.mouse.where.y = y;
-  event.mouse.buttons = buttons;
-  mouse_x = x;
-  mouse_y = y;
-  mouse_buttons = buttons;
-}
-
-void StopScreen() {
+void StopScreen(void) {
   union REGS bios_registers;
   if (!active) {
     return;
   }
-  if (mouse_present) {
-    CallMouse(2);
-  }
   memset(&bios_registers, 0, sizeof(bios_registers));
   bios_registers.x.ax = old_mode & 255;
   int86(0x10, &bios_registers, &bios_registers);
-  TScreen::screenBuffer = old_buffer;
-  TScreen::setCrtData();
   active = 0;
   FreeFont();
+}
+
+void ConfigureScreen(int use_graphics) {
+  graphics_requested = use_graphics;
+}
+
+/* The upstream DOS initializer is renamed by a compiler define. It captures
+ * the original text cursor and keyboard state before we select VGA graphics. */
+extern bool InitTextBios(void);
+
+bool initbios(void) {
+  if (!InitTextBios()) {
+    return false;
+  }
+  if (graphics_requested) {
+    StartScreen();
+  }
+  return true;
+}
+
+void uirefresh(void) {
+  _uirefresh();
+  PaintScreen();
+}
+
+int uicharlen(int character) {
+  return active && character >= 0x80 && character < 0xb0 ? 2 : 1;
+}
+
+bool uiisdbcs(void) {
+  /* The private encoding leaves CP437 frames intact. It does not use DOS/V
+   * shadow buffers or require Watcom's alternative DBCS frame characters. */
+  return false;
+}
+
+static void CallMouse(unsigned ax, unsigned cx, unsigned dx) {
+  union REGS registers;
+  memset(&registers, 0, sizeof(registers));
+  registers.x.ax = ax;
+  registers.x.cx = cx;
+  registers.x.dx = dx;
+  int86(0x33, &registers, &registers);
+}
+
+void checkmouse(MOUSESTAT* status, MOUSEORD* row, MOUSEORD* col,
+                MOUSETIME* time) {
+  union REGS registers;
+  memset(&registers, 0, sizeof(registers));
+  registers.x.ax = 3;
+  int86(0x33, &registers, &registers);
+  *status = registers.x.bx & 7;
+  *col = registers.x.cx / 8;
+  *row = registers.x.dx / (active ? 16 : 8);
+  if (*col >= UIData->width) {
+    *col = UIData->width - 1;
+  }
+  if (*row >= UIData->height) {
+    *row = UIData->height - 1;
+  }
+  *time = uiclock();
+  uisetmouse(*row, *col);
+  *col += uimousealign();
+}
+
+void uisetmouseposn(ORD row, ORD col) {
+  MouseRow = row;
+  MouseCol = col;
+  CallMouse(4, col * 8, row * (active ? 16 : 8));
+}
+
+void uimousespeed(unsigned speed) {
+  if (!speed) {
+    speed = 1;
+  }
+  UIData->mouse_speed = speed;
+  CallMouse(15, speed, speed * 2);
+}
+
+bool initmouse(init_mode install) {
+  union REGS registers;
+  MouseInstalled = false;
+  if (install == INIT_MOUSELESS || !mouse_installed()) {
+    return false;
+  }
+  memset(&registers, 0, sizeof(registers));
+  int86(0x33, &registers, &registers);
+  if (registers.x.ax != 0xffff) {
+    return false;
+  }
+  CallMouse(7, 0, UIData->width * 8 - 1);
+  CallMouse(8, 0, UIData->height * (active ? 16 : 8) - 1);
+  UIData->mouse_xscale = UIData->mouse_yscale = 1;
+  UIData->mouse_swapped = false;
+  MouseInstalled = true;
+  MouseOn = false;
+  uisetmouseposn(UIData->height / 2, UIData->width / 2);
+  checkmouse(&MouseStatus, &MouseRow, &MouseCol, &MouseTime);
+  uimousespeed(UIData->mouse_speed);
+  return true;
+}
+
+void finimouse(void) {
+  if (MouseInstalled) {
+    uioffmouse();
+  }
 }

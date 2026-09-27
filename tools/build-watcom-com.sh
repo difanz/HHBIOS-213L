@@ -34,7 +34,7 @@ if [[ -n "${WATCOM:-}" ]]; then
         PATH="$WATCOM/binl64:${PATH:-}"
     fi
     export PATH
-    if [[ -z "${INCLUDE:-}" && -d "$WATCOM/h" ]]; then
+    if [[ -d "$WATCOM/h" ]]; then
         INCLUDE="$WATCOM/h"
         export INCLUDE
     fi

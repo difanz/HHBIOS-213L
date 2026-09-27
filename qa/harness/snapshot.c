@@ -177,6 +177,8 @@ int main(int argc, char **argv)
         if (vesa) {
             geometry[0]=display.x.si+1; geometry[1]=display.x.di+1;
             geometry[2]=pitch; geometry[3]=10; geometry[4]=display.x.cx>>8;
+            display.x.ax=0x1413; intr(0x10,&display);
+            if (display.x.ax==0x4632) geometry[3]=display.x.si;
             display.x.ax=0x1411; intr(0x10,&display);
             if (display.x.ax!=0x5356 || display.x.cx<6) return 13;
             pitch=geometry[2]=*(unsigned __far *)MK_FP(display.x.es,display.x.di+4);

@@ -38,7 +38,7 @@ jwasm -q -Zm -bin -Isrc -Fo=build/FOO.COM src/FOO.ASM
 
 ## 安装设置
 
-`SETUP.EXE` 使用 Turbo Vision 检测机器能力，选择字库存储、驻留方式、显示驱动和输入法，预览并生成 `HHBIOS.BAT`、`213L.INI`。它独立于 HHBIOS 运行；VGA 中文界面直接加载 `HZK16`，旧显卡可用英文文本界面。运行方法及可选构建目标 `make setup` 见 [安装程序说明](src/setup/README.md)。
+`SETUP.EXE` 使用 Open Watcom UI 检测机器能力，选择字库存储、驻留方式、显示驱动和输入法，预览并生成 `HHBIOS.BAT`、`213L.INI`。它独立于 HHBIOS 运行；VGA 中文界面直接加载 `HZK16`，旧显卡可用英文文本界面。运行方法及可选构建目标 `make setup` 见 [安装程序说明](src/setup/README.md)。
 
 ## VESA 显示
 
@@ -54,9 +54,11 @@ VESA
 
 输入法状态栏位于应用文本区下方，不占用应用的最后一行。加载 CKBD 并启用“保持提示行”时，驱动安装后自动显示状态栏；已打开的提示行文字和点阵标志随文本行数切换、图形模式返回而恢复。关闭提示行后，普通刷新保持它隐藏。
 
-每次只加载一个显示驱动；`VESA` 与 `VGA`、`EGA`、`HGA` 分别使用。`VESA /N` 强制驻留常规内存，默认优先使用 DOS UMB。该驱动仍按 8086 编译，不依赖 DOS extender、DPMI 或 unreal mode。需要可用的 VGA 兼容 VBE 模式及 B800 映射；不满足条件时拒绝安装。
+每次只加载一个显示驱动；`VESA` 与 `VGA`、`EGA`、`HGA` 分别使用。`VESA /N` 强制驻留常规内存，默认优先使用 DOS UMB。VESA 使用 386 指令集，仍为 16 位实模式 COM，不依赖 DOS extender、DPMI 或 unreal mode。需要 386 以上 CPU、可用的 VGA 兼容 VBE 模式及 B800 映射；不满足条件时拒绝安装。SETUP 和基本 VGA 路径保留 8086 支持。
 
 `VESA /M:104` 可选择 BIOS 提供的 1024×768×16 模式，`VESA /M:106` 可选择 1280×1024×16；`/M:` 后为十六进制 VBE 模式号。其他分辨率按 BIOS 实际提供的模式选择，宽屏模式号不能跨显卡照搬。默认仍为 800×600。
+
+`VESA /M:106 /F:HH32.FNT` 可选择更大的字体。`tools/build-font.py` 将 Linux 上指定的开源点阵／矢量字体按字号导出，支持半角 8–24 像素宽、16–64 像素行高；中文占两个字格。鼠标、光标和输入法栏采用同一尺寸，B800 的字符布局保持不变。用法见[可变字号](fonts/README.md#variable-sizes-from-linux-fonts)。
 
 物理分辨率与文本行数独立。软件可通过标准 VGA 扫描线／ROM 字体接口选择 80×43、80×50，也可返回 80×25；B800、BIOS、中文边界查询和鼠标坐标使用同一套逻辑行数。25 行使用八个 4 KiB 页，超过 25 行使用四个 8 KiB 页。若当前物理模式放不下完整点阵，驱动会尝试 BIOS 提供的 1024×768、1280×1024 模式；没有合适模式时保留原布局。
 

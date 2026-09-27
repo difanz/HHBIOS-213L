@@ -8,7 +8,7 @@ from qa.spec.test_vesa_api import Driver, vesa_driver
 pytestmark=pytest.mark.unit
 
 
-def mouse(vesa_driver,rows=50):
+def mouse(vesa_driver,rows=50,width=10,height=20):
     state=dict(position=(0,0),callback=(0,0,0),calls=[])
     def bios(m):
         fn=m.get('AX'); state['calls'].append(fn)
@@ -32,7 +32,8 @@ def mouse(vesa_driver,rows=50):
         else: pytest.fail(f'unexpected mouse function {fn:04x}')
     m=Driver(vesa_driver,bios)
     m.write('old33',struct.pack('<HH',0xf000,0x1000))
-    for name,value in dict(viewport_x=240,viewport_y=2,text_rows=rows,raster_height=20,
+    for name,value in dict(viewport_x=0 if width==16 else 240,viewport_y=2,text_rows=rows,raster_height=height,
+                           font_width=width,
                            page_count=4 if rows>25 else 8).items():
         m.write(name,struct.pack('<H',value))
     m.write('active',b'\1')
@@ -43,9 +44,9 @@ def mouse(vesa_driver,rows=50):
     return m,state
 
 
-@pytest.mark.parametrize('rows',[25,43,50])
-def test_mouse_query_set_ranges_and_cell_quantization(vesa_driver,rows):
-    m,state=mouse(vesa_driver,rows)
+@pytest.mark.parametrize('rows,width,height',[(25,10,20),(43,10,20),(50,10,20),(25,12,29),(25,16,39)])
+def test_mouse_query_set_ranges_and_cell_quantization(vesa_driver,rows,width,height):
+    m,state=mouse(vesa_driver,rows,width,height)
     for x,y in ((0,0),(13,21),(639,rows*8-1),(32767,32767)):
         m.run('int33_handler',AX=4,CX=x,DX=y,DS=0x3000,ES=0x4000)
         assert m.get('DS')==0x3000 and m.get('ES')==0x4000
@@ -65,6 +66,16 @@ def test_mouse_visibility_does_not_show_the_native_graphics_cursor(vesa_driver):
     before=list(state['calls'])
     for fn in (1,2,2,1,1,10): m.run('int33_handler',AX=fn,BX=0,CX=0xffff,DX=0x7700)
     assert state['calls']==before
+
+
+def test_mouse_entry_preserves_upper_register_halves(vesa_driver):
+    m,state=mouse(vesa_driver)
+    initial={name: 0xb1230000+i*0x10000 for i,name in
+             enumerate(('EAX','EBX','ECX','EDX','ESI','EDI','EBP'))}
+    m.run('int33_handler',**initial,AX=3,DS=0x3000,ES=0x4000)
+    for name,value in initial.items():
+        assert m.get(name)>>16==value>>16,name
+    assert m.get('BX')==2
 
 
 def test_mouse_callback_swap_and_translation(vesa_driver):
