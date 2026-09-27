@@ -95,7 +95,8 @@ PROBES
         env -u JWASM "$assembler" -q -0 -bin "-Fo$drive/PROBES/$name.COM" "$root/qa/harness/${name,,}.asm"
     done
 fi
-modules=("$run/VESA.COM")
+modules=("$run/VESA.COM" "$run/README")
+cp "$root/build/README" "$run/README"
 cp "$root/build/VESA.COM" "$root/fonts/HH20.FNT" "$run/"
 while IFS= read -r -d '' source; do
     name=$(basename "$source" .ASM)

@@ -94,7 +94,7 @@ are reported. `--no-build` reuses existing modules and probes. Build the optiona
 [SETUP.EXE](../src/setup/README.md) first to include it.
 
 The default `--mouse-driver cutemouse` loads CuteMouse and enables click-to-capture
-for its relative PS/2 input. Ctrl+F10 releases the pointer. Remote desktops such
+for its relative PS/2 input. Ctrl+Alt+F10 releases the pointer. Remote desktops such
 as Chrome Remote Desktop may send absolute positions that conflict with captured
 relative input: reversing the host pointer can continue moving the DOS pointer
 in the same direction. For that environment, use
@@ -122,6 +122,18 @@ archives, and current compiled modules. Both HZK16 fonts, input tables and
 legacy utilities are retained. `Q:` is an MS-DOS `SUBST` for `C:\QA`; `TOOLS`
 lists the editors, IDEs, DOSSHELL and PC Tools available there. Guest probes
 are on the PATH through `Q:\PROBES`.
+
+The generated configuration uses `qa/dosbox-x.map`, with mappings for both SDL
+backends. Function keys go to DOS, including Ctrl+F5 (HHBIOS control menu),
+Ctrl+F9, Ctrl+F10 and F11/F12. Emulator shortcuts are unbound except
+Ctrl+Alt+F10 for mouse capture; use DOSBox-X's menus for other emulator commands.
+This does not change the desktop or remote client's own shortcuts.
+
+The original `213L.INI` selects the Great Wall keyboard layout: Insert, Home,
+PageUp, Delete, End and PageDown select input modes. Ctrl+F5, then the sixth
+item (仿长城键), switches to the standard Alt+function-key layout for the current
+session. The DOS `README` command opens the installed GB2312 help file beside
+`README.COM`, even when invoked from another directory through PATH.
 
 Preparation refuses to update a disk held open by DOSBox. Close DOSBox first,
 or select a separate disk with `--image /path/to/QA.IMG`. The generated

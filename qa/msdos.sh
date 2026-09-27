@@ -134,8 +134,12 @@ prepare_image() {
         'C:\DOS\SUBST Q: C:\QA' "$mouse_command" 'CD \HHBIOS' \
         'CALL HHBIOS.BAT' 'CD \' 'VER' 'ECHO TOOLS lists QA applications.' '@ECHO ON' > "$install/AUTOEXEC.BAT"
     mcopy -o -i "$volume" "$install/CONFIG.SYS" "$install/AUTOEXEC.BAT" ::/
+    # Keep the function keys for HHBIOS and DOS applications. The mapper has
+    # SDL1 and SDL2 sections; Ctrl+Alt+F10 remains available to release a mouse.
+    cp "$root/qa/dosbox-x.map" "$run/dosbox-x.map"
     {
         printf '%s\n' '[sdl]' "autolock=$mouse_lock" 'mouse_emulation=locked' 'middle_unlock=none'
+        printf 'mapperfile=%s/dosbox-x.map\n' "$run"
         [[ $mouse_driver != vbmouse ]] || printf '%s\n' '[dos]' 'vmware=true'
         printf '%s\n' '[dosbox]' 'machine=svga_s3' 'memsize=16' '[cpu]' 'cycles=30000' \
             '[autoexec]' '@echo off' 'imgmount 0 empty -fs none -t floppy'

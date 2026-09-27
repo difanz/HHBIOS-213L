@@ -1,0 +1,43 @@
+HHBIOS 2.13L 使用说明
+
+启动与设置
+  在 HHBIOS 目录运行 HHBIOS.BAT，加载字库、键盘和显示模块。
+  SETUP.EXE 检测机器并生成 HHBIOS.BAT、213L.INI。
+  修改常驻模块的配置后，重新启动 DOS 再运行 HHBIOS.BAT。
+  SETUP /EN 使用英文界面；SETUP /REPORT 显示检测结果。
+
+输入法快捷键
+  标准键盘配置：
+    Alt+F1  区位       Alt+F2  首尾       Alt+F3  拼音
+    Alt+F4  双拼       Alt+F5  五笔       Alt+F6  英文
+    Alt+F10 电报       Ctrl+F9 纯中文符号
+  仿长城键盘配置：
+    Insert  区位       Home    首尾       PageUp   拼音
+    Delete  双拼       End     纯中文符号 PageDown 英文
+  使用光标键上方的独立六键区。拼音、首尾、电报需要相应码表，
+  五笔需要加载 WBX.COM。具体键位以 213L.INI 为准。
+
+系统控制
+    Ctrl+F5  系统控制菜单       Ctrl+F7  中西文显示切换
+    Alt+F9   定义双拼词组       Ctrl+F10 打印参数
+    F12      预选字             F11      联机帮助（需先加载 LHELP）
+  发行版使用 Scroll Lock 开关系统功能键；也可配置为左或右 Shift。
+  快捷键被关闭时，按一次所配置的开关键恢复。
+  Ctrl+F5 菜单第六项可在仿长城键和标准键盘之间切换。
+  DOSBox 或桌面系统可能占用部分组合键，应检查宿主机的快捷键设置。
+  项目 QA 配置把功能键交给 DOS；Ctrl+Alt+F10 捕获或释放鼠标。
+
+整字编辑
+  CKBD /E 开启整字编辑；CKBD /B 恢复逐字节编辑。
+  已加载 CKBD 时，这两个命令直接改变当前设置。
+
+显示
+  VGA 用于 640x480 显示；VESA 默认使用 800x600 的 16 色模式。
+  SETUP 的显示设置可选择显卡支持的模式与文本行数。
+  已加载 VESA 时，SETUP /TEXT:80x25、80x43、80x50 可切换行数，
+  前提是当前分辨率和字形大小能容纳文本区与输入法状态栏。
+
+本阅读器
+  README 默认打开与 README.COM 同目录、无扩展名的 README 文件。
+  README 文件名 可打开其他文本。方向键和 PgUp/PgDn 翻阅，Esc 退出。
+  F1 显示阅读器操作说明。

@@ -27,7 +27,13 @@ vpath %.ASM $(SOURCE_DIRS)
 .PHONY: all clean check setup variants qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
 QA_PYTHON ?= python3
 
-all: $(COMS) $(BUILD)/VESA.COM
+all: $(COMS) $(BUILD)/VESA.COM $(BUILD)/README
+
+$(BUILD)/README: docs/README.DOS | $(BUILD)
+	iconv -f UTF-8 -t GB2312 "$<" > "$@.tmp"
+	sed 's/$$/\r/' "$@.tmp" > "$@"
+	printf '\032' >> "$@"
+	rm -f "$@.tmp"
 
 # Optional 8086 installer using Open Watcom UI. See src/setup/README.md.
 # WATCOM and WATCOM_SOURCE are supplied by the developer.
