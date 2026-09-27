@@ -256,6 +256,9 @@ static void HideCursor(void) {
   cursor_visible = 0;
 }
 static void ShowCursor(void) {
+  if (cursor_visible) {
+    return;
+  }
   cursor_position = CursorPosition(active_page);
   if (active && cursor_on && !(cursor_shape & 0x2000) &&
       IsTextPosition(cursor_position) && !mouse_covers(cursor_position)) {
@@ -269,19 +272,37 @@ static void ShowCursor(void) {
     cursor_visible = active;
   }
 }
-static void RepaintConsole(void) {
+static void RefreshConsole(u16 show_cursor) {
+  u16 changed;
   if (!active || !text_ready()) {
     return;
   }
-  HideCursor();
-  mouse_erase();
-  refresh();
+  mouse_poll();
+  changed = text_changed();
+  if (cursor_visible &&
+      (changed || !show_cursor || !cursor_on || (cursor_shape & 0x2000) ||
+       cursor_position != CursorPosition(active_page) ||
+       mouse_covers(cursor_position))) {
+    HideCursor();
+  }
+  if (mouse_prepare(changed)) {
+    changed = 1;
+  }
+  if (changed) {
+    /* Mouse erasure can dirty the text row beneath a retained caret. */
+    HideCursor();
+    refresh_dirty();
+  }
   if (prompt_dirty) {
     DrawStatusBar();
   }
-  mouse_poll();
-  ShowCursor();
+  if (show_cursor) {
+    ShowCursor();
+  }
   mouse_paint();
+}
+static void RepaintConsole(void) {
+  RefreshConsole(1);
 }
 static u8 SuspendConsole(void) {
   u8 previous;
@@ -1498,21 +1519,9 @@ void CALL tick(void) {
     return;
   }
   counter = 0;
-  HideCursor();
-  mouse_erase();
-  refresh();
-  mouse_poll();
+  RefreshConsole(!blink || (ReadBdaByte(0x6c) & 8));
   if (!active) {
     UpdateKeyboardState();
-    return;
   }
-  if (prompt_dirty) {
-    DrawStatusBar();
-  }
-  /* Keep blink phase independent of dirty text. */
-  if (!blink || (ReadBdaByte(0x6c) & 8)) {
-    ShowCursor();
-  }
-  mouse_paint();
 }
 #endif

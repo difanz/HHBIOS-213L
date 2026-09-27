@@ -17,6 +17,11 @@ static u16 max_y = 199;
 static u16 mouse_x;
 static u16 mouse_y;
 static u16 drawn_position = 0xffff;
+static u16 drawn_screen_mask;
+static u16 drawn_cursor_mask;
+static u16 drawn_type;
+static u16 drawn_first;
+static u16 drawn_last;
 static int visibility = -1;
 static u8 present;
 static u8 attached;
@@ -396,6 +401,16 @@ u16 CALL mouse_covers(u16 pos) {
            (short)(mouse_y * 8) <= (short)exclude_bottom) &&
          pos == ((mouse_y << 8) | mouse_x);
 }
+u16 CALL mouse_prepare(u16 repaint) {
+  if (drawn_position != 0xffff &&
+      (repaint || !mouse_covers(drawn_position) ||
+       drawn_screen_mask != screen_mask || drawn_cursor_mask != cursor_mask ||
+       drawn_type != cursor_type || drawn_first != cursor_first ||
+       drawn_last != cursor_last)) {
+    return mouse_erase();
+  }
+  return 0;
+}
 void CALL mouse_paint(void) {
   /* Only the serialized renderer calls this; callbacks never draw. */
   static struct BiosRegisters bios_registers;
@@ -407,10 +422,16 @@ void CALL mouse_paint(void) {
   u16 half = 0;
   u16 i;
   u16 FAR* text;
-  if (!active || !mouse_covers((mouse_y << 8) | mouse_x) ||
-      mouse_y >= text_rows || mouse_x >= 80) {
+  if (!active || drawn_position != 0xffff ||
+      !mouse_covers((mouse_y << 8) | mouse_x) || mouse_y >= text_rows ||
+      mouse_x >= 80) {
     return;
   }
+  drawn_screen_mask = screen_mask;
+  drawn_cursor_mask = cursor_mask;
+  drawn_type = cursor_type;
+  drawn_first = cursor_first;
+  drawn_last = cursor_last;
   bios_registers.dx = (mouse_y << 8) | mouse_x;
   boundary(&bios_registers);
   text = PTR(u16, 0xb800, active_page * page_bytes);

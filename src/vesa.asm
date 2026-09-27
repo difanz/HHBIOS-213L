@@ -542,7 +542,7 @@ invalidate proc near
 invalidate endp
 
 ; The classifier is shared verbatim with VGA/EGA/HGA. No translated FSM.
-public refresh
+public refresh, refresh_dirty, text_changed
 snapshot_text proc near
     save_regs
     cli
@@ -564,11 +564,13 @@ snapshot_text proc near
     ret
 snapshot_text endp
 
-refresh proc near
+; Check once per serialized repaint, including application font changes.
+; The C overlay compositor can then erase only the overlays that need it.
+text_changed proc near
     save_regs
     call text_ready
     or ax,ax
-    jz refresh_done
+    jz text_unchanged
     push cs
     pop ds
     mov cs:font_checking,1
@@ -582,17 +584,39 @@ refresh proc near
     ; Policy changes and software mouse erasure still force the normal path.
     mov al,cs:D_ZBFS
     cmp al,cs:D_LASTMODE
-    jne refresh_changed
+    jne text_is_changed
     mov al,cs:K_HZ1
     cmp al,cs:D_LASTHZ
-    jne refresh_changed
+    jne text_is_changed
     xor si,si
     mov di,offset D_XPQ
     mov cx,cs:text_cells
     shr cx,1
     repe cmpsd
-    je refresh_done
-refresh_changed:
+    je text_unchanged
+text_is_changed:
+    load_regs
+    mov ax,1
+    ret
+text_unchanged:
+    load_regs
+    xor ax,ax
+    ret
+text_changed endp
+
+refresh proc near
+    call text_changed
+    or ax,ax
+    jnz refresh_dirty
+    ret
+refresh endp
+
+refresh_dirty proc near
+    save_regs
+    call classifier_policy
+    mov ds,cs:D_B800
+    push cs
+    pop es
     cmp cs:banked_text,0
     je refresh_ready
     mov ax,offset text_transfer
@@ -626,7 +650,7 @@ refresh_ready:
 refresh_done:
     load_regs
     ret
-refresh endp
+refresh_dirty endp
 
 ; A font downloader can temporarily unmap B800 between its direct I/O writes.
 ; IRQ refresh/capture must wait until the application restores a text aperture.

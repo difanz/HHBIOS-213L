@@ -19,7 +19,9 @@ SYMBOLS = ('S_TABLE_WORD', 'S_TABLE_NEXT', 'S_TABLE_OPEN', 'T_XMS', 'T_HANDLE',
            'T_BASE', 'T_LENGTH', 'T_PAGE', 'T_BUSY', 'T_FAULT', 'T_CACHE', 'T_LOCAL',
            'S_A017', 'S_A011', 'L_A28F', 'D_2BD6', 'D_2BD8', 'D_2BAD', 'D_963A',
            'D_2BB0', 'D_2BB1', 'D_2BB9', 'D_2BBA', 'D_2BD2', 'D_9597',
-           'S_A9C0', 'D_PY', 'L_A597', 'D_DB')
+           'S_A9C0', 'D_PY', 'L_A597', 'D_DB', 'D_SW', 'S_INDEX_OPEN',
+           'I_HANDLE', 'I_SW', 'I_PY', 'I_LENGTH', 'P_HANDLE', 'P_LENGTH',
+           'S_PHRASE_OPEN', 'S_A9000', 'D_SPCZ', 'D_2CC1', 'D_9648')
 
 
 @pytest.fixture(scope='session')
@@ -51,6 +53,7 @@ class Tables:
         self.base = 0x6000
         self.moves = []
         self.allocated = xms
+        self.blocks = {7: bytearray(payload)} if xms else {}
         self.failure = None
         self.nested = None
         self.xms_present = True
@@ -89,13 +92,17 @@ class Tables:
         assert number == 0x65
         function = self.get('AX') >> 8
         if function == 9:
-            assert not self.allocated
-            self.allocated = self.failure != 'allocate'
-            self.put('AX', int(self.allocated))
-            self.put('DX', 7)
+            handle = max(self.blocks, default=6)+1
+            ok = self.failure != 'allocate' and not (
+                handle == 8 and self.failure == 'index_allocate')
+            if ok:
+                self.blocks[handle] = bytearray(self.get('DX') * 1024)
+            self.allocated = 7 in self.blocks
+            self.put('AX', int(ok))
+            self.put('DX', handle)
         elif function == 10:
-            assert self.allocated and self.get('DX') == 7
-            self.allocated = False
+            del self.blocks[self.get('DX')]
+            self.allocated = 7 in self.blocks
             self.put('AX', 1)
         else:
             assert function == 11 and self.allocated
@@ -104,9 +111,10 @@ class Tables:
             assert length and not length & 1
             self.moves.append((length, source, offset, target, destination))
             if source:
-                assert source == 7 and target == 0 and offset+length <= len(self.payload)
+                assert source in self.blocks and target == 0
+                assert offset+length <= len(self.blocks[source])
                 address = (destination >> 16)*16+(destination & 65535)
-                uc.mem_write(address, self.payload[offset:offset+length])
+                uc.mem_write(address, bytes(self.blocks[source][offset:offset+length]))
                 if self.nested is not None:
                     nested, self.nested = self.nested, None
                     context = uc.context_save()
@@ -116,10 +124,14 @@ class Tables:
                     uc.context_restore(context)
                     assert bytes(uc.mem_read(self.get('DS')*16+self.get('SI'), 16)) == descriptor
             else:
-                assert target == 7 and destination == 0
+                assert target in self.blocks and destination+length <= len(self.blocks[target])
                 address = (offset >> 16)*16+(offset & 65535)
-                assert bytes(uc.mem_read(address, length)) == self.payload
-            self.put('AX', 0 if self.failure == 'move' else 1)
+                self.blocks[target][destination:destination+length] = uc.mem_read(address, length)
+                if target == 7:
+                    assert bytes(uc.mem_read(address, length)) == self.payload
+            failed = self.failure == 'move' or (
+                self.failure == 'index_move' and (source == 8 or target == 8))
+            self.put('AX', int(not failed))
         # XMS returns an error code in BL; callers must not keep an offset there.
         self.put('BX', (self.get('BX') & 0xff00) | 0x80)
 
@@ -131,10 +143,11 @@ class Tables:
                         EFLAGS=0x202, AX=0x2345, BX=0x3456, CX=0x4567,
                         DX=0x5678, SI=0x6789, DI=0x789a, BP=0x89ab)
         defaults.update(registers)
+        sp = defaults['SP']
         for name, value in defaults.items():
             self.put(name, value)
         self.uc.mem_write(defaults['SS']*16+sp, b'\x00\xff')
-        self.uc.emu_start(0x10000+self.symbols[entry], 0x1ff00, count=2000000)
+        self.uc.emu_start(0x10000+self.symbols[entry], 0x1ff00, count=5000000)
         assert self.get('IP') == 0xff00 and self.get('SP') == sp+2
         self.depth = depth
         if entry == 'S_TABLE_WORD':
@@ -142,6 +155,14 @@ class Tables:
                 if name not in ('AX', 'SP'):
                     assert self.get(name) == value, name
         return self.get('AX')
+
+    def index(self, table='D_SW', **registers):
+        self.word(table, self.base)
+        self.write(table, struct.pack('<HH', self.base, self.base+len(self.payload)))
+        self.uc.mem_write(0x10000+self.base, self.payload)
+        self.call('S_INDEX_OPEN', BP=self.base+len(self.payload), **registers)
+        self.uc.mem_write(0x10000+self.base, b'\xa5'*len(self.payload))
+        self.moves.clear()
 
 
 @pytest.mark.unit
@@ -194,11 +215,13 @@ def test_install_only_discards_tables_after_success(table_binary, failure):
 @pytest.mark.unit
 @pytest.mark.parametrize('reverse', [False, True])
 @pytest.mark.parametrize('keys', [b'a', b'ab', b'abc'])
-@pytest.mark.parametrize('xms', [False, True])
+@pytest.mark.parametrize('xms', [False, True, 'indexed'])
 def test_production_candidate_search_and_reverse_order(table_binary, reverse, keys, xms):
     codes = [(i % 26+1) | ((i//26 % 26+1) << 5) | ((i//676 % 26+1) << 10)
              for i in range(6768)]
     machine = Tables(table_binary, struct.pack('<6768H', *codes), xms)
+    if xms == 'indexed':
+        machine.index()
     base = machine.base
     machine.word('D_2BD6', base)
     machine.word('D_2BD8', base+len(codes)*2)
@@ -219,6 +242,166 @@ def test_production_candidate_search_and_reverse_order(table_binary, reverse, ke
         raw = raw[:len(candidates)*2]
     assert raw == b''.join(bytes([0xb0+i//94, 0xa1+i % 94]) for i in candidates)
     assert machine.read('T_FAULT', 1) == b'\0'
+    if xms == 'indexed':
+        assert len(machine.moves) <= 2
+        assert all(move[1] == 8 for move in machine.moves)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('table', ['D_SW', 'D_PY'])
+def test_index_builder_keeps_every_record_and_stable_order(table_binary, table):
+    codes = [(i*613) & 65535 for i in range(6768)]
+    machine = Tables(table_binary, struct.pack('<6768H', *codes))
+    machine.index(table)
+    assert machine.read('I_HANDLE') == b'\x08\0'
+    heads = struct.unpack('<33H', machine.read('I_'+table[2:], 66))
+    assert heads[0] == 0 and heads[-1] == 6768*4
+    for key, (start, end) in enumerate(zip(heads, heads[1:])):
+        expected = b''.join(struct.pack('<HH', machine.base+i*2, code)
+                            for i, code in enumerate(codes) if code & 31 == key)
+        assert machine.blocks[8][start:end] == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('stack,expected', [(0xd0, True), (0xff00, True),
+                                           (0x95e0, False)])
+def test_index_scratch_handles_psp_and_high_stacks(table_binary, stack, expected):
+    machine = Tables(table_binary, struct.pack('<6768H', *([1]*6768)))
+    machine.index(SS=0x1000, SP=stack)
+    assert (machine.read('I_HANDLE') != b'\0\0') == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('failure', [None, 'index_allocate', 'index_move'])
+@pytest.mark.parametrize('reverse,start', [(False, 0), (False, 2801), (True, 6767),
+                                          (True, 1997)])
+def test_index_matches_linear_paging_and_frequency_rules(table_binary, failure, reverse, start):
+    codes = [((i*613) & 32767) | (32768 if i % 3 else 0) for i in range(6768)]
+    payload = struct.pack('<6768H', *codes)
+    linear = Tables(table_binary, payload)
+    indexed = Tables(table_binary, payload)
+    indexed.failure = failure
+    indexed.index('D_PY')
+    assert (8 in indexed.blocks) == (failure is None)
+    indexed.failure = None
+    indexed.nested = 512  # nested reverse-code lookup cannot replace index data
+    for keys in (b'a', b'ab', b'abc', b'zz', b'zzz'):
+        for machine in (linear, indexed):
+            machine.word('D_2BD6', machine.base)
+            machine.word('D_2BD8', machine.base+len(payload))
+            machine.word('D_2BAD', machine.base+start*2)
+            machine.write('D_963A', b'\x08')
+            machine.write('D_2BB9', b'\x01')
+            machine.write('D_2BB0', bytes([len(keys)]))
+            machine.write('D_2BB1', keys)
+            machine.write('D_2BBA', bytes(22))
+            machine.call('S_A011' if reverse else 'S_A017')
+        for name, length in [('D_2BBA', 22), ('D_2BD2', 1), ('D_9597', 2),
+                             ('D_2BAD', 2), ('D_2BB9', 1)]:
+            assert indexed.read(name, length) == linear.read(name, length), (keys, name)
+        assert indexed.read('T_BUSY', 1) == b'\0'
+
+
+@pytest.mark.unit
+def test_failed_index_read_releases_cache_and_reports_fault(table_binary):
+    machine = Tables(table_binary, struct.pack('<6768H', *([1]*6768)))
+    machine.index()
+    machine.failure = 'index_move'
+    machine.word('D_2BD6', machine.base)
+    machine.word('D_2BD8', machine.base+len(machine.payload))
+    machine.word('D_2BAD', machine.base)
+    machine.write('D_963A', b'\2')
+    machine.write('D_2BB0', b'\1')
+    machine.write('D_2BB1', b'a')
+    machine.call('S_A017')
+    assert machine.read('T_FAULT', 1) == b'\1'
+    assert machine.read('T_BUSY', 1) == b'\0'
+    assert machine.read('T_PAGE') == b'\xff\xff'
+
+
+def phrase_fixture():
+    codes = [(i % 26+1) | ((i//26 % 26+1) << 5) for i in range(6768)]
+    def hanzi(index):
+        return bytes([0xb0+index//94, 0xa1+index % 94])
+    def keys(index):
+        return bytes([96+(codes[index] & 31), 96+(codes[index] >> 5 & 31)])
+    dictionary = bytearray(16)
+    entries, queries = [], []
+    for i in range(700):
+        first = i*313 % 6768
+        entries.append(struct.pack('<2sH', keys(first), len(dictionary)))
+        dictionary += bytes(c & 127 for c in hanzi(first))
+        for j in range(i % 9):  # includes empty groups
+            second = (i*211+j*53) % 6768
+            dictionary += hanzi(second)
+            if i % 73 == 1:
+                queries.append(keys(first)+keys(second))
+    end = len(dictionary)
+    # As in SPCZ.DAT, the first three-character record starts with a masked
+    # Hanzi. It also terminates the preceding variable-length phrase group.
+    dictionary += bytes(c & 127 for c in hanzi(310)) + hanzi(511) + hanzi(912)
+    multi = len(dictionary)
+    dictionary += hanzi(220) + hanzi(520) + hanzi(820) + hanzi(1120) + b','
+    struct.pack_into('<4H', dictionary, 0, end, multi, len(dictionary), len(dictionary))
+    dictionary[15] = 255
+    return struct.pack('<6768H', *codes), dictionary, b''.join(entries), queries, hanzi
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('failure', [None, 'allocate', 'index_move'])
+def test_phrase_index_matches_order_and_mutable_extension(table_binary, failure):
+    payload, dictionary, expected, queries, hanzi = phrase_fixture()
+    linear = Tables(table_binary, payload)
+    indexed = Tables(table_binary, payload)
+    for machine in (linear, indexed):
+        machine.word('D_PY', machine.base)
+        machine.word('D_SPCZ', 0x4000)
+        machine.uc.mem_write(0x40000, bytes(dictionary))
+    indexed.failure = failure
+    indexed.call('S_PHRASE_OPEN')
+    if failure is None:
+        assert indexed.blocks[8][:len(expected)] == expected
+        assert int.from_bytes(indexed.read('P_LENGTH'), 'little') == len(expected)
+    else:
+        assert 8 not in indexed.blocks and indexed.read('P_HANDLE') == b'\0\0'
+    indexed.failure = None
+    # Add a phrase after index construction, as ALT+F9 does. It must precede
+    # basic candidates without rebuilding or invalidating their immutable index.
+    extension = hanzi(313)+hanzi(211)+b','
+    dictionary += extension
+    struct.pack_into('<H', dictionary, 6, len(dictionary))
+    for machine in (linear, indexed):
+        machine.uc.mem_write(0x40000, bytes(dictionary))
+    for query in [b'zzzz', b'~~~?'] + queries + [q[:3]+b'?' for q in queries]:
+        for machine in (linear, indexed):
+            machine.write('D_2CC1', query)
+            machine.word('D_9597', 0)
+            machine.write('D_2BD2', b'\0')
+            machine.write('D_9648', bytes(44))
+            machine.moves.clear()
+            machine.call('S_A9000', DX=0)
+        for name, size in [('D_9597', 2), ('D_2BD2', 1), ('D_9648', 44)]:
+            assert indexed.read(name, size) == linear.read(name, size), (query, name)
+        assert indexed.read('T_BUSY', 1) == b'\0'
+        assert indexed.read('T_FAULT', 1) == b'\0'
+        if failure is None and query == b'~~~?':
+            assert len(indexed.moves) <= 5
+            assert len(linear.moves) > 100
+
+
+@pytest.mark.unit
+def test_phrase_read_failure_releases_shared_cache(table_binary):
+    payload, dictionary, _, _, _ = phrase_fixture()
+    machine = Tables(table_binary, payload)
+    machine.word('D_PY', machine.base)
+    machine.word('D_SPCZ', 0x4000)
+    machine.uc.mem_write(0x40000, bytes(dictionary))
+    machine.call('S_PHRASE_OPEN')
+    machine.failure = 'index_move'
+    machine.write('D_2CC1', b'~~~?')
+    machine.call('S_A9000', DX=0)
+    assert machine.read('T_FAULT', 1) == b'\1'
+    assert machine.read('T_BUSY', 1) == b'\0'
 
 
 @pytest.mark.unit
@@ -325,6 +508,12 @@ def test_msdos_distribution_tables_and_unload(dosbox_binary, memory_build,
     copy_in(tmp_path/'IMETABLE.COM', '::IMETABLE.COM')
     payload = read('HHBIOS/PYMB')
     assert len(payload) == 14108
+    dictionary = read('HHBIOS/SPCZ.DAT')
+    two_end, = struct.unpack_from('<H', dictionary)
+    groups = sum(not (word & 0x8080) for (word,) in
+                 struct.iter_unpack('<H', dictionary[16:two_end]))
+    table_kb = (len(payload)+1023)//1024
+    index_kb = ((len(payload)-572)*2+1023)//1024 + (groups*4+1023)//1024
     startup = re.sub(rb'(?im)^CALL HHBIOS.BAT\s*$', b'', read('AUTOEXEC.BAT'))
     (tmp_path/'STARTUP.BAT').write_bytes(startup)
     copy_in(tmp_path/'STARTUP.BAT', '::STARTUP.BAT')
@@ -363,13 +552,17 @@ def test_msdos_distribution_tables_and_unload(dosbox_binary, memory_build,
         if cycle:
             assert live.resident(0x10) >= 0xa000
             assert live.occupied() == before.occupied()
+            assert local_xms-live.xms == table_kb+index_kb
+        else:
+            local_xms = live.xms
     assert sizes[1] == sizes[2]
     assert abs((sizes[0]-sizes[1])-(len(payload)-1024)) < 16
 
 
 @pytest.mark.dos
 @pytest.mark.parametrize('local', [False, True])
-def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, local):
+@pytest.mark.parametrize('phrase', [False, True])
+def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, local, phrase):
     for path in memory_build.glob('*.COM'):
         shutil.copy2(path, tmp_path)
     for name in ('HZK16', 'HH20.FNT'):
@@ -379,15 +572,28 @@ def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, l
     assert result.returncode == 0, result.stdout+result.stderr
     keyboard_config(tmp_path)
     config = (tmp_path/'213L.INI').read_bytes().splitlines()
-    config[30] = b'59'
+    config[29 if phrase else 30] = b'59'
+    if phrase:
+        config[28] = b'31'  # mutable phrase extension space
     (tmp_path/'213L.INI').write_bytes(b'\r\n'.join(config)+b'\r\n')
     codes = [(i % 26+1) | ((i//26 % 26+1) << 5) | ((i//676 % 26+1) << 10)
              for i in range(6768)]
     (tmp_path/'SWMB').write_bytes('首尾'.encode('gb2312')+struct.pack('<6768H', *codes))
+    if phrase:
+        codes = [0x8041, 0x8023] + [0x8042]*6766
+        (tmp_path/'PYMB').write_bytes(b'\xb0\xa1'*286+struct.pack('<6768H', *codes))
+        dictionary = bytearray(16)
+        dictionary += b'\x30\x21\xb0\xa2'  # two-character group
+        dictionary += b'\x30\x23\xb0\xa4\xb0\xa5'  # three-character section
+        dictionary += b'\xb0\xa3\xb0\xa4\xb0\xa5\xb0\xa6,'
+        struct.pack_into('<4H', dictionary, 0, 20, 26, 35, 35)
+        dictionary[15] = 255
+        (tmp_path/'SPCZ.DAT').write_bytes(dictionary)
     (tmp_path/'SCREEN.KEY').touch()
     files = run_dos(dosbox_binary, tmp_path, ['READ5', 'CKBD'+(' /C' if local else ''),
-                    'VESA', 'IMETABLE type', 'MEMORY off'], physical_keys=True,
+                    'VESA', 'IMETABLE '+('phrase' if phrase else 'type'), 'MEMORY off'], physical_keys=True,
                     settings='\n[dosbox]\nmachine=svga_s3\n')
     # First candidates for a, a after forward/back paging, ab, and abc.
-    assert files['TYPED.BIN'].read_bytes() == b''.join(
+    expected = b'\xb0\xa1\xb0\xa2' if phrase else b''.join(
         bytes([0xb0+index//94, 0xa1+index % 94]) for index in (0, 0, 26, 1378))
+    assert files['TYPED.BIN'].read_bytes() == expected

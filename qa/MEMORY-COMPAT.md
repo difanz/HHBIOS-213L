@@ -8,8 +8,12 @@ READ2 provides conventional-memory storage when these managers are unavailable.
 ## Memory ownership
 
 CKBD keeps PYMB, SWMB and DBMB in one XMS block when allocation and the
-initial copy succeed. A 1 KiB cache serves sequential candidate searches;
-reverse searches preserve DF. A nested lookup during a refill uses its own
+initial copy succeed. Optional XMS indexes group PYMB/SWMB entries by first
+code and store the first Hanzi's double-pinyin code for each basic two-character
+SPCZ group. Both preserve dictionary order and reuse the 1 KiB table cache.
+Index allocation or construction failure leaves linear searches available.
+The mutable phrase extension and three/multi-character sections retain their
+original scanners. Reverse searches preserve DF. A nested lookup during a refill uses its own
 two-byte destination and move descriptor on the caller's stack. Failed fills
 are not published, and input affected by a transfer failure is discarded.
 No cache space is retained when using resident tables (`CKBD /C`, no XMS, or
@@ -22,7 +26,8 @@ printer unloads leave the display and input tables loaded.
 
 `test_keytable.py` executes CKBD's production table code with cache misses,
 nested calls, allocation/copy failures, frequency filtering, forward/reverse
-candidate searches and table boundaries. DOS cases query all 6768 Hanzi and
+candidate searches, phrase order, extension edits and table boundaries.
+DOS cases query all 6768 Hanzi and
 compare memory and vectors across repeated unload/reload, with XMS, EMS-only,
 forced conventional residency and forced resident tables. Physical keyboard
 cases exercise IRQ1, candidate selection and forward/backward paging against

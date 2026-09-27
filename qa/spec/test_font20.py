@@ -214,6 +214,43 @@ def test_runtime_font_failure_is_not_cached(vesa_driver,kind):
     assert struct.unpack('<23H',m.uc.mem_read(0x10000+m.buffer,46))==tuple(v << 6 for v in native_rows(65))
 
 
+@pytest.mark.parametrize('kind', ['xms', 'ems'])
+def test_alphabet_fits_cache_and_batches_record_map_reads(vesa_driver, kind):
+    m = FontMachine(vesa_driver, kind)
+    assert m.call('font_open') == 1
+    before = m.moves
+    for code in range(65, 91):
+        m.call('font_get', code, m.buffer)
+        assert struct.unpack('<23H', m.uc.mem_read(0x10000+m.buffer, 46)) == tuple(
+            v << 6 for v in native_rows(code))
+    assert m.moves-before == 27  # one map page and 26 glyphs
+    before = m.moves
+    for _ in range(3):
+        for code in range(65, 91):
+            m.call('font_get', code, m.buffer)
+    assert m.moves == before
+
+
+@pytest.mark.parametrize('kind', ['xms', 'ems'])
+def test_record_map_tail_and_failed_replacement(vesa_driver, kind):
+    m = FontMachine(vesa_driver, kind)
+    assert m.call('font_open') == 1
+    for code in (0xf7fe, 65, 0xf7fd):
+        m.call('font_get', code, m.buffer)
+        expected = native_rows(code)+native_rows(code, 1)
+        assert struct.unpack('<46H', m.uc.mem_read(0x10000+m.buffer, 92)) == tuple(
+            v << 6 for v in expected)
+    m.failure = 'move'
+    m.call('font_get', 32, m.buffer)
+    assert m.uc.mem_read(0x10000+m.buffer, 92) == bytes(92)
+    m.failure = None
+    m.call('font_get', 32, m.buffer)
+    m.call('font_get', 0xf7fc, m.buffer)
+    expected = native_rows(0xf7fc)+native_rows(0xf7fc, 1)
+    assert struct.unpack('<46H', m.uc.mem_read(0x10000+m.buffer, 92)) == tuple(
+        v << 6 for v in expected)
+
+
 @pytest.mark.parametrize('kind',['xms','ems'])
 def test_downloaded_glyph_updates_without_invalidating_unrelated_cells(vesa_driver,kind):
     m=FontMachine(vesa_driver,kind); assert m.call('font_open')==1

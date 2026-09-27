@@ -2,12 +2,66 @@
 import struct
 
 import pytest
-from unicorn import UC_HOOK_INSN, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from unicorn import UC_HOOK_INSN, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE
 from unicorn import x86_const as reg
 
 from qa.spec.test_vesa_api import Driver, vesa_driver
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize('width,scale,lines', [(8, 1, 0), (8, 1, 2), (16, 1, 16),
+                                              (24, 2, 3), (24, 4, 32)])
+@pytest.mark.parametrize('shift', range(8))
+def test_cursor_byte_masks_match_pixels_across_banks(vesa_driver, width, scale, lines, shift):
+    initial = bytes((i*19+i//160) & 255 for i in range(131072))
+    planes = [bytearray(initial) for _ in range(4)]
+    state = dict(bank=0, plane=0, writes=0)
+    def save():
+        start = state['bank']*65536
+        planes[state['plane']][start:start+65536] = m.uc.mem_read(0xa0000, 65536)
+    def load():
+        start = state['bank']*65536
+        m.uc.mem_write(0xa0000, bytes(planes[state['plane']][start:start+65536]))
+    def bios(m):
+        assert m.get('AX') == 0x4f05
+        save()
+        state['bank'] = m.get('DX')
+        assert state['bank'] in (0, 1)
+        load()
+        m.put('AX', 0x004f)
+    m = Driver(vesa_driver, bios)
+    # Register save/restore is tested through the IRQ boundary elsewhere.
+    m.uc.mem_write(0x10000+m.symbols['begin_draw'], b'\xb8\1\0\xc3')
+    m.uc.mem_write(0x10000+m.symbols['end_draw'], b'\xc3')
+    m.write('screen', struct.pack('<4H', 1280, 1024, 160, 0xa000))
+    for name, value in dict(font_width=width, font_body_height=64, raster_height=64,
+                            viewport_x=760+shift, viewport_y=350, pixel_scale=scale,
+                            display_pitch=160, bank_step=1).items():
+        m.write(name, struct.pack('<H', value))
+    m.write('active', b'\1')
+    load()
+    def out(uc, port, size, value, _):
+        if port == 0x3ce:
+            assert size == 2 and value & 255 == 4
+            save()
+            state['plane'] = value >> 8
+            load()
+    def write(uc, access, address, size, value, _):
+        state['writes'] += size
+    m.uc.hook_add(UC_HOOK_INSN, out, None, 1, 0, reg.UC_X86_INS_OUT)
+    m.uc.hook_add(UC_HOOK_MEM_WRITE, write, begin=0xa0000, end=0xaffff)
+    m.uc.mem_write(0x1e002, struct.pack('<2H', 0, lines))
+    m.run('raster_cursor', limit=3000000)
+    save()
+    height = ((min(lines, 16)*64+15)//16)*scale
+    x, y = 760+shift, 350+64*scale-height
+    expected = bytearray(initial)
+    for row in range(height):
+        for column in range(width*scale):
+            expected[(y+row)*160+(x+column)//8] ^= 128 >> ((x+column) & 7)
+    assert all(plane == expected for plane in planes)
+    assert state['writes'] == 4*height*((shift+width*scale+7)//8)
 
 
 @pytest.mark.parametrize('shift', range(7))
@@ -82,7 +136,12 @@ def test_raster_preparation_across_bank_edges(vesa_driver, width, height, scale,
             state['writes'] = value >> 8
     def memory(uc, access, address, size, value, _):
         assert address + size <= 0xb0000
-        assert state['writes'] == 1 << state['plane']
+        assert state['writes'] & (1 << state['plane'])
+        if access == UC_MEM_WRITE:
+            start = state['bank'] * 65536 + address - 0xa0000
+            for plane in range(4):
+                if state['writes'] & (1 << plane):
+                    planes[plane][start:start+size] = value.to_bytes(size, 'little')
     m.uc.hook_add(UC_HOOK_INSN, out, None, 1, 0, reg.UC_X86_INS_OUT)
     m.uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, memory, begin=0xa0000, end=0xaffff)
     rows = [sum(1 << (31 - x) for x in range(width) if (x * 3 + y * 5) % 11 < 4)

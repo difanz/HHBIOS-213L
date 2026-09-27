@@ -135,6 +135,8 @@ void CALL font_draw(u16 code, u16 attribute, u16 position, u16 wide);
 void CALL font_bitmap_draw(const u8* source, u16 attribute, u16 position);
 void CALL bios(struct BiosRegisters* r);
 void CALL refresh(void);
+u16 CALL text_changed(void);
+void CALL refresh_dirty(void);
 u16 CALL text_ready(void);
 void CALL scroll_pixels(u16 first, u16 last, u16 count, u16 down);
 void CALL invalidate(void);
@@ -165,6 +167,7 @@ void CALL raster_read(u16 plane, u32 offset, u16 segment, u16 destination,
                       u16 count);
 void CALL mouse_resume(void);
 void CALL mouse_suspend(void);
+u16 CALL mouse_prepare(u16 repaint);
 u16 CALL mouse_erase(void);
 void CALL mouse_poll(void);
 void CALL mouse_paint(void);

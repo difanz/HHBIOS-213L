@@ -76,8 +76,8 @@ traditional forms, share one index.
 
 The committed font payload is 733176 bytes, rounded to 716 KiB. VESA reserves
 another 36 KiB in the same handle for text-page and downloaded-font preservation:
-752 KiB in XMS, or 47 EMS pages. Its 16 cached records occupy 1120 bytes
-of the shared 2048-byte cache, plus keys and validity words. No DOS or file
+752 KiB in XMS, or 47 EMS pages. The 2048-byte cache holds a 128-byte record-map
+page and 27 HH20 glyphs, plus separate keys and reference flags. No DOS or file
 calls occur while drawing.
 
 `HZK16` remains the original 16-pixel font used by the legacy drivers and
@@ -132,6 +132,6 @@ Western characters occupy the left half of the record. Record size follows
 the header geometry; it is not fixed at 70 bytes. The loader validates the
 dimensions and exact payload length before allocating memory.
 
-The resident packed-glyph cache occupies 2048 bytes and holds up to 16
+The resident packed-glyph cache occupies 2048 bytes and holds up to 60
 records (five at the maximum 48x64 fullwidth size). The complete font and
 the additional 36 KiB text/font backup remain in XMS or EMS.

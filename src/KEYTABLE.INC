@@ -165,6 +165,9 @@ L_TN_DONE:
                 RET
 S_TABLE_NEXT    ENDP
 
+                INCLUDE KEYINDEX.INC
+                INCLUDE KEYPHRASE.INC
+
 ; Called once with CS=DS, BP immediately past the loaded tables. Keep their
 ; conventional copy unless allocation AND the initial transfer succeed.
 S_TABLE_OPEN    PROC    NEAR
@@ -220,6 +223,7 @@ S_TABLE_OPEN    PROC    NEAR
                 POP     BP
                 CMP     AX,1
                 JNE     L_TO_FREE
+                CALL    S_INDEX_OPEN
                 MOV     BP,T_BASE
                 ADD     BP,1024
                 JMP     SHORT L_TO_DONE
@@ -234,7 +238,7 @@ L_TO_DONE:
                 RET
 S_TABLE_OPEN    ENDP
 
-; Chain full-system unload only after releasing our own XMS handle. The font
+; Chain full-system unload only after releasing our own XMS handles. The font
 ; reader restores the saved INT 2Fh vector and frees CKBD's DOS block.
 TABLE_INT2F     PROC    FAR
                 PUSHF
@@ -245,6 +249,22 @@ TABLE_INT2F     PROC    FAR
                 PUSH    AX
                 PUSH    BX
                 PUSH    DX
+                MOV     DX,CS:P_HANDLE
+                OR      DX,DX
+                JZ      L_TI_INDEX
+                MOV     AH,0AH
+                CLD
+                CALL    CS:T_XMS
+                MOV     CS:P_HANDLE,0
+L_TI_INDEX:
+                MOV     DX,CS:I_HANDLE
+                OR      DX,DX
+                JZ      L_TI_RAW
+                MOV     AH,0AH
+                CLD
+                CALL    CS:T_XMS
+                MOV     CS:I_HANDLE,0
+L_TI_RAW:
                 MOV     DX,CS:T_HANDLE
                 OR      DX,DX
                 JZ      L_TI_DONE

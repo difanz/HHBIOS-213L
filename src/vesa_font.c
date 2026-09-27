@@ -5,7 +5,8 @@
 #define FONT_SLOTS 8434U
 #define FONT_MAP_BYTES (FONT_SLOTS * 4UL)
 #define FONT_RECORD 70U
-#define FONT_CACHE 16U
+#define FONT_MAP_CACHE 64U
+#define FONT_CACHE 60U
 
 u32 CALL font_entry;
 u16 CALL font_kind;
@@ -18,15 +19,17 @@ u16 CALL font_body_height = GLYPH_HEIGHT;
 u8 CALL font_extended;
 char CALL font_name[64] = "HH20.FNT";
 static u16 record_bytes = FONT_RECORD;
-static u16 cache_slots = FONT_CACHE;
+static u16 cache_slots = (2048 - FONT_MAP_CACHE * 2) / FONT_RECORD;
 static u16 record_count;
 static u16 next_slot;
 static u32 text_storage;
 u8 CALL font_custom[256]; /* bit 0: application bitmap, bit 1: changed */
 static u16 custom_active;
 static u16 keys[FONT_CACHE];
-static u16 valid[FONT_CACHE];
-/* Small fonts retain 16 slots; the largest 48x64 font has five. */
+/* Bit 0: valid, bit 1: recently used (second-chance replacement). */
+static u8 valid[FONT_CACHE];
+static u16 map_page = 0xffff;
+/* The first 128 bytes cache record IDs. The rest hold 5 to 60 glyphs. */
 static u8 cache[2048];
 static u32 large_glyph[MAX_FONT_HEIGHT * 2];
 static u32 doubled_glyph[MAX_FONT_HEIGHT * 2];
@@ -128,32 +131,56 @@ static u8* LoadGlyph(u16 code) {
   }
   for (i = 0; i < cache_slots; ++i) {
     if (valid[i] && keys[i] == slot) {
+      valid[i] |= 2;
       break;
     }
   }
   if (i == cache_slots) {
+    while (valid[next_slot] & 2) {
+      valid[next_slot] &= ~2;
+      if (++next_slot == cache_slots) {
+        next_slot = 0;
+      }
+    }
     i = next_slot;
-    next_slot = (next_slot + 1) % cache_slots;
+    if (++next_slot == cache_slots) {
+      next_slot = 0;
+    }
     valid[i] = 0;
-    glyph_data = cache + i * record_bytes;
+    glyph_data = cache + FONT_MAP_CACHE * 2 + i * record_bytes;
     if (slot & 0x8000) {
       if (!TransferFontBytes(text_storage + 32768UL + (u32)code * 16,
                              glyph_data, 16, 0)) {
         font_fault = 1;
         return 0;
       }
-    } else if (!TransferFontBytes((u32)slot * 2, &record_index, 2, 0) ||
-               record_index >= record_count ||
-               !TransferFontBytes(
-                   FONT_MAP_BYTES + MultiplyWide(record_index, record_bytes),
-                   glyph_data, record_bytes, 0)) {
-      font_fault = 1;
-      return 0;
+    } else {
+      u16 page = slot & ~(FONT_MAP_CACHE - 1);
+      if (page != map_page) {
+        u16 count = FONT_SLOTS * 2 - page;
+        if (count > FONT_MAP_CACHE) {
+          count = FONT_MAP_CACHE;
+        }
+        map_page = 0xffff;
+        if (!TransferFontBytes((u32)page * 2, cache, count * 2, 0)) {
+          font_fault = 1;
+          return 0;
+        }
+        map_page = page;
+      }
+      record_index = ((u16*)cache)[slot - map_page];
+      if (record_index >= record_count ||
+          !TransferFontBytes(
+              FONT_MAP_BYTES + MultiplyWide(record_index, record_bytes),
+              glyph_data, record_bytes, 0)) {
+        font_fault = 1;
+        return 0;
+      }
     }
     keys[i] = slot;
-    valid[i] = 1;
+    valid[i] = 3;
   }
-  return cache + i * record_bytes;
+  return cache + FONT_MAP_CACHE * 2 + i * record_bytes;
 }
 
 void CALL font_get(u16 code, u16* out) {
@@ -371,6 +398,9 @@ void CALL font_close(void) {
     font_service(font_kind == 1 ? 3 : 2, &bios_registers);
   }
   font_kind = font_handle = 0;
+  map_page = 0xffff;
+  next_slot = 0;
+  ClearBytes(valid, sizeof(valid));
 }
 
 #pragma code_seg("INIT_TEXT", "INIT")
@@ -474,7 +504,7 @@ u16 CALL font_open(void) {
   }
   font_body_height = font_extended ? font_height : GLYPH_HEIGHT;
   record_bytes = (((font_width * 2 + 7) / 8) * font_height + 1) & ~1U;
-  cache_slots = sizeof(cache) / record_bytes;
+  cache_slots = (sizeof(cache) - FONT_MAP_CACHE * 2) / record_bytes;
   if (cache_slots > FONT_CACHE) {
     cache_slots = FONT_CACHE;
   }

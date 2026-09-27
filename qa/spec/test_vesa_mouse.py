@@ -2,6 +2,7 @@
 import struct
 
 import pytest
+from unicorn import UC_HOOK_MEM_WRITE
 
 from qa.spec.test_vesa_api import Driver, vesa_driver
 
@@ -134,3 +135,39 @@ def test_mouse_exclusion_and_show_use_logical_cells(vesa_driver):
     assert visible()
     m.run('int33_handler',AX=2)
     assert not visible()
+
+
+def test_stationary_mouse_and_caret_do_not_redraw_on_idle_ticks(vesa_driver):
+    m, state = mouse(vesa_driver, rows=25)
+    m.write('viewport_x', b'\0\0')
+    m.write('viewport_y', b'\0\0')
+    m.write('raster_height', struct.pack('<H', 23))
+    m.run(AX=0x140d, BX=0x0100)
+    m.run(AX=0x140b, BX=0)
+    m.uc.mem_write(0xb8000, b' \x07'*2000)
+    m.uc.mem_write(0x450, struct.pack('<H', 2))
+    m.run('int33_handler', AX=1)
+    m.run('tick', limit=20000000)
+    writes = []
+    m.uc.hook_add(UC_HOOK_MEM_WRITE,
+        lambda uc, access, address, size, value, _: writes.append((address, size)),
+        begin=0xa0000, end=0xaffff)
+    for _ in range(8):
+        m.run('tick', limit=20000000)
+    assert not writes
+    # Moving onto the caret, changing its masks, and changing B800 underneath
+    # it must each repaint once; the following idle tick must settle again.
+    for operation in ('move', 'shape', 'text', 'hide'):
+        if operation == 'move':
+            state['position'] = (20, 0)
+        elif operation == 'shape':
+            m.run('int33_handler', AX=10, BX=0, CX=0xffff, DX=0x3300)
+        elif operation == 'text':
+            m.uc.mem_write(0xb8004, b'A\x1f')
+        else:
+            m.run('int33_handler', AX=2)
+        m.run('tick', limit=20000000)
+        assert writes, operation
+        writes.clear()
+        m.run('tick', limit=20000000)
+        assert not writes, operation

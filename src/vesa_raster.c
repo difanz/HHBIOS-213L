@@ -42,6 +42,28 @@ static void SelectPlane(u16 plane_index) {
   WritePortWord(0x3c4, 2 | (0x100 << plane_index));
 }
 
+/* Whole-byte stores can broadcast identical ink/background bits to several
+ * planes. Partial edge bytes still read and preserve each plane separately. */
+static u16 SelectGlyphPlanes(u16 plane, u16 attribute, u16 whole_bytes) {
+  u16 mask = 1 << plane;
+  if (whole_bytes) {
+    u16 i;
+    u16 colors = (attribute >> plane) & 0x11;
+    mask = 0;
+    for (i = 0; i < 4; ++i) {
+      if (((attribute >> i) & 0x11) == colors) {
+        if (i < plane) {
+          return 0;
+        }
+        mask |= 1 << i;
+      }
+    }
+  }
+  WritePortWord(0x3ce, 4 | (plane << 8));
+  WritePortWord(0x3c4, 2 | (mask << 8));
+  return 1;
+}
+
 static void DrawWordRows(const u16* bits, u16 attribute, u16 x, u16 y) {
   u32 offset = MultiplyWide(y, display_pitch) + (x >> 3);
   u16 remaining = raster_height;
@@ -50,6 +72,7 @@ static void DrawWordRows(const u16* bits, u16 attribute, u16 x, u16 y) {
   u16 foreground;
   u16 background;
   u16 value;
+  u16 byte_index;
   u16 mask = 0xffc0U >> (x & 7);
   u8 FAR* destination;
   while (remaining) {
@@ -58,21 +81,23 @@ static void DrawWordRows(const u16* bits, u16 attribute, u16 x, u16 y) {
     }
     if ((u16)offset == 65535U) {
       /* Only the word crossing the window needs separate byte mappings. */
-      for (plane_index = 0; plane_index < 4; ++plane_index) {
-        SelectPlane(plane_index);
-        foreground = (attribute & (1 << plane_index)) ? 65535U : 0;
-        background = (attribute & (16 << plane_index)) ? 65535U : 0;
-        value = ((bits[0] >> (x & 7)) & (foreground ^ background)) ^ background;
-        destination = MapFramebufferByte(offset);
+      for (byte_index = 0; byte_index < 2; ++byte_index) {
+        destination = MapFramebufferByte(offset + byte_index);
         if (!destination) {
           return;
         }
-        *destination = (*destination & ~(mask >> 8)) | ((value & mask) >> 8);
-        destination = MapFramebufferByte(offset + 1);
-        if (!destination) {
-          return;
+        for (plane_index = 0; plane_index < 4; ++plane_index) {
+          u8 byte_mask = byte_index ? (u8)mask : mask >> 8;
+          SelectPlane(plane_index);
+          foreground = (attribute & (1 << plane_index)) ? 65535U : 0;
+          background = (attribute & (16 << plane_index)) ? 65535U : 0;
+          value =
+              ((bits[0] >> (x & 7)) & (foreground ^ background)) ^ background;
+          if (!byte_index) {
+            value >>= 8;
+          }
+          *destination = (*destination & ~byte_mask) | ((u8)value & byte_mask);
         }
-        *destination = (*destination & ~(u8)mask) | (u8)(value & mask);
       }
       rows = 1;
     } else {
@@ -169,15 +194,18 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
       return;
     }
     if ((u16)offset > 65535U - (bytes - 1)) {
-      for (plane_index = 0; plane_index < 4; ++plane_index) {
-        SelectPlane(plane_index);
-        foreground = (attribute & (1 << plane_index)) ? 255 : 0;
-        background = (attribute & (16 << plane_index)) ? 255 : 0;
-        for (byte_index = 0; byte_index < bytes; ++byte_index) {
-          destination = MapFramebufferByte(offset + byte_index);
-          if (!destination) {
-            return;
+      for (byte_index = 0; byte_index < bytes; ++byte_index) {
+        destination = MapFramebufferByte(offset + byte_index);
+        if (!destination) {
+          return;
+        }
+        for (plane_index = 0; plane_index < 4; ++plane_index) {
+          if (!SelectGlyphPlanes(plane_index, attribute,
+                                 scratch.glyph.masks[byte_index] == 255)) {
+            continue;
           }
+          foreground = (attribute & (1 << plane_index)) ? 255 : 0;
+          background = (attribute & (16 << plane_index)) ? 255 : 0;
           value = (scratch.glyph.ink[done / pixel_scale][byte_index] &
                    (foreground ^ background)) ^
                   background;
@@ -192,7 +220,10 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
         rows = raster_height * pixel_scale - done;
       }
       for (plane_index = 0; plane_index < 4; ++plane_index) {
-        SelectPlane(plane_index);
+        if (!SelectGlyphPlanes(plane_index, attribute,
+                               !(shift | (width & 7)))) {
+          continue;
+        }
         raster_span(scratch.glyph.ink[done / pixel_scale], (u16)offset, rows,
                     bytes, scratch.glyph.masks,
                     (attribute & (1 << plane_index)) ? 65535U : 0,
@@ -297,10 +328,13 @@ void CALL raster_cursor(u16 position, u16 lines) {
   u16 width;
   u16 height;
   u16 plane_index;
-  u16 column_offset;
+  u16 byte_index;
+  u16 bytes;
   u16 row_offset;
   u8 FAR* framebuffer_byte;
   u32 offset;
+  u32 row_start;
+  u8 mask;
   if (!begin_draw()) {
     return;
   }
@@ -313,18 +347,24 @@ void CALL raster_cursor(u16 position, u16 lines) {
   y = viewport_y +
       ((position >> 8) * raster_height + font_body_height) * pixel_scale -
       height;
+  bytes = ((x & 7) + width + 7) / 8;
+  row_start = MultiplyWide(y, display_pitch) + (x >> 3);
   for (plane_index = 0; plane_index < 4 && active; ++plane_index) {
     SelectPlane(plane_index);
+    offset = row_start;
     for (row_offset = 0; row_offset < height && active; ++row_offset) {
-      for (column_offset = 0; column_offset < width; ++column_offset) {
-        offset = MultiplyWide(y + row_offset, display_pitch) +
-                 ((x + column_offset) >> 3);
-        framebuffer_byte = MapFramebufferByte(offset);
+      for (byte_index = 0; byte_index < bytes; ++byte_index) {
+        mask = byte_index ? 255 : 255 >> (x & 7);
+        if (byte_index == bytes - 1 && ((x + width) & 7)) {
+          mask &= 255 << (8 - ((x + width) & 7));
+        }
+        framebuffer_byte = MapFramebufferByte(offset + byte_index);
         if (!framebuffer_byte) {
           break;
         }
-        *framebuffer_byte ^= 0x80 >> ((x + column_offset) & 7);
+        *framebuffer_byte ^= mask;
       }
+      offset += display_pitch;
     }
   }
   end_draw();
