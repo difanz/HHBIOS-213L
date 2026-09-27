@@ -26,6 +26,10 @@ def guest_build(assembler, source_dir, tmp_path_factory):
                             'qa/harness/snapshot.c', str(out / 'SNAPSHOT.COM')],
                            cwd=ROOT, env=env, capture_output=True, text=True)
     assert build.returncode == 0, build.stdout + build.stderr
+    build = subprocess.run(['bash', 'tools/build-watcom-com.sh',
+                            'qa/harness/selectmode.c', str(out / 'SELECTMD.COM')],
+                           cwd=ROOT, env=env, capture_output=True, text=True)
+    assert build.returncode == 0, build.stdout + build.stderr
     build = subprocess.run(['bash', 'tools/build-vesa.sh', str(out / 'VESA.COM'), str(source_dir)],
                            cwd=ROOT, env=dict(env, JWASM=assembler), capture_output=True, text=True)
     assert build.returncode == 0, build.stdout + build.stderr

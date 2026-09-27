@@ -58,11 +58,12 @@ int vesa_layout(struct surface *s, const u8 *p, u16 version, u16 mode)
 
 int vesa_console_layout(struct surface *s, const u8 *p, u16 version, u16 mode)
 {
-    /* The initial backend deliberately admits only this fully implemented
-     * B800-compatible planar layout. Decode other formats without selecting
-     * an unimplemented rasterizer or changing the console's logical grid. */
-    if ((word(p) & 0x60) || word(p+18)!=800 || word(p+20)!=600 ||
-        word(p+16)!=100 || p[27]!=FORMAT_PLANAR4 || word(p+6)!=64) return 0;
+    /* Keep the application-visible text grid independent of planar pixels.
+     * The banked rasterizer admits 64 KiB windows with integral bank steps. */
+    if ((word(p) & 0x60) || word(p+18)<800 || word(p+20)<600 ||
+        word(p+18)>4096 || word(p+20)>2160 || (word(p+18)&7) ||
+        word(p+16)>512 || (word(p+16)&1) || p[27]!=FORMAT_PLANAR4 || word(p+6)!=64 ||
+        !word(p+4) || word(p+4)>64 || 64 % word(p+4)) return 0;
     if (((p[2] & 6)==6 ? word(p+8) : word(p+10))!=0xa000) return 0;
     return vesa_layout(s,p,version,mode);
 }
@@ -76,6 +77,10 @@ u16 CALL framebuffer = 0xa000, display_pitch = 100, active_page;
 u16 CALL resident_bytes;
 u16 CALL display_start, split_line;
 u16 CALL text_bank;
+u16 CALL requested_mode=0x102, viewport_x, viewport_y, pixel_scale=1, bank_step=1;
+u16 CALL raster_height=CELL_HEIGHT;
+u32 CALL plane_bytes=60000UL;
+u8 CALL large_surface, mode_selected;
 u8 CALL banked_text_allowed;
 u8 CALL active, busy, traditional = 1, direct = 1;
 static u8 vbe_mode, allow_mode = 1, logical_mode = 3;
@@ -114,14 +119,20 @@ static void keyboard(void)
 }
 static void hide_cursor(void)
 {
-    if (active && cursor_visible) cursor_xor(cursor_position, (cursor_shape & 31)-(cursor_shape >> 8 & 31)+1);
+    if (active && cursor_visible) {
+        u16 lines=(cursor_shape & 31)-(cursor_shape >> 8 & 31)+1;
+        if (large_surface) raster_cursor(cursor_position,lines);
+        else cursor_xor(cursor_position,lines);
+    }
     cursor_visible = 0;
 }
 static void show_cursor(void)
 {
     cursor_position = position(active_page);
     if (active && cursor_on && !(cursor_shape & 0x2000) && inside(cursor_position)) {
-        cursor_xor(cursor_position, (cursor_shape & 31)-(cursor_shape >> 8 & 31)+1);
+        u16 lines=(cursor_shape & 31)-(cursor_shape >> 8 & 31)+1;
+        if (large_surface) raster_cursor(cursor_position,lines);
+        else cursor_xor(cursor_position,lines);
         cursor_visible = active;
     }
 }
@@ -148,8 +159,8 @@ static int activate(u16 preserve)
     else r.ax=preserve ? 0x92 : 0x12;
     bios(&r);
     if (vbe_mode && r.ax != 0x004f) return 0;
-    /* The visible plane fits one window. Spare VRAM holds B800 text;
-     * refresh switches banks once for the whole batch of dirty cells. */
+    /* Start at graphics bank zero. The aperture probe isolates B800 text
+     * from every bank occupied by the visible plane. */
     zero(&r, sizeof(r)); r.ax=0x4f05; r.bx=screen.window; bios(&r);
     if (r.ax!=0x004f) return 0;
     display_pitch = screen.pitch;
@@ -182,11 +193,12 @@ u16 CALL initialize(void)
     version = word(controller+4);
     if (version < 0x100) return 1;
     modes_off=word(controller+14); modes_seg=word(controller+16);
-    /* Query the standard 102h baseline, then advertised alternatives,
-     * bounded to avoid wandering through a broken ROM. */
+    /* An explicit /M selects one mode. Otherwise try 102h and a bounded
+     * advertised list, without wandering through a broken ROM. */
     for (n=0; n<257; ++n) {
-        if (!n) number=0x102;
+        if (!n) number=requested_mode;
         else {
+            if (mode_selected) break;
             if (modes_off > 0xfffd || (!modes_seg && !modes_off)) break;
             number=*PTR(u16, modes_seg, modes_off); modes_off+=2;
             if (number==0xffff) break;
@@ -197,19 +209,32 @@ u16 CALL initialize(void)
         if (r.ax==0x004f && vesa_console_layout(&screen, mode_info, version, number)) { vbe_mode=1; break; }
     }
     if (!vbe_mode) return 1;
+    large_surface=(u8)(screen.width!=800 || screen.height!=600 || screen.pitch!=100);
+    plane_bytes=wide_product(screen.pitch,screen.height);
+    pixel_scale=1; raster_height=CELL_HEIGHT;
+    for (n=2;n<=4 && screen.width>=800*n;++n) {
+        if (screen.height>=CELL_HEIGHT*26*n) { pixel_scale=n; raster_height=CELL_HEIGHT; }
+        else if (screen.height>=GLYPH_HEIGHT*26*n) { pixel_scale=n; raster_height=GLYPH_HEIGHT; }
+    }
+    viewport_x=(screen.width-800*pixel_scale)/2;
+    viewport_y=large_surface ? (screen.height-raster_height*26*pixel_scale)/2 : 0;
     banked_text_allowed=(u8)(version>=0x102 && mode_info[29]>0 &&
                             (mode_info[2+screen.window] & 1) &&
                             !(64 % screen.granularity_kb));
-    text_bank=64/screen.granularity_kb;
+    if (large_surface && !banked_text_allowed) return 1;
+    bank_step=64/screen.granularity_kb;
+    text_bank=(u16)((plane_bytes+65535UL)>>16)*bank_step;
     /* Put all eight logical text pages in spare VRAM where available. This
      * also avoids page 1..7 aliasing visible pixels on 64 KiB VGA mappings. */
     banked_text=banked_text_allowed;
     /* On a 64 KiB aliasing aperture, reserve B800's first 4 KiB and place
      * scanout across a line-aligned wrap. The CPU start must be paragraph
      * aligned too. Geometry is kept out of the character classifier. */
-    n=(screen.pitch*screen.height-0x8000U+screen.pitch-1)/screen.pitch;
-    while ((n*screen.pitch) & 15) ++n;
-    display_start=0U-n*screen.pitch; split_line=n-1;
+    if (!banked_text) {
+        n=(screen.pitch*screen.height-0x8000U+screen.pitch-1)/screen.pitch;
+        while ((n*screen.pitch) & 15) ++n;
+        display_start=0U-n*screen.pitch; split_line=n-1;
+    }
     zero(&r, sizeof(r)); r.ax=0x1130; r.bx=0x0600; bios(&r);
     font_segment=r.es; font_offset=r.bp;
     if (!font_segment) return 2;
@@ -357,11 +382,16 @@ static void extended(void)
         prompt_open=0;
     } else if (op==5) prompt_attr=(u8)request.bx;
     else if (op==6) {
-        request.ax=0x0f12; request.bx=0x1904; request.cx=(CELL_HEIGHT << 8) | 26;
+        request.ax=0x0f12; request.bx=0x1904; request.cx=(raster_height << 8) | 26;
         request.dx=0x80 | traditional; request.si=screen.width-1;
         request.di=screen.height-1; request.bp=framebuffer;
     } else if (op==7) { logical_mode=(u8)(request.bx >> 8); put8(0x49, logical_mode); }
-    else if (op==8) { if (inside(pos)) cursor_xor(pos, 16); }
+    else if (op==8) {
+        if (inside(pos)) {
+            if (large_surface) raster_cursor(pos,16);
+            else cursor_xor(pos,16);
+        }
+    }
     else if (op==9) {
         if (inside(pos)) { page(active_page)[index(pos)]=(request.bx << 8) | (request.bx >> 8); repaint(); }
     } else if (op==10) {
@@ -403,12 +433,21 @@ u16 CALL dispatch(void)
         request.dx=font_fault; request.si=CELL_WIDTH; request.di=CELL_HEIGHT;
         return 1;
     }
-    if (function==0x14 && lo==18) {
-        if (!active || request.bx>3 || request.si>60000 || request.cx>60000-request.si ||
+    if (function==0x14 && lo==21) {
+        request.ax=0x5650; request.bx=viewport_x; request.cx=viewport_y;
+        request.dx=pixel_scale; request.si=(u16)plane_bytes;
+        request.di=(u16)(plane_bytes>>16);
+        return 1;
+    }
+    if (function==0x14 && (lo==18 || lo==20)) {
+        u32 offset=request.si;
+        if (lo==20) offset|=(u32)request.dx<<16;
+        if (!active || request.bx>3 || offset>plane_bytes || request.cx>plane_bytes-offset ||
             request.di>65535U-request.cx) request.ax=1;
         else if (!request.cx) request.ax=0;
         else {
-            read_plane(request.bx,request.si,request.es,request.di,request.cx);
+            if (large_surface) raster_read(request.bx,offset,request.es,request.di,request.cx);
+            else read_plane(request.bx,request.si,request.es,request.di,request.cx);
             request.ax=active ? 0 : 1;
             if (!active) keyboard();
         }
@@ -458,7 +497,7 @@ u16 CALL dispatch(void)
     if (!active) return 0;
     /* A one-image adapter can expose only page zero without overlapping
      * scanout. Never accept an inaccessible page and overwrite graphics. */
-    if (!banked_text && p && (function==2 || function==3 || function==8 ||
+    if ((p>7 || (!banked_text && p)) && (function==2 || function==3 || function==8 ||
         function==9 || function==10 || function==0x13)) return 1;
     switch (function) {
     case 1:
@@ -486,7 +525,8 @@ u16 CALL dispatch(void)
     case 0x0e: tty((u8)lo, active_page); repaint(); break;
     case 0x0c: case 0x0d:
         if (request.cx<screen.width && request.dx<screen.height) {
-            i=pixel(request.cx, request.dx, lo, function==0x0c);
+            i=large_surface ? raster_pixel(request.cx, request.dx, lo, function==0x0c) :
+                pixel(request.cx, request.dx, lo, function==0x0c);
             if (function==0x0d) request.ax=(request.ax & 0xff00) | i;
         }
         break;

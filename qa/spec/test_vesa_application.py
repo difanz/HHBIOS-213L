@@ -11,3 +11,10 @@ pytestmark = pytest.mark.application
 @pytest.mark.parametrize('scenario', ['movement', 'trail-delete', 'trail-backspace'])
 def test_vesa_editor_edits(pytestconfig, dosbox_binary, application_dir, editor, scenario):
     exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, True, scenario, display='VESA')
+
+
+@pytest.mark.parametrize('editor',['tvedit','edit2','tc201','tc30'])
+@pytest.mark.parametrize('scenario',['movement','trail-delete','trail-backspace'])
+def test_high_resolution_editor_edits(pytestconfig,dosbox_binary,application_dir,editor,scenario):
+    exercise_editor(pytestconfig,dosbox_binary,application_dir,editor,True,scenario,
+                    display='VESA /M:104',display_size=(1024,768))

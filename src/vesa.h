@@ -17,6 +17,14 @@ typedef unsigned long u32;
 #define GLYPH_HEIGHT 20
 #define FORMAT_PLANAR4 3
 
+/* An 8086 MUL already yields the full 32-bit address without a CRT helper. */
+#if defined(__WATCOMC__)
+static u32 wide_product(u16 a, u16 b);
+#pragma aux wide_product = "mul dx" parm [ax] [dx] value [dx ax] modify [ax dx];
+#else
+#define wide_product(a,b) ((u32)(a)*(b))
+#endif
+
 #pragma pack(push, 1)
 struct surface {
     u16 width, height, pitch, segment;
@@ -46,6 +54,11 @@ extern u16 CALL resident_bytes;
 extern u8 CALL banked_text;
 extern u16 CALL display_start, split_line;
 extern u16 CALL text_bank;
+extern u16 CALL requested_mode, viewport_x, viewport_y, pixel_scale, bank_step;
+extern u16 CALL raster_height;
+extern u32 CALL plane_bytes;
+extern u8 CALL large_surface;
+extern u16 CALL mapped_block;
 extern u8 CALL banked_text_allowed;
 extern u8 CALL active, busy, policy, hanzi, traditional;
 extern u16 CALL shadow[TEXT_COLS*TEXT_ROWS];
@@ -71,5 +84,10 @@ void CALL read_plane(u16 plane, u16 offset, u16 segment, u16 destination, u16 co
 u16 CALL initialize(void);
 u16 CALL dispatch(void);
 void CALL tick(void);
+u16 CALL graphics_bank(u16 block);
+void CALL raster_cell(const u16 *bits, u16 attribute, u16 position);
+void CALL raster_cursor(u16 position, u16 lines);
+u16 CALL raster_pixel(u16 x, u16 y, u16 color, u16 writing);
+void CALL raster_read(u16 plane, u32 offset, u16 segment, u16 destination, u16 count);
 #endif
 #endif

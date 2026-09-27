@@ -67,18 +67,23 @@ def expected_planes(shot,text,pairs,font):
     planes=[bytearray(shot.pitch*shot.height) for _ in range(4)]
     for cell in range(2000):
         row,col=divmod(cell,80); code,half=pairs.get((row,col),(text[cell*2],0))
-        x=col*shot.cell_width; shift=16-x%8-shot.cell_width
+        x=shot.origin_x+col*shot.cell_width*shot.scale
         for p,out in enumerate(planes):
             for dy,value in enumerate(bits(code,half,text[cell*2+1],p)):
-                offset=(row*shot.cell_height+dy)*shot.pitch+x//8
-                value <<= shift
-                out[offset] |= value>>8
-                if value&255: out[offset+1] |= value&255
+                for sy in range(shot.scale):
+                    y=shot.origin_y+(row*shot.cell_height+dy)*shot.scale+sy
+                    for dx in range(shot.cell_width):
+                        if value & (1<<(shot.cell_width-1-dx)):
+                            for sx in range(shot.scale):
+                                px=x+dx*shot.scale+sx
+                                out[y*shot.pitch+px//8] |= 128>>(px&7)
     return planes
 
 
 @pytest.mark.parametrize(('display','page'),[
     ('VGA',0),('VGA',5),('VGA',7),('VESA',0),('VESA',7),
+    ('VESA /M:104',7),('VESA /M:106',7),
+    ('VESA 1920x1080',7),
 ])
 def test_direct_b800_timer_refresh(dosbox_binary,guest_build,tmp_path,pytestconfig,request,display,page):
     for file in guest_build.glob('*.COM'): shutil.copy2(file,tmp_path)
@@ -86,9 +91,19 @@ def test_direct_b800_timer_refresh(dosbox_binary,guest_build,tmp_path,pytestconf
     frames=scenarios(page)
     (tmp_path/'INPUT.BIN').write_bytes(b''.join(bytes([op])+data for op,_,data,_ in frames))
     shots=pytestconfig.getoption('--screenshots')
-    files=run_dos(dosbox_binary,tmp_path,['SNAPSHOT font','READ5',display,f'SNAPSHOT direct {page}'],
-                  timeout=90,settings='\n[dosbox]\nmachine=svga_s3\n',
-                  physical_keys=shots,screenshots=shots)
+    settings='\n[dosbox]\nmachine=svga_s3\n'; desktop=(1280,1024)
+    commands=['SNAPSHOT font','READ5']
+    if display=='VESA 1920x1080':
+        config=pytestconfig.getoption('--vesa-research-config')
+        if config is not None: settings+='\n'+config.read_text()
+        desktop=(1920,1080)
+        commands+=['SELECTMD 1920 1080','call VMODE.BAT',f'if not exist UNSUP.TXT SNAPSHOT direct {page}']
+    else: commands+=[display,f'SNAPSHOT direct {page}']
+    files=run_dos(dosbox_binary,tmp_path,commands,timeout=150,settings=settings,
+                  physical_keys=shots,screenshots=shots,desktop_size=desktop)
+    if 'UNSUP.TXT' in files:
+        assert 'DIRECT.BIN' not in files and 'SNAP00.BIN' not in files
+        pytest.skip('BIOS does not advertise a planar 1920x1080 mode')
     font=files['FONT.BIN'].read_bytes()
     framebuffer,=struct.unpack('<H',files['DIRECT.BIN'].read_bytes())
     # Legacy VGA can alias B800 to A800 in a 64 KiB plane. Its AE020
@@ -120,6 +135,8 @@ def test_direct_b800_timer_refresh(dosbox_binary,guest_build,tmp_path,pytestconf
             assert actual.translate(dac)==rgb.translate(dac), (label,'actual window differs')
     (tmp_path/'direct.json').write_text(json.dumps(dict(
         display=display,page=page,grid=[80,25],policy=1,framebuffer_segment=hex(framebuffer),
+        pixels=[shot.width,shot.height],viewport=[shot.origin_x,shot.origin_y],
+        scale=shot.scale,raster_cell=[shot.cell_width,shot.cell_height],
         protected_text_bytes=protected,interrupts='enabled during all stores',
         refresh='timer only; no per-frame policy, BIOS text output or forced repaint',
         stages=[label for _,label,_,_ in frames]),indent=2)+'\n')

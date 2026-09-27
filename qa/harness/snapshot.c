@@ -2,6 +2,7 @@
  * INPUT.BIN: repeated mode byte + 4000 text bytes. SNAPnn.BIN: raw B800,
  * BDA cursor word, 25 CRTC registers, then four rendered VGA planes.
  * VESA uses v2: five geometry words after the signature, full physical pixels.
+ * V3 adds viewport x/y and integer scale; the pitch comes from the surface.
  * FONT.BIN is BIOS 8x16. Query the public HHBIOS framebuffer API: DOSBox-X's
  * protected overflow register readback can disagree with its line comparator.
  * This observes the renderer's framebuffer, not the host window compositor.
@@ -108,7 +109,8 @@ int main(int argc, char **argv)
     union REGPACK display;
     char name[13];
     int mode, frame = 0, plane;
-    unsigned old4, old5, y, framebuffer, pitch, vesa, geometry[5], rows, count;
+    unsigned old4, old5, y, framebuffer, pitch, vesa, geometry[8], rows, count, extended;
+    unsigned long offset;
     unsigned char crtc[25];
     unsigned direct=argc>1 && strcmp(argv[1],"direct")==0, page=0, i;
     if (argc > 1 && strcmp(argv[1], "font") == 0) return font();
@@ -167,14 +169,24 @@ int main(int argc, char **argv)
         intr(0x10, &display);
         framebuffer = display.x.bp;
         pitch = (display.x.si+1)/8;
-        if (pitch < 80 || pitch > 128) return 13;
+        if (pitch < 80 || pitch > 512) return 13;
         if (framebuffer < 0xa000 || framebuffer > 0xb000) return 12;
-        if (fwrite(vesa ? "HHSNAP2\n" : "HHSNAP1\n", 1, 8, out) != 8) return 8;
+        extended=0;
         if (vesa) {
             geometry[0]=display.x.si+1; geometry[1]=display.x.di+1;
-            geometry[2]=pitch; geometry[3]=geometry[0]/80; geometry[4]=display.x.cx>>8;
-            if (fwrite(geometry,2,5,out)!=5) return 8;
+            geometry[2]=pitch; geometry[3]=10; geometry[4]=display.x.cx>>8;
+            display.x.ax=0x1411; intr(0x10,&display);
+            if (display.x.ax!=0x5356 || display.x.cx<6) return 13;
+            pitch=geometry[2]=*(unsigned __far *)MK_FP(display.x.es,display.x.di+4);
+            if (pitch<geometry[0]/8 || pitch>512) return 13;
+            display.x.ax=0x1415; intr(0x10,&display);
+            if (display.x.ax==0x5650) {
+                geometry[5]=display.x.bx; geometry[6]=display.x.cx; geometry[7]=display.x.dx;
+                extended=geometry[0]!=800 || geometry[1]!=600 || geometry[5] || geometry[6] || geometry[7]!=1;
+            }
         }
+        if (fwrite(extended ? "HHSNAP3\n" : vesa ? "HHSNAP2\n" : "HHSNAP1\n", 1, 8, out) != 8) return 8;
+        if (vesa && fwrite(geometry,2,extended ? 8 : 5,out)!=(extended ? 8 : 5)) return 8;
         _disable();
         _fmemcpy(buffer, MK_FP(0xb800+page*0x100, 0), 4000);
         _fmemcpy(buffer + 4000, MK_FP(0x40, 0x50+page*2), 2);
@@ -190,8 +202,10 @@ int main(int argc, char **argv)
                     rows=sizeof(buffer)/pitch;
                     if (rows>geometry[1]-y) rows=geometry[1]-y;
                     count=rows*pitch;
-                    display.x.ax=0x1412; display.x.bx=plane;
-                    display.x.si=y*pitch; display.x.cx=count;
+                    offset=(unsigned long)y*pitch;
+                    display.x.ax=extended ? 0x1414 : 0x1412; display.x.bx=plane;
+                    display.x.dx=(unsigned)(offset>>16);
+                    display.x.si=(unsigned)offset; display.x.cx=count;
                     display.x.es=FP_SEG(buffer); display.x.di=FP_OFF(buffer);
                     intr(0x10,&display);
                     if (display.x.ax) return 14;

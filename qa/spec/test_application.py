@@ -64,7 +64,7 @@ def tvedit_dir(pytestconfig, application_dir):
     return application_dir
 
 
-@pytest.mark.parametrize('display', ['VGA', 'VESA'])
+@pytest.mark.parametrize('display', ['VGA', 'VESA', 'VESA /M:104', 'VESA /M:106'])
 def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir, display):
     tmp_path = tvedit_dir
     lines = ['HHBIOS-QA', '中文测试 Han', '喃後岐徵 VGA']
@@ -72,11 +72,11 @@ def test_tvedit_real_chinese_file(dosbox_binary, tvedit_dir, display):
     files = run_dos(dosbox_binary, tmp_path, ['SNAPSHOT font', 'READ2 > READ2.LOG',
                                       display+' > DISPLAY.LOG', ('CMODE 3 > CMODE.LOG', 3),
                                       'APPCAP install', 'TVEDIT VIEW.TXT', 'APPCAP dump'], timeout=45,
-                        settings='\n[dosbox]\nmachine=svga_s3\n' if display=='VESA' else '')
+                        settings='\n[dosbox]\nmachine=svga_s3\n' if display.split()[0]=='VESA' else '')
     raw = files['APP.BIN'].read_bytes()
     assert raw[:7] == b'\1HHAPP2'
     pitch,cw,ch=struct.unpack_from('<3H',raw,10)
-    assert (pitch,cw,ch)==((100,10,23) if display=='VESA' else (80,8,18))
+    assert (pitch,cw,ch)==((100,10,23) if display.split()[0]=='VESA' else (80,8,18))
     assert len(raw)==4016+pitch*ch*10
     text, plane = raw[16:4016], raw[4016:]
     chars = text[::2]
@@ -166,7 +166,7 @@ def test_borland_dpmi_font_memory(pytestconfig, dosbox_binary, application_dir, 
     exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, True, 'movement', loader)
 
 
-def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario, loader=None, display='VGA'):
+def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enabled, scenario, loader=None, display='VGA', display_size=None):
     tmp_path = application_dir
     command = 'TVEDIT VIEW.TXT'
     if editor == 'tvedit':
@@ -250,10 +250,10 @@ def exercise_editor(pytestconfig, dosbox_binary, application_dir, editor, enable
                       'APPCAP install', command, 'C:', 'APPCAP dump'], timeout=45,
                       physical_keys=True,
                       screenshots=pytestconfig.getoption('--screenshots'),
-                      settings='\n[dosbox]\nmachine=svga_s3\n' if display=='VESA' else '')
+                      settings='\n[dosbox]\nmachine=svga_s3\n' if display.split()[0]=='VESA' else '')
     if pytestconfig.getoption('--screenshots'):
         shots = json.loads(files['SCREENSHOTS.JSON'].read_text())
-        expected_size = (800, 600) if display == 'VESA' else (640, 480)
+        expected_size = display_size or ((800, 600) if display.split()[0]=='VESA' else (640, 480))
         assert len(shots) == len(json.loads(files['PHYSICAL-KEYS.JSON'].read_text()))
         assert all((shot['width'], shot['height']) == expected_size for shot in shots), (
             'SDL dimensions differ: check video mode, scaling and desktop clipping')

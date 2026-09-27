@@ -5,7 +5,10 @@ Pixel resolution, font strike and integer enlargement are backend choices.
 Increasing the framebuffer size must not invent a new application-visible mode
 or force a program to accept more columns.
 
-This is a design backed by native BIOS/application observations. The shipping
+The resident VESA driver can render its existing 80x25 B800 interface on larger
+physical surfaces using `/M:hex`, with bank-spanning stores and integer bitmap
+enlargement. Direct-memory programs do not need to be modified for that path.
+This document concerns extending the logical text grid itself. The shipping
 HHBIOS drivers still expose 80x25; resident wider/taller Chinese rendering, mouse
 translation and virtual VBE text-mode enumeration are not implemented yet.
 The [wide framebuffer experiments](WIDE-RENDERING.md) exercise larger bitmap
@@ -146,8 +149,9 @@ list; no assumption that a DOS VBE BIOS supplies widescreen or 4K modes.
 ## Memory and incremental implementation
 
 `vesa.c` currently assumes 80x25, 4 KiB page strides and eight pages.
-`vesa.asm` has a 4000-byte shadow, a 4096-byte transfer buffer and 16-bit offsets
-into a 60000-byte plane. `KEYEDIT.INC` keeps an 80-byte row and rejects other
+`vesa.asm` has a 4000-byte shadow and a 4096-byte transfer buffer. Its 800x600
+fast path uses 16-bit offsets; `vesa_raster.c` handles larger planes with 32-bit
+offsets and bank-spanning stores. `KEYEDIT.INC` keeps an 80-byte row and rejects other
 geometries. The shared mixed-text classifier and legacy drawing paths also
 contain 80/25/160/2000 constants. These contracts must change together.
 
@@ -161,17 +165,17 @@ truncated old pointer. No DOS calls or large interrupt-disabled copies belong
 in the refresh path.
 
 1024x768 planar graphics uses 98304 bytes per plane; 1280x1024 uses 163840.
-Rendering therefore needs offsets wider than 16 bits and writes split at the
-actual bank window boundary, including glyphs and scroll rectangles crossing
-that boundary. Wider arithmetic does not by itself require a 386. Batch writes
-by scanline/window and cache glyphs; keep the existing 800x600 fast path.
+The resident rasterizer already splits writes at 64 KiB bank boundaries,
+including glyphs crossing that boundary. This wider arithmetic does not
+require a 386. Logical-grid extensions must retain that behavior and the
+existing 800x600 fast path.
 
 Implement in small stages: first the logical descriptor and 80x43/50 selection
-contract; then bank-spanning drawing and 108h..10Ch emulation; then mouse and
+contract; then 108h..10Ch emulation using the bank-spanning backend; then mouse and
 application return paths, with each mode advertised only when its required
 services work. Retain the old VGA path and shared classifier behavior while
 making specific geometry assumptions explicit. Later backends can add packed
-pixels, larger bitmap strikes and integer enlargement.
+pixels and larger bitmap strikes.
 
 For each stage test mode-query/BDA agreement, all four corners, tabs and mixed
 frames, orphan bytes at both row ends, whole-character Delete/Backspace, scroll

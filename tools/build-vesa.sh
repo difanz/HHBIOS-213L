@@ -21,9 +21,10 @@ trap 'rm -rf "$work"' EXIT
     cd "$work"
     wcc -q -0 -bt=dos -ms -s -os -zl -zlf -fo=vesac.obj "$source_dir/vesa.c"
     wcc -q -0 -bt=dos -ms -s -os -zl -zlf -fo=fontc.obj "$source_dir/vesa_font.c"
+    wcc -q -0 -bt=dos -ms -s -os -zl -zlf -fo=rasterc.obj "$source_dir/vesa_raster.c"
     env -u JWASM "$assembler" -q -0 -Zm -omf -I"$source_dir" -Fovesaa.obj "$source_dir/vesa.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Fofonta.obj "$source_dir/vesa_font.asm"
-    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
+    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
     cp vesa.com "$out"
     cp vesa.map "${out%.*}.map"
 )

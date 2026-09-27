@@ -14,6 +14,9 @@ extrn framebuffer:word, display_pitch:word, active_page:word
 extrn resident_bytes:word
 extrn display_start:word, split_line:word
 extrn text_bank:word, banked_text_allowed:byte
+extrn requested_mode:word, plane_bytes:dword, bank_step:word, large_surface:byte
+extrn mode_selected:byte
+extrn raster_cell:near
 extrn font_segment:word, font_offset:word, active:byte, busy:byte, traditional:byte
 extrn direct:byte
 extrn font_get:near, font_open:near, font_close:near, font_bitmap:near
@@ -50,6 +53,9 @@ seq_index db 0
 video_depth db 0
 aperture_alias db 0ffh
 text_map db 1
+public mapped_block
+mapped_block dw 0
+bank_result dw 0
 public banked_text
 banked_text db 0
 aperture_result dw 1
@@ -135,7 +141,10 @@ busy10:
     ; Capture may be requested by another timer TSR while rendering. It must
     ; retry, not reuse our private C stack or read a half-switched window.
     cmp ax,1412h
+    je capture_busy
+    cmp ax,1414h
     jne chain10
+capture_busy:
     mov ax,2
     iret
 chain10:
@@ -395,6 +404,37 @@ bank_failed:
     ret
 select_bank endp
 
+; C callers use a 64 KiB block number; BIOS uses its advertised granularity.
+public graphics_bank
+graphics_bank proc near
+    push bp
+    mov bp,sp
+    save_regs
+    mov cs:bank_result,0
+    cmp cs:active,0
+    je graphics_bank_done
+    mov ax,[bp+4]
+    cmp ax,cs:mapped_block
+    je graphics_bank_ok
+    push ax
+    mul cs:bank_step
+    mov dx,ax
+    call select_bank
+    pop ax
+    jc graphics_bank_failed
+    mov cs:mapped_block,ax
+graphics_bank_ok:
+    mov cs:bank_result,1
+    jmp short graphics_bank_done
+graphics_bank_failed:
+    mov cs:active,0
+graphics_bank_done:
+    load_regs
+    mov ax,cs:bank_result
+    pop bp
+    ret
+graphics_bank endp
+
 public invalidate
 invalidate proc near
     mov cs:D_LASTMODE,0ffh
@@ -589,6 +629,16 @@ blit_cell endp
 ; the write plane, and preserve the neighbor bits on every word store.
 blit_narrow proc near
     save_regs
+    cmp cs:large_surface,0
+    je blit_fixed
+    push dx
+    xor bh,bh
+    push bx
+    push si
+    call raster_cell
+    add sp,6
+    jmp blit_done
+blit_fixed:
     cmp dl,80
     jae blit_done
     cmp dh,25
@@ -908,6 +958,7 @@ video_save_gc:
     xor dx,dx
     call select_bank
     jc video_unavailable
+    mov cs:mapped_block,0
     mov dx,3ceh
     mov ax,0506h
     out dx,ax
@@ -1160,9 +1211,22 @@ probe_fill:
     stosw
     add ax,7
     loop probe_fill
-    xor dx,dx
+    push bp
+    xor bp,bp
+    mov bx,word ptr cs:plane_bytes+2
+probe_clear_bank:
+    mov cx,word ptr cs:plane_bytes
+    or bx,bx
+    jnz probe_clear_full
+    jcxz probe_clear_done
+    shr cx,1
+    jmp short probe_clear_select
+probe_clear_full:
+    mov cx,8000h
+probe_clear_select:
+    mov dx,bp
     call select_bank
-    jc probe_failed
+    jc probe_clear_failed
     mov dx,3ceh
     mov ax,0506h
     out dx,ax
@@ -1170,8 +1234,17 @@ probe_fill:
     mov es,ax
     xor di,di
     xor ax,ax
-    mov cx,30000
     rep stosw
+    or bx,bx
+    jz probe_clear_done
+    dec bx
+    add bp,cs:bank_step
+    jmp probe_clear_bank
+probe_clear_failed:
+    pop bp
+    jmp probe_failed
+probe_clear_done:
+    pop bp
     mov dx,cs:text_bank
     call select_bank
     jc probe_failed
@@ -1222,7 +1295,8 @@ install:
     mov cl,ds:[80h]
     mov si,81h
 parse_option:
-    jcxz options_done
+    or cx,cx
+    jz options_done
     lodsb
     dec cx
     cmp al,' '
@@ -1237,9 +1311,58 @@ parse_option:
     je usage
     and al,5fh
     cmp al,'N'
-    jne bad_option
+    jne parse_mode
     mov force_low,1
     jmp short parse_option
+parse_mode:
+    cmp al,'M'
+    jne bad_option
+    or cx,cx
+    jz bad_option
+    lodsb
+    dec cx
+    cmp al,':'
+    jne bad_option
+    xor bx,bx
+    xor di,di
+parse_mode_digit:
+    jcxz parse_mode_done
+    lodsb
+    dec cx
+    cmp al,' '
+    je parse_mode_done
+    cmp al,'0'
+    jb bad_option
+    cmp al,'9'
+    jbe parse_mode_decimal
+    and al,5fh
+    sub al,'A'-10
+    cmp al,10
+    jb bad_option
+    cmp al,15
+    ja bad_option
+    jmp short parse_mode_add
+parse_mode_decimal:
+    sub al,'0'
+parse_mode_add:
+    cmp di,4
+    jae bad_option
+    inc di
+    shl bx,1
+    shl bx,1
+    shl bx,1
+    shl bx,1
+    xor ah,ah
+    or bx,ax
+    jmp short parse_mode_digit
+parse_mode_done:
+    cmp bx,100h
+    jb bad_option
+    cmp bx,3fffh
+    ja bad_option
+    mov requested_mode,bx
+    mov mode_selected,1
+    jmp parse_option
 options_done:
     mov ah,0ffh
     int 10h
@@ -1408,8 +1531,9 @@ force_low db 0
 msg_loaded db 'A HHBIOS display driver is already installed.',13,10,'$'
 msg_font db 'Load a HHBIOS font reader before VESA.',13,10,'$'
 msg_font20 db 'VESA needs HH20.FNT and enough XMS or EMS 4.0 memory.',13,10,'$'
-msg_vbe db 'VESA needs a VGA-compatible 800x600x16 VBE mode.',13,10,'$'
-msg_usage db 'VESA [/N]  800x600x16 display; /N keeps the driver in conventional memory.',13,10,'$'
+msg_vbe db 'VESA needs a supported planar VBE mode and isolated text memory.',13,10,'$'
+msg_usage db 'VESA [/N] [/M:hex]  /M selects a planar VBE mode (default 102).',13,10
+          db '/N keeps the driver in conventional memory.',13,10,'$'
 INIT_TEXT ends
 
 ; This class is ordered after compiler-generated BSS by the linker.

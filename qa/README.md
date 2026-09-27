@@ -9,14 +9,15 @@ Read [DISPLAY-RULES.md](DISPLAY-RULES.md) for the mixed-text contract and the
 two-state Chinese-pairing FSM. Ambiguous GB2312/CP437 bytes require explicit
 policy to determine how they display.
 The [VBE contract](VBE-RULES.md) covers mode ownership, banked framebuffer tests,
-the independent 800x600 VESA renderer, its interfaces and extension boundaries.
+the independent VESA renderer, its high-resolution surfaces, interfaces and extension boundaries.
 The [text-mode study](TEXT-MODES.md) records native BIOS and application behavior
 for 80x43/50/60 and 132x25/43/50/60, and the design for rendering existing text
 modes on larger graphics surfaces. These native observations do not imply that
 the Chinese driver already supports those grids.
 The [wide rendering study](WIDE-RENDERING.md) adds standalone DOS framebuffer
 experiments for larger and widescreen surfaces, with exact memory and scanout
-checks. Optional emulator profiles are confined to those experiments.
+checks. Optional emulator profiles are confined to QA; they also allow resident
+1080p tests when the emulator would otherwise hide those BIOS modes.
 The [direct-video checks](DIRECT-VIDEO.md) verify foreground B800 writes with
 interrupts enabled and timer-only refresh, including the legacy VGA high-page
 overlap that remains an explicit expected failure.
@@ -192,7 +193,9 @@ Host assertions compare all glyph scanlines in all four planes against the
 BIOS 8x16 font and committed HZK16 for VGA, or the distributed HH20.FNT for
 VESA, including frame extensions and per-cell colors. VESA's HHSNAP2 header
 records pixel dimensions, pitch and cell dimensions; all 800x600 pixels are
-captured. B800 attributes and Chinese text must remain
+captured. HHSNAP3 additionally records viewport origin and integer scale, with
+32-bit bank-spanning capture for the entire high-resolution surface.
+B800 attributes and Chinese text must remain
 unchanged; explicitly identified frame cells may use the public conversion
 codes. The tests distinguish those conversions from character erasure.
 API checks include the resident IDs, video mode, full 32-byte Chinese glyph,

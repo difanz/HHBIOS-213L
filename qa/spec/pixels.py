@@ -25,8 +25,8 @@ def native_rows(code, half=0, traditional=False):
 
 def glyph_rows(source, width=8, height=18):
     if len(source)==23:
-        assert height==23
-        return tuple(sum(((r >> (9-x*10//width)) & 1) << (width-1-x) for x in range(width)) for r in source)
+        assert height in (20,23)
+        return tuple(sum(((r >> (9-x*10//width)) & 1) << (width-1-x) for x in range(width)) for r in source[:height])
     assert len(source)==18 and width>0
     body=16 if height==18 else 20
     result=[]

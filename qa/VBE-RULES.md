@@ -1,17 +1,31 @@
 # VBE coexistence and rendering
 
 `VGA.COM` retains its 640x480 renderer. The independent `VESA.COM`, built from
-`vesa.c` and `vesa.asm`, draws an 800x600, 16-color console. Load one display
+`vesa.c`, `vesa.asm` and `vesa_raster.c`, draws a planar 16-color console. Load one display
 driver at a time, after a font reader and optionally CKBD. The logical screen
-remains 80x25 cells of 10x23 pixels; the input-method row starts at y=575.
+remains 80x25 cells. At the default 800x600 size, cells are 10x23 pixels and
+the input-method row starts at y=575.
 Chinese uses native 16x16 Unifont bitmaps centered in fullwidth 20x23 slots;
 Western/CP437 uses Terminus 10x20 bitmaps. Box strokes extend through the row spacing. Font generation,
 licenses, traditional mapping and file format are in [fonts/README.md](../fonts/README.md).
-The final two scanlines remain available to pixel APIs.
+At the default 800x600 size, the final two scanlines remain available to pixel APIs.
 
-VESA queries mode 102h, then a bounded BIOS mode list. It requires VGA-compatible
-800x600 planar 4-bpp graphics, pitch 100, and a readable/writable 64 KiB A000
-window. It rejects unsupported layouts without hooking interrupts. This is a
+`VESA /M:hex` selects a BIOS-provided physical mode, for example 104h for
+1024x768 or 106h for 1280x1024. Larger surfaces retain the 80x25 B800 interface,
+eight 4 KiB pages and logical BIOS character height. The viewport is centered,
+including the input-method row. Native glyphs use the largest integer scale
+from 1 through 4 that fits. If necessary to fit a larger integer scale, only
+the three spacing rows are removed; the complete 20-row font ink is retained.
+The 800x600 assembly path remains separate from the bank-spanning C rasterizer.
+No protected-mode switch or framebuffer-sized conventional-memory allocation
+is needed. Vendor widescreen mode numbers must be discovered, not assumed.
+
+By default VESA queries mode 102h, then a bounded BIOS mode list. An explicit
+`/M` requests exactly that mode. It requires VGA-compatible planar 4-bpp
+graphics, 800x600 through 4096x2160, an even pitch up to 512 bytes, and a
+readable/writable 64 KiB A000 window whose granularity divides 64 KiB.
+Larger surfaces require isolated banked text storage. It rejects unsupported
+layouts without hooking interrupts. This is a
 specific backend requirement, not a claim that all VBE modes use VGA registers.
 The [VBE specification](https://www.phatcode.net/res/221/files/vbe20.pdf) defines
 the geometry, stride, window permissions/granularity and format fields used here.
@@ -26,7 +40,7 @@ pointers. Only `AX=004Fh` is success.
 After a successful external graphics-mode selection, the BIOS owns the display:
 HHBIOS timer and INT 10h drawing stay inactive, and CKBD is told this is an
 external display. On failure, the previous display/keyboard ownership returns.
-Legacy BIOS mode 3 reactivates Chinese display. VESA also reactivates its 800x600
+Legacy BIOS mode 3 reactivates Chinese display. VESA also reactivates its selected
 console when a VBE caller selects native text mode 0..3. Applications may use
 their own bank/WinFuncPtr routines while HHBIOS is suspended.
 
@@ -59,9 +73,10 @@ active 4000-byte text page in the existing resident transfer buffer before
 switching to graphics bank zero. Refresh draws changed
 cells, and restores the text bank. Classification conversions are copied back
 to the text page. The original `ZJXP.INC` and `HZPOS.INC` are included unchanged.
-The installer tests candidate banks at 64 KiB intervals, up to four, by
+The installer starts beyond the complete visible plane and tests up to four candidate banks by
 writing distinct words across all 32 KiB of B800 and clearing the complete
-visible plane through A000. It accepts a bank only if every text word survives.
+visible plane through A000, including every graphics bank on larger surfaces.
+It accepts a bank only if every text word survives.
 This verifies isolation even on BIOS/emulator mappings whose B800 bank address
 differs from the planar A000 address; an advertised extra page alone is not
 sufficient. It first probes the shared A000-BFFF VGA aperture, then the narrower
@@ -122,14 +137,17 @@ redraw, policy and Chinese-boundary interfaces. Font reprogramming is unsupporte
 bitmap query uses the existing 16-pixel reader; the 8x16 input bitmap API
 scales at the rendering boundary. Normal text draws directly from HH20.FNT.
 `AX=1406h` reports CX=171Ah (23 scanlines, 26 rows) and maximum pixel
-coordinates 799/599. Its framebuffer segment is diagnostic, not a promise of a
+coordinates 799/599 at the default size. Larger surfaces report their physical
+pixel limits and unscaled raster height (20 or 23). Its framebuffer segment is diagnostic, not a promise of a
 permanently mapped graphics window.
 
 | VESA extension | Contract |
 | --- | --- |
 | `AX=1411h` | Returns AX=5356h, BX=ABI version 1, CX=descriptor size, ES:DI=read-only packed `struct surface` from `vesa.h`, SI=resident bytes, BP=banked-text flag, DX=framebuffer segment. Available while suspended. |
-| `AX=1412h` | Read plane BX=0..3, source byte offset SI, byte count CX, destination ES:DI. Returns AX=0 on success, 1 on invalid bounds/inactive/bank failure, 2 when busy (retry). Source is bounded by 60000 bytes; destination must not wrap. Zero count checks availability without bank changes. Caller serializes subsequent direct text reads against interrupts. |
+| `AX=1412h` | Read plane BX=0..3, 16-bit starting byte offset SI, byte count CX, destination ES:DI. Returns AX=0 on success, 1 on invalid bounds/inactive/bank failure, 2 when busy (retry). Source must remain within the complete plane (60000 bytes at 800x600); destination must not wrap. Zero count checks availability without bank changes. Caller serializes subsequent direct text reads against interrupts. |
 | `AX=1413h` | Returns AX=4632h, BX=font storage (1 XMS, 2 EMS), CX=payload size rounded up to KiB, DX=sticky font-read error flag, SI=cell width, DI=cell height. EMS allocation rounds further to 16 KiB pages. |
+| `AX=1414h` | Bank-spanning raw plane read: same plane, destination, count and status as 1412h, with a 32-bit byte offset in DX:SI. No redraw. A failed bank switch disables rendering and keyboard interception. |
+| `AX=1415h` | Returns AX=5650h, BX/CX=physical viewport x/y, DX=integer scale, DI:SI=bytes per complete plane. AX=1406h reports the unscaled raster cell height; BDA character height remains logical. |
 
 ## API sequence
 
@@ -191,21 +209,22 @@ mode restored. VGA memory mapping and ports remain the emulator's own.
 ## Rendering implementation and performance
 
 `vesa.c` owns mode discovery, geometry validation, BIOS policy and ownership.
-`vesa.asm` owns interrupt entry, VGA/bank access and the planar rasterizer.
+`vesa.asm` owns interrupt entry, VGA/bank access and the 800x600 planar fast path.
+`vesa_raster.c` owns bank-spanning drawing, viewport placement and integer scaling.
 `vesa_font.c` and `vesa_font.asm` own font loading, XMS/EMS moves and the glyph cache.
 The classifier supplies character/cell coordinates independently of framebuffer
 stride. Drawing batches changed text cells between bank selections, writes four
 planes directly and makes no per-pixel BIOS calls. `VGA.ASM` is unchanged by this
-implementation. Unreal mode and DPMI would add transition and residency costs
-without addressing a need of this 60,000-byte-per-plane backend.
-An instruction-level work-count test observes two bank calls per refresh for
+implementation. Both rasterizers use 8086 arithmetic and banked access;
+larger planes do not themselves require unreal mode or DPMI.
+At 800x600, an instruction-level work-count test observes two bank calls per refresh for
 idle, single-cell edits and full redraws, and no framebuffer writes on idle
 refresh. This bounds work, not elapsed time on a particular graphics card.
 Software cursor blinking adds its own small draws outside that text-refresh test.
-Prompt clear/output and wide strings also share a bank transaction across all
+At that size, prompt clear/output and wide strings also share a bank transaction across all
 their glyphs; their work-count tests require just two bank calls per operation.
 
-Wider-memory backends can be added without changing the classifier, but must be
+Other memory-access backends can be added without changing the classifier, but must be
 compared using the same pixels and update regions:
 
 | Path | Intended environment | Costs and lifetime to verify |

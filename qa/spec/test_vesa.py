@@ -84,14 +84,15 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
 
 
 @pytest.mark.parametrize('operation',['text','legacy','state','ports'])
-def test_vesa_return_and_register_ownership(dosbox_binary,vesa_build,tmp_path,operation):
+@pytest.mark.parametrize('mode',[0x102,0x104,0x106],ids=['800','1024','1280'])
+def test_vesa_return_and_register_ownership(dosbox_binary,vesa_build,tmp_path,operation,mode):
     from qa.spec.test_vbe import assert_chinese
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path); keyboard_config(tmp_path)
     shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
     screen=blank(); put(screen,2,10,'中文'.encode('gb2312'))
     (tmp_path/'INPUT.BIN').write_bytes(bytes([3])+bytes(screen))
-    files=run_dos(dosbox_binary,tmp_path,['READ5','CKBD','VESA','VESATEST '+operation,'SNAPSHOT'],
+    files=run_dos(dosbox_binary,tmp_path,['READ5','CKBD',f'VESA /M:{mode:x}','VESATEST '+operation,'SNAPSHOT'],
                   settings='\n[dosbox]\nmachine=svga_s3\n')
     assert_chinese(files)
     if operation=='ports':
@@ -110,7 +111,7 @@ def test_vesa_return_and_register_ownership(dosbox_binary,vesa_build,tmp_path,op
         else:
             assert records[0][0]==0x004f
             if operation=='text': assert records[1][0]==0x004f
-            assert records[2][0]==0x004f and records[2][1] & 0x3fff==0x102
+            assert records[2][0]==0x004f and records[2][1] & 0x3fff==mode
             assert records[3][0]==0x5003
 
 

@@ -4,7 +4,10 @@
 It runs in real-mode DOS, using 8086 compiler output and the production
 `vesa_layout` descriptor decoder. This is a foreground experiment, not a TSR:
 it does not expose B800 text memory to applications, hook BIOS/mouse services,
-or implement Chinese editing. The shipping console remains 80x25.
+or implement Chinese editing. The shipping console remains 80x25, but its
+separate [resident banked backend](DIRECT-VIDEO.md) now supports larger physical
+surfaces with unchanged B800 addressing. The wider logical grids and packed
+pixel formats below still belong only to this foreground experiment.
 
 The application contract remains [existing text modes](TEXT-MODES.md). A physical
 surface can center and enlarge one of those grids without changing its BIOS

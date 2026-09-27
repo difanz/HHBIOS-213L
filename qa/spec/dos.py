@@ -95,20 +95,28 @@ class Snapshot:
     pitch: int = 80
     cell_width: int = 8
     cell_height: int = 18
+    origin_x: int = 0
+    origin_y: int = 0
+    scale: int = 1
 
     @classmethod
     def read(cls, path):
         raw = path.read_bytes()
-        assert raw[:8] in (b'HHSNAP1\n', b'HHSNAP2\n'), f'unknown snapshot protocol: {path}'
-        geometry=(640,480,80,8,18)
-        if raw[:8]==b'HHSNAP2\n':
+        assert raw[:8] in (b'HHSNAP1\n', b'HHSNAP2\n', b'HHSNAP3\n'), f'unknown snapshot protocol: {path}'
+        geometry=(640,480,80,8,18,0,0,1)
+        if raw[:8] in (b'HHSNAP2\n',b'HHSNAP3\n'):
             assert len(raw)>=18, f'truncated geometry: {path}'
-            geometry=struct.unpack_from('<5H',raw,8)
-            width,height,pitch,cw,ch=geometry
+            count=8 if raw[:8]==b'HHSNAP3\n' else 5
+            assert len(raw)>=8+count*2
+            geometry=struct.unpack_from('<'+str(count)+'H',raw,8)
+            if count==5: geometry+= (0,0,1)
+            width,height,pitch,cw,ch,ox,oy,scale=geometry
+            if count==5: assert width==80*cw and height<=1024
             assert 0 < cw <= 32 and 0 < ch <= 32
-            assert width==80*cw and 25*ch <= height <= 1024
-            assert width//8 <= pitch <= 256 and width % 8 == 0
-            raw=raw[:8]+raw[18:]
+            assert 1<=scale<=4 and ox+80*cw*scale<=width<=4096
+            assert oy+25*ch*scale<=height<=2160
+            assert width//8 <= pitch <= 512 and width % 8 == 0
+            raw=raw[:8]+raw[8+count*2:]
         raw = raw[8:]
         size=geometry[1]*geometry[2]
         assert len(raw) == 4027 + 4 * size, f'truncated/extra snapshot bytes: {path}'
@@ -116,8 +124,9 @@ class Snapshot:
                    [raw[4027+i*size:4027+(i+1)*size] for i in range(4)],*geometry)
 
     def glyph(self, row, col, plane=0):
-        return plane_bits(self.planes[plane],self.pitch,col*self.cell_width,
-                          row*self.cell_height,self.cell_width,self.cell_height)
+        return plane_bits(self.planes[plane],self.pitch,self.origin_x+col*self.cell_width*self.scale,
+                          self.origin_y+row*self.cell_height*self.scale,
+                          self.cell_width*self.scale,self.cell_height*self.scale)
 
     def save_ppm(self, path):
         # Dependency-free diagnostic image; pixels are the raw VGA planes.

@@ -11,11 +11,15 @@
 #include <string.h>
 
 static unsigned capture_seg, framebuffer, pitch, cell_width, cell_height, image_size;
+static unsigned graphics_pitch;
+static unsigned long graphics_offset;
 static unsigned vesa, age, settle, finished;
 static unsigned keys[64], key_count, step, records;
 static unsigned exit_keys[8] = {0x2d00}, exit_count = 1, exit_step;
 static unsigned release_alt;
 static unsigned physical_keys, transmit, transmit_step;
+static unsigned stable_cursor=0xffff, stable_samples;
+static unsigned char stable_row[160];
 static unsigned start_keys[8], start_count, start_step, start_length;
 static char start_marker[64];
 static unsigned char scratch[256];
@@ -82,9 +86,29 @@ static void record_step(void)
     *(unsigned __far *)MK_FP(capture_seg, 8) = records;
 }
 
+/* An editor may temporarily move its BIOS cursor onto a status line while
+ * repainting. Observe a settled cursor AND row, not an arbitrary timer tick.
+ * No knowledge of the expected edit result belongs in this observer. */
+static int row_stable(void)
+{
+    unsigned cursor=*(unsigned __far *)MK_FP(0x40,0x50),i;
+    unsigned char __far *row;
+    if ((cursor>>8)>=25 || (cursor&255)>=80) { stable_samples=0; return 0; }
+    row=MK_FP(0xb800,(cursor>>8)*160);
+    if (cursor==stable_cursor) {
+        for (i=0;i<160 && row[i]==stable_row[i];++i) {}
+        if (i==160 && ++stable_samples>=2) return 1;
+        if (i==160) return 0;
+    }
+    stable_cursor=cursor; stable_samples=0;
+    _fmemcpy(stable_row,row,160);
+    return 0;
+}
+
 void app_poll(void)
 {
     unsigned old4, old5, y;
+    unsigned long offset;
     unsigned char __far *text = MK_FP(0xb800, 0);
     unsigned __far *bda = MK_FP(0x40, 0);
     if (transmit_step) {
@@ -141,7 +165,9 @@ void app_poll(void)
         if (key_count) {
             /* Observe the previous action before offering the next one. */
             if (bda[0x1a/2] != bda[0x1c/2]) { --settle; return; }
+            if (!row_stable()) { --settle; return; }
             record_step();
+            stable_cursor=0xffff; stable_samples=0;
             if (step < key_count) {
                 queue_key(keys[step++]);
                 settle = step == key_count ? 1 : 21;
@@ -152,8 +178,10 @@ void app_poll(void)
         if (vesa) {
             memset(&view,0,sizeof(view));
             for (y=0; y<10*cell_height; ++y) {
-                view.x.ax=0x1412; view.x.bx=1; view.x.cx=pitch;
-                view.x.si=y*pitch; view.x.es=capture_seg; view.x.di=4016+y*pitch;
+                offset=graphics_offset+(unsigned long)y*graphics_pitch;
+                view.x.ax=0x1414; view.x.bx=1; view.x.cx=pitch;
+                view.x.si=(unsigned)offset; view.x.dx=(unsigned)(offset>>16);
+                view.x.es=capture_seg; view.x.di=4016+y*pitch;
                 intr(0x10,&view);
                 if (view.x.ax==2) { --settle; return; }
                 if (view.x.ax) { finished=1; return; }
@@ -236,10 +264,20 @@ int main(int argc, char **argv)
     pitch = (r.x.si+1)/8;
     cell_width=(r.x.si+1)/80;
     cell_height=r.x.cx>>8;
-    if (pitch < 80 || pitch > 128) return 8;
-    if (!cell_height || cell_height>32) return 8;
     if (framebuffer < 0xa000 || framebuffer > 0xb000) return 8;
     r.x.ax=0x1411; intr(0x10,&r); vesa=r.x.ax==0x5356;
+    if (vesa) {
+        graphics_pitch=*(unsigned __far *)MK_FP(r.x.es,r.x.di+4);
+        r.x.ax=0x1415; intr(0x10,&r);
+        if (r.x.ax!=0x5650 || (r.x.bx&7)) return 8;
+        graphics_offset=(unsigned long)r.x.cx*graphics_pitch+r.x.bx/8;
+        cell_width=10*r.x.dx; cell_height*=r.x.dx;
+        /* HHAPP2 contains the first ten logical rows, excluding the physical
+         * margins. Its small resident buffer deliberately limits this probe. */
+        pitch=80*cell_width/8;
+    }
+    if (pitch < 80 || pitch > 128) return 8;
+    if (!cell_height || cell_height>32) return 8;
     image_size=4016+10*cell_height*pitch;
     if (_dos_allocmem((image_size+65*164+15)/16, &capture_seg)) return 7;
     _fmemset(MK_FP(capture_seg, 0), 0, 16);

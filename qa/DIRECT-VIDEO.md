@@ -12,11 +12,20 @@ returning. Thus foreground stores can leave interrupts enabled. This does not
 extend to an unrelated TSR that writes B800 from a nested interrupt while the
 graphics bank is mapped; see [the interrupt contract](VBE-RULES.md#memory-and-interrupt-boundary).
 
+The same B800 layout is retained with `/M:104` (1024x768), `/M:106`
+(1280x1024), or a compatible larger BIOS mode. Physical viewport placement,
+integer bitmap enlargement and 32-bit offsets across graphics banks do not
+change an application's page, row or column arithmetic. The text-bank probe
+covers the entire physical framebuffer, rather than just its first 64 KiB.
+
 ## Runtime checks
 
 ```sh
 python qa/run.py dos qa/spec/test_direct_video.py --dosbox dosbox --screenshots
 python qa/run.py dos qa/spec/test_direct_video.py --dosbox dosbox-x --screenshots
+# Optional BIOS profile advertising widescreen modes; vendor numbers are queried.
+python qa/run.py dos qa/spec/test_direct_video.py -k 1920 --dosbox dosbox-x \
+    --screenshots --vesa-research-config qa/profiles/vesa-hd.conf
 ```
 
 `SNAPSHOT direct <page>` selects the page and display policy once before the
@@ -47,6 +56,8 @@ directory. This tests eventual refresh, not a maximum redraw-latency bound.
 | Backend | Direct-write coverage | Boundary |
 | --- | --- | --- |
 | Banked VESA, 800x600 / 80x25 | Active pages 0 and 7; preservation of all eight 4 KiB pages | The bank-isolation probe must succeed. |
+| Banked VESA, 1024x768 and 1280x1024 / 80x25 | Active page 7, every operation above, all eight pages and full-window pixels | A BIOS-provided planar mode and isolated text bank are required. |
+| Banked VESA, 1920x1080 / 80x25 | The same stores with native glyphs at 2x and centered 20x40 physical cells | The test discovers the vendor mode; unavailable geometry is reported separately. |
 | Legacy VGA, 640x480 / 80x25 | Active pages 0 and 5; preservation of pages 0 through 5 on the aliased aperture | The AE020 framebuffer aliases text pages 6/7 on a 64 KiB aperture. |
 | One-image VESA fallback | Not exercised by this direct-write matrix | Its existing contract permits page 0 only. |
 
@@ -63,8 +74,9 @@ recognized CP437 frame characters may be converted to the documented legacy
 aliases in text memory; applications must not assume those bytes are untouched.
 The tests hide the software cursor to isolate glyph and attribute updates.
 
-Direct CRTC/GC reprogramming, monochrome B000 applications, and protected-mode
-mapping policies are separate compatibility questions. These results do not
-establish them. Larger grids such as 132x50 and widescreen surfaces remain
-foreground rendering experiments; they do not yet emulate a resident B800 text
-mode for existing applications.
+Direct CRTC/GC reprogramming, monochrome B000 applications, physical mouse
+callbacks and protected-mode mapping policies are separate compatibility
+questions. These results do not establish them. Widescreen physical surfaces
+can host the resident 80x25 console; larger logical grids such as 132x50 remain
+foreground rendering experiments and are not yet advertised as resident text
+modes. These are distinct features.

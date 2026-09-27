@@ -132,7 +132,7 @@ def test_geometry_and_pixel_format_are_decoded_independently_of_console(layout_l
     assert (s.width,s.height,s.pitch,s.bpp,s.format,s.physical)==(width,height,pitch,bpp,model,0xe0000000)
     if masks: assert (s.red_size,s.red_pos,s.green_size,s.green_pos,s.blue_size,s.blue_pos)==masks
     # Describing a format must not select a renderer that cannot draw it.
-    assert layout_library.vesa_console_layout(ctypes.byref(s),buf,0x200,0x321)==0
+    assert layout_library.vesa_console_layout(ctypes.byref(s),buf,0x200,0x321)==int((width,height,bpp)==(1024,768,4))
 
 
 @pytest.mark.parametrize('failure',[None,'old-dos',0x5800,0x5802,'link','strategy',0x48])
@@ -203,6 +203,27 @@ class Driver:
         assert self.read('stack_bottom',2)==b'\x5a\xa5'
 
 
+@pytest.mark.parametrize('banked,page',[(0,1),(0,255),(1,8),(1,255)])
+@pytest.mark.parametrize('function',[0x0200,0x0300,0x0800,0x0941,0x0a41,0x1300])
+def test_unavailable_text_pages_do_not_alias_valid_pages(vesa_driver,banked,page,function):
+    m=Driver(vesa_driver,lambda m: pytest.fail('invalid page must not enter BIOS'))
+    m.write('active',b'\1'); m.write('banked_text',bytes([banked]))
+    bda=bytearray(256)
+    for p in range(8): struct.pack_into('<H',bda,0x50+2*p,0x0103)
+    m.uc.mem_write(0x400,bytes(bda))
+    text=b''.join(bytes([65+p,7])*2048 for p in range(8))
+    m.uc.mem_write(0xb8000,text); m.uc.mem_write(0x30000,b'AB')
+    accesses=[]
+    m.uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE,
+        lambda uc,access,address,size,value,_: accesses.append(address),
+        begin=0xa0000,end=0xbffff)
+    m.run(AX=function,BX=(page<<8)|0x1e,CX=2,DX=0x0304,ES=0x3000,BP=0)
+    assert m.uc.mem_read(0x400,256)==bda
+    assert m.uc.mem_read(0xb8000,32768)==text
+    assert not accesses, 'an unavailable page must not alias an existing page'
+    assert m.get('AX')==function and m.get('DX')==0x0304
+
+
 @pytest.mark.parametrize('drawing',[False,True])
 @pytest.mark.parametrize('col,role',[(3,1),(4,2),(5,0)])
 def test_keyboard_query_uses_live_text_or_banked_snapshot_without_c_reentry(vesa_driver,drawing,col,role):
@@ -237,6 +258,29 @@ def test_keyboard_query_uses_live_text_or_banked_snapshot_without_c_reentry(vesa
     assert banks==([0] if drawing else [])
 
 
+@pytest.mark.parametrize('failure',[False,True])
+def test_large_plane_capture_splits_banks_and_restores_text_mapping(vesa_driver,failure):
+    banks=[]
+    def bios(m):
+        assert m.get('AX')==0x4f05
+        bank=m.get('DX'); banks.append(bank)
+        m.put('AX',0x014f if failure and bank==1 else 0x004f)
+        m.uc.mem_write(0xa0000,bytes([0x30+bank])*65536)
+    m=Driver(vesa_driver,bios)
+    m.write('active',b'\1'); m.write('large_surface',b'\1'); m.write('banked_text',b'\1')
+    m.write('text_bank',struct.pack('<H',6)); m.write('bank_step',struct.pack('<H',1))
+    m.write('plane_bytes',struct.pack('<I',163840)); m.write('keyboard_segment',b'\0\x20')
+    m.write('screen',struct.pack('<4H',1280,1024,160,0xa000))
+    m.uc.mem_write(0x30000,b'\xa5'*32)
+    m.run(AX=0x1414,BX=2,DX=0,SI=65530,ES=0x3000,DI=4,CX=16)
+    assert banks==[0,1,6]
+    expected=b'0'*6+(b'\xa5'*10 if failure else b'1'*10)
+    assert m.uc.mem_read(0x30000,32)==b'\xa5'*4+expected+b'\xa5'*12
+    assert m.get('AX')==int(failure)
+    assert m.read('active')==bytes([not failure])
+    if failure: assert m.uc.mem_read(0x20101,1)==b'\xff'
+
+
 @pytest.mark.parametrize('failed_bank',[0,1])
 def test_bank_failure_stops_access_and_disables_renderer(vesa_driver,failed_bank):
     calls=[]
@@ -263,11 +307,12 @@ def test_bank_failure_stops_access_and_disables_renderer(vesa_driver,failed_bank
         assert m.uc.mem_read(0x30000,16)==b'\xa5'*16
 
 
-def test_capture_during_render_requests_retry_without_touching_stack(vesa_driver):
+@pytest.mark.parametrize('function',[0x1412,0x1414])
+def test_capture_during_render_requests_retry_without_touching_stack(vesa_driver,function):
     m=Driver(vesa_driver,lambda m: pytest.fail('must not enter BIOS'))
     m.write('busy',b'\1')
     before=m.uc.mem_read(0x10000+m.symbols['stack_bottom'],2050)
-    m.run(AX=0x1412,BX=3,ES=0x3000,DI=0)
+    m.run(AX=function,BX=3,ES=0x3000,DI=0)
     assert m.get('AX')==2 and m.get('BX')==3
     assert m.uc.mem_read(0x10000+m.symbols['stack_bottom'],2050)==before
 
@@ -296,6 +341,27 @@ def test_initialization_bank_failure_restores_previous_mode(vesa_driver,previous
     m.run('initialize')
     assert m.get('AX')==3 and modes==[0x102,previous]
     assert m.read('active')==b'\0'
+
+
+@pytest.mark.parametrize('explicit',[False,True])
+def test_explicit_mode_does_not_fall_back_to_bios_list(vesa_driver,explicit):
+    queried=[]
+    def bios(m):
+        ax=m.get('AX'); address=m.get('ES')*16+m.get('DI')
+        if ax==0x4f00:
+            info=bytearray(256); info[:4]=b'VESA'
+            struct.pack_into('<H',info,4,0x200)
+            struct.pack_into('<HH',info,14,0,0x3000)
+            m.uc.mem_write(address,bytes(info)); m.put('AX',0x004f)
+        else:
+            assert ax==0x4f01
+            queried.append(m.get('CX')); m.put('AX',0x014f)
+    m=Driver(vesa_driver,bios)
+    m.write('mode_selected',bytes([explicit]))
+    m.uc.mem_write(0x30000,struct.pack('<3H',0x104,0x106,0xffff))
+    m.run('initialize')
+    assert m.get('AX')==1 and m.read('active')==b'\0'
+    assert queried==([0x102] if explicit else [0x102,0x104,0x106])
 
 
 @pytest.mark.parametrize('action',[0,1,2])
