@@ -12,28 +12,36 @@ borland=${borland:-"$cache/bc31"}
 dosbox=${DOSBOX:-dosbox-x}
 msdos_dir=${MSDOS_DIR:-"$apps/msdos622/files"}
 msdos_boot=${MSDOS_BOOT:-"$apps/msdos622/MSD622BD.IMG"}
-mouse=${CTMOUSE_EXE:-"$apps/CTMOUSE.EXE"}
+mouse=
+mouse_driver=${QA_MOUSE_DRIVER:-cutemouse}
 image="$run/MSDOS.IMG"
 build=true
 die() { echo "$*" >&2; exit 1; }
 while (($#)); do
     case $1 in
-        --borland|--dosbox|--msdos-dir|--msdos-boot|--mouse|--image)
+        --borland|--dosbox|--msdos-dir|--msdos-boot|--mouse|--mouse-driver|--image)
             (($# >= 2)) || die "Missing value for $1"
             case $1 in
                 --borland) borland=$2;; --dosbox) dosbox=$2;;
-                --msdos-dir) msdos_dir=$2;; --msdos-boot) msdos_boot=$2;; --mouse) mouse=$2;; --image) image=$2;;
+                --msdos-dir) msdos_dir=$2;; --msdos-boot) msdos_boot=$2;; --mouse) mouse=$2;;
+                --mouse-driver) mouse_driver=$2;; --image) image=$2;;
             esac
             shift 2;;
         --no-build) build=false; shift;;
         -h|--help)
-            echo "Usage: $0 [--borland DIR] [--dosbox EXE] [--msdos-dir DIR] [--msdos-boot IMG] [--mouse EXE] [--image IMG] [--no-build]"
-            echo 'Requires local MS-DOS 6.x installation files (all disks), boot floppy, CuteMouse, mtools and 7z.'
+            echo "Usage: $0 [--borland DIR] [--dosbox EXE] [--msdos-dir DIR] [--msdos-boot IMG] [--mouse-driver cutemouse|vbmouse] [--mouse EXE] [--image IMG] [--no-build]"
+            echo 'Requires local MS-DOS 6.x installation files (all disks), boot floppy, mouse driver, mtools and 7z.'
+            echo 'CuteMouse uses captured relative input; VBMouse supports uncaptured absolute input for remote desktops.'
             echo 'Existing guest application settings are preserved. Close DOSBox before updating its disk.'
             exit 0;;
         *) die "Unknown option: $1";;
     esac
 done
+case $mouse_driver in
+    cutemouse) mouse=${mouse:-${CTMOUSE_EXE:-"$apps/CTMOUSE.EXE"}};;
+    vbmouse) mouse=${mouse:-${VBMOUSE_EXE:-"$cache/vbados/VBMOUSE.EXE"}};;
+    *) die "Unknown mouse driver: $mouse_driver (use cutemouse or vbmouse)";;
+esac
 dosbox=$(command -v "$dosbox") || die 'DOSBox-X executable not found.'
 dosbox=$(realpath "$dosbox")
 msdos_dir=$(realpath -m "$msdos_dir")
@@ -69,6 +77,7 @@ KEYAPI keyapi
 MEMCLI memclient
 MEMTEST memory
 MOUSEVW mouseview mouseview
+MOUSEDIR mousedir
 PERF perf
 PRESSURE pressure
 PRMTEST prompt

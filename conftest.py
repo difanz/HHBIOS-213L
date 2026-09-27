@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parent
 
 
 def pytest_addoption(parser):
+    parser.addoption('--ctmouse', type=Path, default=os.environ.get('CTMOUSE_EXE'),
+                     help='Optional CuteMouse driver for relative-input real-MS-DOS tests.')
+    parser.addoption('--vbmouse', type=Path, default=os.environ.get('VBMOUSE_EXE'),
+                     help='Optional VBMouse driver for absolute-input real-MS-DOS tests.')
     parser.addoption('--msdos-image', type=Path, default=os.environ.get('MSDOS_IMAGE'),
                      help='Optional bootable QA disk made by qa/prepare.sh; tests copy it before use.')
     parser.addoption('--setup-exe', type=Path, default=os.environ.get('SETUP_EXE'),

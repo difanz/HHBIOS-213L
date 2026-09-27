@@ -70,7 +70,7 @@ same filename and contents with HHBIOS loaded.
 `qa/prepare.sh` builds an actual bootable MS-DOS disk for interactive QA with
 DOSBox-X. It uses local installation media: supply the files from all three
 MS-DOS 6.22 disks in one directory, a bootable floppy image of that version,
-and `CTMOUSE.EXE`. Host dependencies are Bash, GNU coreutils, mtools, psmisc (`fuser`), 7z,
+and a DOS mouse driver. Host dependencies are Bash, GNU coreutils, mtools, psmisc (`fuser`), 7z,
 unzip and iconv, plus the normal COM build tools. No DOS or compiler download
 is implicit.
 
@@ -88,8 +88,30 @@ also apply. Available fixtures are copied; unavailable optional applications
 are reported. `--no-build` reuses existing modules and probes. Build the optional
 [SETUP.EXE](../src/setup/README.md) first to include it.
 
+The default `--mouse-driver cutemouse` loads CuteMouse and enables click-to-capture
+for its relative PS/2 input. Ctrl+F10 releases the pointer. Remote desktops such
+as Chrome Remote Desktop may send absolute positions that conflict with captured
+relative input: reversing the host pointer can continue moving the DOS pointer
+in the same direction. For that environment, use
+[VBMouse](https://git.javispedro.com/cgit/vbados.git/about/) with VMware absolute
+mouse integration and leave the pointer uncaptured:
+
+```sh
+bash qa/prepare.sh --mouse-driver vbmouse --mouse /path/to/VBMOUSE.EXE
+```
+
+`QA_MOUSE_DRIVER=vbmouse` and `VBMOUSE_EXE=/path/to/VBMOUSE.EXE` are equivalent.
+Supply the driver locally; preparation never downloads it. This profile sets
+`autolock=false` and `vmware=true` and loads only VBMouse. It is a QA guest
+choice, not a dependency of HHBIOS. VBMouse is loaded in conventional memory
+to leave large UMB blocks for CKBD/VESA; otherwise its small UMB allocation can
+force the much larger VESA resident into conventional memory. VBMouse requires
+a 386; CuteMouse remains available for older machines and relative-input tests.
+The observed VBADOS 0.67
+archive has SHA-256 `824d74731d719ff4c8ca7914f6f93e554812fca3a9ef8c44317c1da728184d27`.
+
 The image boots Microsoft's kernel and COMMAND.COM with HIMEM, EMM386 and
-CuteMouse. `C:\HHBIOS` contains the original binary distribution from the
+the selected mouse driver. `C:\HHBIOS` contains the original binary distribution from the
 repository's `original-import` tag, the files inside its three self-extracting
 archives, and current compiled modules. Both HZK16 fonts, input tables and
 legacy utilities are retained. `Q:` is an MS-DOS `SUBST` for `C:\QA`; `TOOLS`
@@ -111,14 +133,25 @@ CLS palette/status-row preservation and repeated help invocations. It compares
 interrupt vectors and DOS arenas before and after the loop, and checks the
 resident stack guard on each iteration. Both UMB and conventional residency run
 with automatic and normal CPU cores. Tests use fresh builds of the modules and
-never write to the interactive disk itself. With `--screenshots`, MSBACKUP's
-downloaded border and mouse glyphs are compared pixel by pixel against native
-VGA text, on both 800×600 and 1024×768 VESA surfaces:
+never write to the interactive disk itself. With `--screenshots` and `--vbmouse`,
+MSBACKUP's downloaded border and mouse glyphs are compared against native VGA
+text on both 800×600 and 1024×768 VESA surfaces. Its callback consumes relative
+mickeys, so the test verifies reversals on both axes and vacated text cells,
+then compares the complete arrow bitmap independent of its sub-cell offset:
 
 ```sh
 python -m pytest qa/spec/test_msdos.py --msdos-image build/run/MSDOS.IMG \
-  --dosbox "$DOSBOX" --screenshots
+  --dosbox "$DOSBOX" --screenshots --vbmouse /path/to/VBMOUSE.EXE
 ```
+
+`test_msdos_mouse_directions` exercises real host movement in both directions
+on each axis, checking signed mickeys and INT 33h positions in native VGA and
+VESA 25/50-row modes. It uses captured relative input with CuteMouse and
+uncaptured absolute input with optional `--vbmouse /path/to/VBMOUSE.EXE`
+(`VBMOUSE_EXE` also works). If the disk does not contain CuteMouse, supply
+`--ctmouse /path/to/CTMOUSE.EXE` or `CTMOUSE_EXE` for the relative cases.
+Absolute reversals deliberately remain on one side
+of the window center, so capture-induced one-way motion cannot pass.
 
 The DOS layer also uses Open Watcom's `wcl386` and the `dos4g`, `dos32a`,
 `causeway`, and `pmodew` linker systems. Include its `binw` directory on `PATH`

@@ -16,6 +16,7 @@ from qa.spec.test_dos_display import guest_build
 from qa.spec.test_vesa import vesa_build
 from qa.spec.test_memory import Arena, memory_build
 from qa.spec.test_dosshell import shellcap_build
+from qa.spec.test_text_modes import textmode_build
 
 
 @pytest.fixture
@@ -43,6 +44,85 @@ def copy_disk(source,tmp_path):
         (tmp_path/name).write_bytes(data)
         return data
     return image,copy_in,read
+
+
+@pytest.fixture(scope='session')
+def mousedir_build(tmp_path_factory):
+    out=tmp_path_factory.mktemp('mousedir')/'MOUSEDIR.COM'
+    subprocess.run(['bash','tools/build-watcom-com.sh','qa/harness/mousedir.c',str(out)],check=True)
+    return out
+
+
+@pytest.mark.dos
+@pytest.mark.parametrize('driver',['cutemouse','vbmouse'])
+@pytest.mark.parametrize('display',['native','vesa25','vesa50'])
+def test_msdos_mouse_directions(dosbox_binary,pytestconfig,tmp_path,guest_build,
+                                mousedir_build,textmode_build,msdos_image,driver,display):
+    """Exercise signed relative motion and remote-desktop absolute positions."""
+    import json
+    vbmouse=pytestconfig.getoption('--vbmouse')
+    if driver=='vbmouse':
+        if vbmouse is None: pytest.skip('Supply --vbmouse for absolute mouse integration')
+        assert vbmouse.is_file(),vbmouse
+    image,copy_in,read=copy_disk(msdos_image,tmp_path)
+    for name in ('READ5.COM','CKBD.COM','VESA.COM'):
+        copy_in(guest_build/name,'::HHBIOS/'+name)
+    copy_in(mousedir_build,'::MOUSEDIR.COM')
+    copy_in(textmode_build,'::TEXTMODE.COM')
+    if driver=='vbmouse': copy_in(vbmouse,'::DOS/VBMOUSE.EXE')
+    else:
+        ctmouse=pytestconfig.getoption('--ctmouse')
+        if ctmouse is not None:
+            assert ctmouse.is_file(),ctmouse
+            copy_in(ctmouse,'::DOS/CTMOUSE.EXE')
+        else:
+            # Absolute-input disks need not include the optional relative driver.
+            with image.open('rb') as disk:
+                disk.seek(454); offset=struct.unpack('<I',disk.read(4))[0]*512
+            found=subprocess.run(['mdir','-b','-i',f'{image}@@{offset}','::DOS/CTMOUSE.EXE'],
+                                 capture_output=True)
+            if found.returncode: pytest.skip('Supply --ctmouse or install CTMOUSE.EXE in the QA disk')
+    startup=read('AUTOEXEC.BAT').replace(b'@ECHO ON',b'@ECHO OFF')
+    command=b'C:\\DOS\\VBMOUSE.EXE install low' if driver=='vbmouse' else b'LH C:\\DOS\\CTMOUSE.EXE'
+    startup,n=re.subn(rb'(?im)^(?:LH )?C:\\DOS\\(?:CTMOUSE|VBMOUSE)\.EXE[^\r\n]*',
+                      lambda _: command,startup)
+    assert n==1,'QA startup must load exactly one supported mouse driver'
+    if display=='native': startup=startup.replace(b'CALL HHBIOS.BAT',b'REM native text')
+    commands=['CD \\']+(['C:\\TEXTMODE 50'] if display=='vesa50' else [])
+    commands+=['C:\\MOUSEDIR','IF ERRORLEVEL 1 GOTO FAILED','ECHO complete>C:\\DONE.TXT',
+               ':FAILED','C:\\DOS\\SHUTDOWN /S']
+    (tmp_path/'AUTOEXEC.BAT').write_bytes(startup+b'\r\n'+('\r\n'.join(commands)+'\r\n').encode())
+    copy_in(tmp_path/'AUTOEXEC.BAT','::AUTOEXEC.BAT')
+    if driver=='cutemouse':
+        moves=[dict(x=x,y=y,relative=True,repeat=8,click=False) for x,y in
+               ((5,0),(-5,0),(-5,0),(5,0),(0,5),(0,-5),(0,-5),(0,5))]
+        checks=[(i,axis,sign) for i,axis,sign in
+                ((1,0,1),(2,0,-1),(3,0,-1),(4,0,1),(5,1,1),(6,1,-1),(7,1,-1),(8,1,1))]
+    else:
+        # These remain on the same side of the capture center when reversing.
+        # A relative/captured path interprets both directions as positive.
+        moves=[dict(x=x,y=y,click=False) for x,y in
+               ((520,220),(600,220),(520,220),(440,220),(400,300),(400,380),(400,300),(400,220))]
+        checks=[(2,0,1),(3,0,-1),(4,0,-1),(6,1,1),(7,1,-1),(8,1,-1)]
+    (tmp_path/'MOUSE.JSN').write_text(json.dumps([dict(x=360,y=220)]+moves))
+    with PhysicalKeyboard(tmp_path,True) as keyboard:
+        copy_in(tmp_path/'SCREEN.KEY','::SCREEN.KEY')
+        config=('[sdl]\noutput=surface\nmouse_emulation=locked\n'
+                f'autolock={"true" if driver=="cutemouse" else "false"}\n'
+                '[dos]\nvmware=true\n[dosbox]\nmachine=svga_s3\nmemsize=16\n[cpu]\ncycles=30000\n')
+        config+=keyboard.config+f'\n[autoexec]\nimgmount 0 empty -fs none -t floppy\nimgmount c "{image}" -ide 1m\nboot c:\n'
+        (tmp_path/'dosbox.conf').write_text(config)
+        env=dict(os.environ,DISPLAY=keyboard.name,SDL_VIDEODRIVER='x11',SDL_AUDIODRIVER='dummy')
+        run_process([str(dosbox_binary),'-conf',str(tmp_path/'dosbox.conf')],tmp_path,90,env,keyboard)
+    assert read('DONE.TXT').strip()==b'complete'
+    if display=='vesa50':
+        mode=read('TEXTMODE.BIN')
+        assert mode[20+0x84]+1==50,'The high-row mouse test must actually enter 80x50'
+    rows=[list(map(int,line.split())) for line in read('MOUSEDIR.TXT').splitlines()]
+    assert len(rows)==9 and [r[0] for r in rows]==list(range(9))
+    for step,axis,sign in checks:
+        assert (rows[step][axis+1]-rows[step-1][axis+1])*sign>0,(step,rows)
+        assert rows[step][axis+3]*sign>0,(step,rows)
 
 
 @pytest.mark.dos
@@ -148,15 +228,23 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
     from qa.spec.machine import FRAME_ALIASES
     if not pytestconfig.getoption('--screenshots'):
         pytest.skip('MSBACKUP needs --screenshots to observe actual VGA scanout')
+    vbmouse=pytestconfig.getoption('--vbmouse')
+    if vbmouse is None:
+        pytest.skip('Supply --vbmouse to exercise MSBACKUP with absolute host input')
+    assert vbmouse.is_file(),vbmouse
     observations=[]
-    actions=[0xffff,0xfffe,0xffff,0x011b]
+    actions=[0xffff,0xfffe,0xfffe,0xffff,0xfffe,0xffff,0xfffe,0xffff,0x011b]
     for mode in (None,0x102,0x104):
         directory=tmp_path/('native' if mode is None else f'vesa{mode:x}')
         image,copy_in,read=copy_disk(msdos_image,directory)
         for name in ('READ5.COM','CKBD.COM','VESA.COM'):
             copy_in(guest_build/name,'::HHBIOS/'+name)
         copy_in(shellcap_build,'::SHELLCAP.COM')
+        copy_in(vbmouse,'::DOS/VBMOUSE.EXE')
         startup=read('AUTOEXEC.BAT').replace(b'@ECHO ON',b'@ECHO OFF')
+        startup,count=re.subn(rb'(?im)^(?:LH )?C:\\DOS\\(?:CTMOUSE|VBMOUSE)\.EXE[^\r\n]*',
+                              lambda _: b'C:\\DOS\\VBMOUSE.EXE install low',startup)
+        assert count==1,'QA startup must load exactly one supported mouse driver'
         if mode is None:
             startup=startup.replace(b'CALL HHBIOS.BAT',b'REM native VGA')
         elif mode!=0x102:
@@ -168,13 +256,17 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
                   'ECHO complete>C:\\DONE.TXT','C:\\DOS\\SHUTDOWN /S']
         (directory/'AUTOEXEC.BAT').write_bytes(startup+b'\r\n'+('\r\n'.join(commands)+'\r\n').encode())
         copy_in(directory/'AUTOEXEC.BAT','::AUTOEXEC.BAT')
-        (directory/'ACTIONS.BIN').write_bytes(struct.pack('<4H',*actions))
+        (directory/'ACTIONS.BIN').write_bytes(struct.pack('<'+'H'*len(actions),*actions))
         (directory/'MARKER.TXT').write_bytes(b'Alert')
         copy_in(directory/'ACTIONS.BIN','::DOS/ACTIONS.BIN')
         copy_in(directory/'MARKER.TXT','::DOS/MARKER.TXT')
-        (directory/'MOUSE.JSN').write_text(json.dumps([dict(x=49 if mode is None else 55,y=88 if mode is None else 126)]))
+        # MSBACKUP's callback consumes SI/DI mickeys, not CX/DX positions.
+        # Establish absolute history, reach the top-left, then reverse both
+        # axes. Pixel-to-mickey scaling differs between physical surfaces.
+        (directory/'MOUSE.JSN').write_text(json.dumps([
+            dict(x=x,y=y,click=False) for x,y in ((700,350),(10,10),(22,22),(16,16))]))
         with PhysicalKeyboard(directory,True) as keyboard:
-            config='[sdl]\noutput=surface\n[dosbox]\nmachine=svga_s3\nmemsize=16\n[cpu]\ncycles=30000\n'
+            config='[sdl]\noutput=surface\nautolock=false\nmouse_emulation=locked\n[dos]\nvmware=true\n[dosbox]\nmachine=svga_s3\nmemsize=16\n[cpu]\ncycles=30000\n'
             config+=keyboard.config+f'\n[autoexec]\nimgmount 0 empty -fs none -t floppy\nimgmount c "{image}" -ide 1m\nboot c:\n'
             (directory/'dosbox.conf').write_text(config)
             env=dict(os.environ,DISPLAY=keyboard.name,SDL_VIDEODRIVER='x11',SDL_AUDIODRIVER='dummy')
@@ -184,31 +276,84 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
         assert status[0]==2, 'Cancelling initial MSBACKUP configuration returns 2'
         assert status[1:]==(0,len(actions),len(actions)),status
         raw=read('DOS/SHELL.BIN'); read('DOS/HARDWARE.BIN'); read('DOS/VIDEO.BIN')
-        assert len(raw)==2*8280
+        assert len(raw)==4*8280
         shots=json.loads((directory/'screenshots.json').read_text())
         frames=[]
-        for offset in (0,8280):
+        cursor_positions=[]
+        for offset in range(0,len(raw),8280):
             frame=raw[offset:offset+8280]; meta=struct.unpack_from('<12H',frame)
             assert meta[1]==4000
             shot=shots[meta[0]]
             rgb=subprocess.check_output(['convert',str(directory/shot['file']),'-depth','8','rgb:-'])
             width,height=shot['width'],shot['height']
             assert len(rgb)==width*height*3
-            frames.append((frame[280:4280],meta,rgb,width))
+            text=frame[280:4280]
+            cursor=text[::2].index(0xcb)
+            assert all(text[(cursor+delta)*2]==code for delta,code in
+                       ((0,0xcb),(1,0xb2),(80,0xce),(81,0xb4)))
+            cursor_positions.append(divmod(cursor,80))
+            frames.append((text,meta,rgb,width))
+        assert cursor_positions[1]==(0,0),cursor_positions
+        for axis in (0,1):
+            assert cursor_positions[2][axis]>cursor_positions[1][axis],cursor_positions
+            assert 0<cursor_positions[3][axis]<cursor_positions[2][axis],cursor_positions
         observations.append(frames)
+    # Restore the initial arrow's four cells from the later native frame.
+    # Every remaining cell must match this canvas, including vacated cursor
+    # cells. Arrow positions are checked above; their actual pixels below.
+    canvas=bytearray(observations[0][0][0])
+    initial_cursor=canvas[::2].index(0xcb)
+    for delta in (0,1,80,81):
+        cell=initial_cursor+delta
+        canvas[cell*2:cell*2+2]=observations[0][1][0][cell*2:cell*2+2]
+
+    def mouse_sprite(frame,native):
+        from collections import Counter
+        text,meta,rgb,width=frame
+        row,col=divmod(text[::2].index(0xcb),80)
+        ox,oy,cell_width,cell_height=(0,0,width//80,16) if native else (meta[7],meta[8],10,meta[10])
+        # Recover the 8x16 source pixels from each of the four cursor cells.
+        pixels=[]
+        for y in range(32):
+            line=[]
+            for x in range(16):
+                glyph_x=x%8
+                scaled_x=glyph_x if native else (glyph_x*cell_width+7)//8
+                px=ox+(col+x//8)*cell_width+scaled_x
+                py=oy+(row+y//16)*cell_height+((y%16)*cell_height+15)//16
+                offset=(py*width+px)*3
+                line.append(rgb[offset:offset+3])
+            pixels.append(line)
+        background=Counter(color for line in pixels for color in line).most_common(1)[0][0]
+        ink=[(x,y) for y,line in enumerate(pixels) for x,color in enumerate(line) if color!=background]
+        assert ink,'The downloaded arrow must be visible'
+        left,right=min(x for x,y in ink),max(x for x,y in ink)
+        top,bottom=min(y for x,y in ink),max(y for x,y in ink)
+        # MSBACKUP redraws its glyphs at sub-cell offsets as mickeys change.
+        # Compare the complete colored shape independent of that translation.
+        return background,[line[left:right+1] for line in pixels[top:bottom+1]]
+
     for frames in observations[1:]:
-        for (expected,_,reference,rw),(actual,meta,rgb,width) in zip(observations[0],frames):
-            assert actual[1::2]==expected[1::2], 'Attribute bytes differ from native MSBACKUP'
-            assert all(a==e or a==FRAME_ALIASES.get(e) for a,e in zip(actual[::2],expected[::2]))
+        for native_frame,vesa_frame in zip(observations[0],frames):
+            expected,_,reference,rw=native_frame
+            actual,meta,rgb,width=vesa_frame
+            assert mouse_sprite(vesa_frame,False)==mouse_sprite(native_frame,True)
+            arrow={code:expected[::2].index(code) for code in (0xcb,0xb2,0xce,0xb4)}
             ox,oy,ch=meta[7],meta[8],meta[10]
             checked=0
-            for cell,code in enumerate(expected[::2]):
-                if code not in (0xb9,0xd9,0xd3,0xcd,0xc8,0xcb,0xb2,0xce,0xb4): continue
+            for cell,code in enumerate(actual[::2]):
+                source_cell=arrow.get(code,cell)
+                reference_text=expected if code in arrow else canvas
+                wanted=reference_text[source_cell*2]
+                assert code==wanted or code==FRAME_ALIASES.get(wanted),(cell,code,wanted)
+                assert actual[cell*2+1]==reference_text[source_cell*2+1],cell
+                if code not in (0xb9,0xd9,0xd3,0xcd,0xc8): continue
                 row,col=divmod(cell,80)
+                source_row,source_col=divmod(source_cell,80)
                 for y in range(ch):
                     for x in range(10):
-                        src=((row*16+y*16//ch)*rw+col*(rw//80)+x*8//10)*3
+                        src=((source_row*16+y*16//ch)*rw+source_col*(rw//80)+x*8//10)*3
                         dst=((oy+row*ch+y)*width+ox+col*10+x)*3
                         assert rgb[dst:dst+3]==reference[src:src+3], (row,col,hex(code),x,y)
                 checked+=1
-            assert checked>=60, 'Must inspect borders and the font-based mouse cursor'
+            assert checked>=60, 'Must inspect the downloaded borders'

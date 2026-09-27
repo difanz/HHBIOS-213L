@@ -86,14 +86,14 @@ install_dos() {
     mv "$image.new" "$image"
 }
 prepare_image() {
-    local install="$root/build/msdos-install" volume path tool
+    local install="$root/build/msdos-install" volume path tool mouse_command mouse_lock
     for tool in mcopy mtype mmd od truncate fuser; do
         command -v "$tool" >/dev/null || die "Disk preparation requires $tool (mtools/coreutils/psmisc)."
     done
     if [[ -f $image ]] && fuser -s "$image"; then
         die "QA disk is in use. Close DOSBox or use --image with a separate disk: $image"
     fi
-    [[ -f $mouse ]] || die "A DOS mouse driver is required; use --mouse or CTMOUSE_EXE ($mouse)."
+    [[ -f $mouse ]] || die "Missing $mouse_driver driver: $mouse (supply --mouse)."
     for path in "$run" "$image" "$msdos_dir" "$msdos_boot" "$mouse"; do
         [[ $path != *'"'* && $path != *$'\n'* && $path != *$'\r'* ]] || die 'Invalid DOSBox path.'
     done
@@ -114,15 +114,27 @@ prepare_image() {
     mcopy -o -i "$volume" "${modules[@]}" "$run/HH20.FNT" ::HHBIOS/
     [[ ! -f $run/SETUP.EXE ]] || mcopy -o -i "$volume" "$run/SETUP.EXE" ::HHBIOS/
     mcopy -s -o -i "$volume" "$drive/PROBES" "$drive"/*.BAT ::QA/
-    mcopy -o -i "$volume" "$mouse" ::DOS/CTMOUSE.EXE
+    if [[ $mouse_driver == vbmouse ]]; then
+        mcopy -o -i "$volume" "$mouse" ::DOS/VBMOUSE.EXE
+        # Leave the large UMB blocks for CKBD and VESA. A small mouse driver
+        # in low memory costs less than forcing the whole display TSR there.
+        mouse_command='C:\DOS\VBMOUSE.EXE install low'
+        mouse_lock=false
+    else
+        mcopy -o -i "$volume" "$mouse" ::DOS/CTMOUSE.EXE
+        mouse_command='LH C:\DOS\CTMOUSE.EXE'
+        mouse_lock=true
+    fi
     dos_lines 'DEVICE=C:\DOS\HIMEM.SYS /TESTMEM:OFF' 'DEVICE=C:\DOS\EMM386.EXE RAM' \
         'DOS=HIGH,UMB' 'FILES=40' 'BUFFERS=20' 'LASTDRIVE=Z' \
         'SHELL=C:\COMMAND.COM C:\ /E:1024 /P' > "$install/CONFIG.SYS"
     dos_lines '@ECHO OFF' 'PROMPT $P$G' 'PATH C:\DOS;C:\HHBIOS;Q:\;Q:\PROBES;Q:\CWSDPMI;Q:\HDPMI' \
-        'C:\DOS\SUBST Q: C:\QA' 'LH C:\DOS\CTMOUSE.EXE' 'CD \HHBIOS' \
+        'C:\DOS\SUBST Q: C:\QA' "$mouse_command" 'CD \HHBIOS' \
         'CALL HHBIOS.BAT' 'CD \' 'VER' 'ECHO TOOLS lists QA applications.' '@ECHO ON' > "$install/AUTOEXEC.BAT"
     mcopy -o -i "$volume" "$install/CONFIG.SYS" "$install/AUTOEXEC.BAT" ::/
     {
+        printf '%s\n' '[sdl]' "autolock=$mouse_lock" 'mouse_emulation=locked' 'middle_unlock=none'
+        [[ $mouse_driver != vbmouse ]] || printf '%s\n' '[dos]' 'vmware=true'
         printf '%s\n' '[dosbox]' 'machine=svga_s3' 'memsize=16' '[cpu]' 'cycles=30000' \
             '[autoexec]' '@echo off' 'imgmount 0 empty -fs none -t floppy'
         printf 'imgmount c "%s" -ide 1m\nboot c:\n' "$image"
