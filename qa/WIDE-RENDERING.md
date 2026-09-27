@@ -38,6 +38,11 @@ uses queried dimensions, format and window information, never a hardcoded HD
 mode number. Unsupported surfaces produce an explicit capability result (77);
 invalid geometry and rendering failures are errors, not skips.
 
+The experiment restores the previous legacy or full VBE mode number, including
+the LFB flag, on normal completion and rendering errors. A legacy AH=0Fh mode
+byte cannot identify a VBE mode. This mode restoration does not save previous
+pixel contents or custom font/CRTC programming.
+
 The 1080p 80x25 viewport is 1280x832 at (320,124). The 132x60 viewport is
 1056x976 at (432,52). Preserving these existing grids leaves margins; filling
 the entire widescreen would require more columns, a larger native bitmap

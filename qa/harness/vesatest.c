@@ -3,10 +3,22 @@
 #include <i86.h>
 #include <conio.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "hostshot.h"
 
 static unsigned char buffer[4096];
+static int query(unsigned ax,unsigned bx)
+{
+    union REGPACK r,records[3];
+    FILE *out;
+    memset(&r,0,sizeof(r)); r.x.ax=0x1412; intr(0x10,&r); records[0]=r;
+    memset(&r,0,sizeof(r)); r.x.ax=ax; r.x.bx=bx; intr(0x10,&r); records[1]=r;
+    memset(&r,0,sizeof(r)); r.x.ax=0x1412; intr(0x10,&r); records[2]=r;
+    out=fopen("QUERY.BIN","wb"); if (!out) return 21;
+    if (fwrite(records,1,sizeof(records),out)!=sizeof(records)) { fclose(out); return 22; }
+    return fclose(out)!=0;
+}
 static void ticks(unsigned n)
 {
     volatile unsigned long __far *clock=MK_FP(0x40,0x6c);
@@ -210,6 +222,8 @@ int main(int argc, char **argv)
     unsigned plane, y, count, frame=0, pitch=100;
     unsigned char mode;
     char name[13];
+    if (argc==4 && strcmp(argv[1],"query")==0)
+        return query((unsigned)strtoul(argv[2],0,16),(unsigned)strtoul(argv[3],0,16));
     if (argc>1 && strcmp(argv[1],"fonts")==0) return fonts();
     if (argc>1 && strcmp(argv[1],"fallback")==0) {
         memset(&r,0,sizeof(r)); r.x.ax=0x1411; intr(0x10,&r);

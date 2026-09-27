@@ -114,6 +114,20 @@ def test_vesa_return_and_register_ownership(dosbox_binary,vesa_build,tmp_path,op
             assert records[3][0]==0x5003
 
 
+@pytest.mark.parametrize('ax,bx',[(0x4f05,0x100),(0x4f06,1),(0x4f06,3),(0x4f07,1)])
+def test_vesa_readonly_vbe_queries_keep_console(dosbox_binary,vesa_build,tmp_path,ax,bx):
+    for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
+    shutil.copy2(ROOT/'fonts/HZK16',tmp_path)
+    shutil.copy2(ROOT/'fonts/HH20.FNT',tmp_path)
+    files=run_dos(dosbox_binary,tmp_path,['READ5','VESA',f'VESATEST query {ax:x} {bx:x}'],
+                  settings='\n[dosbox]\nmachine=svga_s3\n')
+    raw=files['QUERY.BIN'].read_bytes(); assert len(raw)==60
+    before,result,after=[struct.unpack_from('<10H',raw,i*20) for i in range(3)]
+    assert before[0]==0, 'Console must be available before querying the BIOS'
+    assert after[0]==0, 'Read-only VBE query disabled the Chinese renderer'
+    if result[0]!=0x004f: pytest.skip(f'BIOS does not support query {ax:04x}/{bx:04x}')
+
+
 def test_vesa_prompt_bitmap_wide_text_and_pixels(dosbox_binary,vesa_build,tmp_path,pytestconfig):
     for p in vesa_build.glob('*.COM'): shutil.copy2(p,tmp_path)
     shutil.copy2(ROOT/'fonts/HZK16',tmp_path)

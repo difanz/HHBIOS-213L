@@ -130,10 +130,13 @@ static void repaint(void)
     if (!active) return;
     hide_cursor(); refresh(); show_cursor();
 }
-static void suspend(void)
+static u8 suspend(void)
 {
+    u8 previous;
     /* Called before a BIOS mode set, when the old aperture is still valid. */
-    hide_cursor(); active = 0; keyboard();
+    hide_cursor(); previous=active; active = 0; keyboard();
+    /* A failed cursor bank access must remain disabled on BIOS failure. */
+    return previous;
 }
 
 static int activate(u16 preserve)
@@ -267,7 +270,7 @@ static void state(void)
 {
     struct registers size;
     u16 action=request.dx & 255, flags=request.cx, offset, i;
-    u8 was_active=active;
+    u8 was_active=active, was_cursor=cursor_visible;
     u8 FAR *record;
     size=request; size.dx &= 0xff00; bios(&size);
     if (size.ax!=0x004f) { request.ax=size.ax; return; }
@@ -278,10 +281,16 @@ static void state(void)
     record=PTR(u8, request.es, offset);
     /* The software cursor is part of pixel memory, not BIOS state. Remove it
      * before saving so restoration will not add a second XOR cursor. */
-    if (action==1 && active) hide_cursor();
-    if (action==2 && (flags & 1)) active=0;
+    if (action==1 && active) { hide_cursor(); was_active=active; }
+    /* Either VGA hardware or extended VBE registers can change the layout.
+     * Remove the cursor while its old bank/stride is still accessible. */
+    if (action==2 && (flags & 9)) was_active=suspend();
     bios(&request);
-    if (request.ax!=0x004f) { active=was_active; return; }
+    if (request.ax!=0x004f) {
+        active=was_active; keyboard();
+        if (was_cursor && !cursor_visible) show_cursor();
+        return;
+    }
     if (action==1) {
         for (i=0; i<64; ++i) record[i]=0;
         record[0]='H'; record[1]='H'; record[2]='V'; record[3]=1;
@@ -290,7 +299,8 @@ static void state(void)
         record[10]=(u8)cursor_shape; record[11]=(u8)(cursor_shape >> 8);
         record[12]=cursor_on; record[13]=(u8)flags; record[14]=traditional;
         record[15]=blink;
-    } else if (flags & 1) {
+        if (was_cursor) show_cursor();
+    } else if (flags & 9) {
         if (record[0]=='H' && record[1]=='H' && record[2]=='V' && record[3]==1 &&
             record[13]==(u8)flags && record[4]<=1 && record[7]<8) {
             active=record[4]; logical_mode=record[5]; direct=record[6];
@@ -410,20 +420,29 @@ u16 CALL dispatch(void)
             u8 previous=active;
             u8 previous_cursor=cursor_visible;
             u16 mode=request.bx & 0x3fff;
-            suspend(); bios(&request);
+            previous=suspend(); bios(&request);
             if (request.ax==0x004f) {
                 if (mode<=3) { logical_mode=3; direct=1; if (!activate(0)) request.ax=0x014f; }
             } else { active=previous; keyboard(); if (previous_cursor) show_cursor(); }
         } else {
+            /* BX is an input subfunction, but 4F06 returns a byte pitch in
+             * the same register. Classify ownership before entering BIOS.
+             * VBE 3.0 scheduling/stereo setters also own the display. */
+            u16 op=request.bx & 255;
+            u8 changes=(u8)((lo==5 && !(request.bx & 0xff00)) ||
+                (lo==6 && (op==0 || op==2)) ||
+                (lo==7 && (op==0 || op==0x80 || op==2 || op==3 ||
+                           op==0x82 || op==0x83 || op==5 || op==6)));
+            u8 previous=active, previous_cursor=cursor_visible;
+            if (changes) previous=suspend();
             bios(&request);
-            /* A client changing framebuffer layout owns the display even
-             * when it did not first select a different mode. */
-            if (request.ax==0x004f && ((lo==5 && !(request.bx & 0xff00)) ||
-                (lo==6 && (request.bx & 255)!=1 && (request.bx & 255)!=3) ||
-                (lo==7 && (request.bx & 127)==0))) {
-                active=0; cursor_visible=0; keyboard();
+            if (changes && request.ax!=0x004f) {
+                active=previous; keyboard();
+                if (previous_cursor) show_cursor();
             }
         }
+        /* Cursor removal or rollback can itself lose the graphics bank. */
+        if (!active) keyboard();
         return 1;
     }
     if (!function) {

@@ -360,3 +360,125 @@ def test_prompt_and_wide_string_bank_once_per_operation(vesa_driver,operation):
     m.uc.mem_write(0x30000,b'Long input method prompt\0')
     m.run(AX=operation,BX=0x1e,CX=0,DX=0x1900,ES=0x3000,SI=0,limit=1000000)
     assert banks==[0,1]
+
+
+@pytest.mark.parametrize('ax,bx,returned_bx,changes_layout', [
+    (0x4f05,0,0,True), (0x4f05,0x100,0x100,False),
+    (0x4f06,0,257,True), (0x4f06,1,100,False),
+    (0x4f06,2,259,True), (0x4f06,3,4096,False),
+    (0x4f07,0,0,True), (0x4f07,0x80,0x80,True),
+    (0x4f07,1,1,False), (0x4f07,4,4,False),
+    (0x4f07,2,2,True), (0x4f07,3,3,True),
+    (0x4f07,0x82,0x82,True), (0x4f07,0x83,0x83,True),
+    (0x4f07,5,5,True), (0x4f07,6,6,True),
+])
+@pytest.mark.parametrize('status',[0x004f,0x014f])
+def test_vbe_layout_ownership_uses_input_subfunction(vesa_driver,ax,bx,returned_bx,changes_layout,status):
+    calls=[]
+    def bios(m):
+        calls.append((m.get('AX'),m.get('BX')))
+        assert calls==[(ax,bx)]
+        assert m.get('ECX')==0x12340320 and m.get('EDX')==0x56780000
+        m.put('AX',status); m.put('BX',returned_bx)
+    m=Driver(vesa_driver,bios)
+    m.write('active',b'\1'); m.write('keyboard_segment',b'\0\x20')
+    m.uc.mem_write(0x20101,b'\x12')
+    m.run(AX=ax,BX=bx,ECX=0x12340320,EDX=0x56780000)
+    expected=not (status==0x004f and changes_layout)
+    assert m.read('active')==bytes([expected])
+    assert m.uc.mem_read(0x20101,1)==bytes([0x12 if expected else 0xff])
+    assert (m.get('AX'),m.get('BX'))==(status,returned_bx)
+
+
+@pytest.mark.parametrize('operation', ['bank','stride','display-start','state'])
+@pytest.mark.parametrize('status',[0x004f,0x014f])
+def test_cursor_removed_before_external_layout_change_and_restored_on_failure(vesa_driver,operation,status):
+    events=[]
+    def bios(m):
+        ax=m.get('AX')
+        if ax==0x4f05 and operation=='bank' and m.get('DX')==7:
+            events.append(('external',ax)); m.put('AX',status)
+        elif ax==0x4f05:
+            events.append(('bank',m.get('DX'))); m.put('AX',0x004f)
+        elif ax==0x4f04 and m.get('DX')==0:
+            events.append(('size',0)); m.put('BX',1); m.put('AX',0x004f)
+        else:
+            events.append(('external',ax)); m.put('AX',status)
+    m=Driver(vesa_driver,bios)
+    m.write('active',b'\1'); m.write('banked_text',b'\1'); m.write('text_bank',b'\1\0')
+    # Draw the software cursor through the public BIOS interface first.
+    m.run(AX=0x0100,CX=0x0d0e)
+    assert events==[('bank',0),('bank',1)]
+    events.clear()
+    ax,bx,cx,dx={
+        'bank':(0x4f05,0,0,7), 'stride':(0x4f06,2,128,0),
+        'display-start':(0x4f07,0,0,8), 'state':(0x4f04,0,8,2),
+    }[operation]
+    m.run(AX=ax,BX=bx,CX=cx,DX=dx,ES=0x3000)
+    expected=([('size',0)] if operation=='state' else [])
+    expected += [('bank',0),('bank',1),('external',ax)]
+    if status!=0x004f: expected += [('bank',0),('bank',1)]
+    assert events==expected
+    assert m.get('AX')==status
+    assert m.read('active')==bytes([status!=0x004f])
+
+
+@pytest.mark.parametrize('mask',[1,2,4,8,9,15])
+@pytest.mark.parametrize('status',[0x004f,0x014f])
+def test_state_restore_of_external_registers_releases_display(vesa_driver,mask,status):
+    calls=[]
+    def bios(m):
+        calls.append(m.get('DX'))
+        assert m.get('AX')==0x4f04 and m.get('CX')==mask
+        if m.get('DX')==0: m.put('BX',1); m.put('AX',0x004f)
+        else: m.put('AX',status)
+    m=Driver(vesa_driver,bios)
+    m.write('active',b'\1'); m.write('keyboard_segment',b'\0\x20')
+    m.uc.mem_write(0x20101,b'\x12')
+    # A state saved while HHBIOS did not own the display has no private tag.
+    m.uc.mem_write(0x30000,b'\xa5'*128)
+    m.run(AX=0x4f04,BX=0,CX=mask,DX=2,ES=0x3000)
+    assert calls==[0,2] and m.get('AX')==status
+    expected=not (status==0x004f and mask&9)
+    assert m.read('active')==bytes([expected])
+    assert m.uc.mem_read(0x20101,1)==bytes([0x12 if expected else 0xff])
+    assert m.uc.mem_read(0x30000,128)==b'\xa5'*128
+
+
+@pytest.mark.parametrize('ax,bx,dx',[(0x4f02,0x1ff,0),(0x4f06,2,0),
+                                  (0x4f04,0,1),(0x4f04,0,2)])
+@pytest.mark.parametrize('status',[0x004f,0x014f])
+def test_cursor_bank_failure_keeps_renderer_and_keyboard_disabled(vesa_driver,ax,bx,dx,status):
+    fail_bank=False
+    def bios(m):
+        nonlocal fail_bank
+        if m.get('AX')==0x4f05:
+            m.put('AX',0x014f if fail_bank else 0x004f); fail_bank=False
+        elif m.get('AX')==0x4f04 and m.get('DX')==0:
+            m.put('BX',1); m.put('AX',0x004f)
+        else: m.put('AX',status)
+    m=Driver(vesa_driver,bios)
+    m.write('active',b'\1'); m.write('banked_text',b'\1'); m.write('text_bank',b'\1\0')
+    m.write('keyboard_segment',b'\0\x20')
+    m.run(AX=0x0100,CX=0x0d0e)
+    fail_bank=True
+    m.run(AX=ax,BX=bx,CX=9,DX=dx,ES=0x3000)
+    assert m.get('AX')==status and m.read('active')==b'\0'
+    assert m.uc.mem_read(0x20101,1)==b'\xff'
+
+
+def test_cursor_redraw_bank_failure_after_bios_failure_disables_keyboard(vesa_driver):
+    banks=0
+    def bios(m):
+        nonlocal banks
+        if m.get('AX')==0x4f05:
+            banks+=1; m.put('AX',0x014f if banks==3 else 0x004f)
+        else: m.put('AX',0x014f)
+    m=Driver(vesa_driver,bios)
+    m.write('active',b'\1'); m.write('banked_text',b'\1'); m.write('text_bank',b'\1\0')
+    m.write('keyboard_segment',b'\0\x20')
+    m.run(AX=0x0100,CX=0x0d0e)
+    banks=0
+    m.run(AX=0x4f06,BX=2,CX=128)
+    assert banks==3 and m.get('AX')==0x014f
+    assert m.read('active')==b'\0' and m.uc.mem_read(0x20101,1)==b'\xff'

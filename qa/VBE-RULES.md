@@ -32,11 +32,19 @@ their own bank/WinFuncPtr routines while HHBIOS is suspended.
 
 VESA appends one 64-byte ownership record to the BIOS's `4F04h` state buffer and
 includes it in size queries. It validates size/segment bounds and returns native
-BIOS errors. Hardware restoration changes ownership only when the hardware-state
-mask is requested. A valid private record can restore the console; an unrelated
-or invalid record leaves rendering suspended. Saved state does not include pixel
+BIOS errors. Restoration of either controller hardware (CX bit 0) or extended
+register state (CX bit 3) changes display ownership. A valid private record can
+restore the console; an unrelated or invalid record leaves rendering suspended.
+Saved state does not include pixel
 memory, just as the underlying VBE service does not save it. Successful external
-bank, stride or display-start changes also relinquish console ownership.
+bank, stride or display-start changes also relinquish console ownership,
+including VBE 3.0 scheduled and stereoscopic display-start operations. Read-only
+queries retain ownership. The input subfunction determines this policy; the
+returned BX from 4F06h contains bytes per scanline, not a subfunction number.
+The software cursor is erased before a layout change, while its original bank
+and stride are valid. Failed BIOS calls restore ownership and the cursor unless
+erasing it already failed a bank operation; that failure must leave rendering
+and CKBD interception disabled.
 
 These additional return/state paths belong to VESA. Legacy VGA's small mode-set
 guard still leaves VBE text-mode selection under BIOS control and does not

@@ -108,6 +108,13 @@ int main(int argc, char **argv)
     if (!logfile) return 3;
     number = (unsigned)strtoul(argv[2], NULL, 16);
     memset(&r, 0, sizeof(r));
+    if (!strcmp(argv[1], "set") || !strcmp(argv[1], "current")) {
+        r.x.ax = !strcmp(argv[1], "set") ? 0x4f02 : 0x4f03;
+        r.x.bx = number; call(&r);
+        save("CURRENT.BIN", &r, sizeof(r));
+        fclose(logfile);
+        return r.x.ax==0x004f ? 0 : 77;
+    }
     if (!strcmp(argv[1], "invalid")) {
         r.x.ax = 0x4f02; r.x.bx = 0x1ff; call(&r);
         if (r.x.ax == 0x4f) fail("invalid-mode-accepted");

@@ -11,6 +11,7 @@ import pytest
 from qa.spec.dos import ROOT, run_dos
 from qa.spec.pixels import native_rows
 from qa.spec.test_vesa_api import Surface
+from qa.spec.test_vbe import vbe_binary
 
 pytestmark = pytest.mark.dos
 PALETTE = [(0,0,0),(0,0,170),(0,170,0),(0,170,170),(170,0,0),(170,0,170),
@@ -142,6 +143,25 @@ def test_wide_invalid_geometry_is_not_an_unsupported_mode(dosbox_binary,wideview
     files=run_dos(dosbox_binary,tmp_path,[('WIDEVIEW',1)],settings='\n[dosbox]\nmachine=svga_s3\n')
     assert files['STATUS.BIN'].read_bytes()==b'\1\0'
     assert 'FRAME.BIN' not in files and 'FONT16.BIN' not in files and 'RESULT.BIN' not in files
+
+
+@pytest.mark.parametrize('render_error',[False,True])
+@pytest.mark.parametrize('previous',[0x101,0x4101])
+def test_wide_restores_previous_vbe_mode(dosbox_binary,wideview_build,vbe_binary,tmp_path,render_error,previous):
+    shutil.copy2(wideview_build,tmp_path); shutil.copy2(vbe_binary,tmp_path)
+    fixture(tmp_path,800,600,80,25,1,8)
+    if render_error:
+        # Invalid glyph discovered after changing the video mode.
+        with (tmp_path/'WIDE.IN').open('r+b') as f:
+            f.seek(20+8192); f.write(struct.pack('<H',512))
+    files=run_dos(dosbox_binary,tmp_path,[f'VBE set {previous:x}','VBE current 0',
+                  'copy CURRENT.BIN BEFORE.BIN',('WIDEVIEW',int(render_error)),
+                  'VBE current 0'],settings='\n[dosbox]\nmachine=svga_s3\n')
+    assert files['STATUS.BIN'].read_bytes()==struct.pack('<H',int(render_error))
+    status,mode=struct.unpack_from('<HH',files['CURRENT.BIN'].read_bytes())
+    old_status,old_mode=struct.unpack_from('<HH',files['BEFORE.BIN'].read_bytes())
+    assert old_status==status==0x004f and old_mode&0x3fff==previous&0x3fff
+    assert mode&0x7fff==old_mode&0x7fff
 
 
 @pytest.mark.parametrize('width,height,cols,rows,scale,bpp', [

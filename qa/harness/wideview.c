@@ -183,10 +183,18 @@ static int experiment(void)
     if (fclose(out)) result=1;
     if (result) goto close;
     r.x.ax=0x0f00; intr(0x10,&r); previous=r.x.ax&127;
+    /* AH=0F reports only a legacy byte and can alias an unrelated mode.
+     * Keep the full VBE mode and LFB flag when the current-mode query works. */
+    r.x.ax=0x4f03; intr(0x10,&r);
+    if (r.x.ax==0x004f) previous=r.x.bx&0x7fff;
     r.x.ax=0x4f02; r.x.bx=surface.mode; intr(0x10,&r);
     result=r.x.ax!=0x004f;
     if (!result) result=!palette() || !render(in) || !capture() || hostshot();
-    memset(&r,0,sizeof(r)); r.x.ax=previous; intr(0x10,&r);
+    memset(&r,0,sizeof(r));
+    if (previous>=0x100) { r.x.ax=0x4f02; r.x.bx=previous; }
+    else r.x.ax=previous;
+    intr(0x10,&r);
+    if (previous>=0x100 && r.x.ax!=0x004f) result=1;
     if (!result) {
         out=fopen("RESULT.BIN","wb");
         if (!out) { result=1; goto close; }
