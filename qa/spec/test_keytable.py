@@ -450,6 +450,8 @@ def test_tables_and_vesa_release_all_memory(dosbox_binary, memory_build, table_b
                                            tmp_path, xms, low, local, all_tables):
     for path in memory_build.glob('*.COM'):
         shutil.copy2(path, tmp_path)
+    # Measure the same CPU variant whose resident offsets we assert below.
+    (tmp_path/'CKBD.COM').write_bytes(table_binary[0])
     for name in ('HZK16', 'HH20.FNT'):
         shutil.copy2(ROOT/'fonts'/name, tmp_path)
     result = subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/imetable.c',

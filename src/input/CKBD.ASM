@@ -447,12 +447,18 @@ INT_9		PROC	FAR
 		CMP	BL,10H
 		JZ	L_9001
 		TEST	AL,BL			;判SHIFT按下?
-		JZ	L_9010
+		JZ	L_900UP
 		JMP	SHORT L_9002
 L_9001:
 		TEST	AH,BL
-		JZ	L_9010
+		JZ	L_900UP
 L_9002:
+; Remember presses even inside a menu: its key releases must not toggle us.
+		CMP	D_SHIFT_DOWN,0
+		MOV	D_SHIFT_DOWN,1
+		JNZ	L_9010
+		CMP	D_INKEY,0
+		JNZ	L_9010
 		XOR	K_DEL,0FFH		;转换
 		JZ	L_9003
 		CALL	L_1404			;关提示行
@@ -460,6 +466,8 @@ L_9002:
 L_9003:
 		CALL	S_CXTUX 		;重显提示行
 		JMP	SHORT L_9030
+L_900UP:
+		MOV	D_SHIFT_DOWN,0
 L_9010:
 		AND	AL,0FH
 		CMP	AL,0FH			;判CTRL+ALT+双SHIFT?
@@ -1147,11 +1155,17 @@ K_TCHZ	EQU	$
 		JNZ	L_XTK1E
 		MOV	SI,OFFSET D_QR
 		CALL	S_QTXS			;显示提示信息
-		CALL	S_INT16 		;键入
+L_CONFIRM:
+		CALL	S_INT16
+		CMP	AL,1BH
+		JZ	L_CANCEL
 		AND	AL,5FH
-		CMP	AL,'Y'                  ;判?
+		CMP	AL,'Y'
 		JZ	L_XTK1D1
-		JMP	S_CXTUX 		;重显提示行
+		CMP	AL,'N'
+		JNZ	L_CONFIRM
+L_CANCEL:
+		JMP	S_CXTUX
 L_XTK1D1:
 		MOV	CS:D_EXIT,2
 		RET
@@ -3889,42 +3903,82 @@ S_JRCL		ENDP
 		INCLUDE	KEYEDIT.INC
 		INCLUDE	KEYTABLE.INC
 
+D_SHIFT_DOWN	DB	0
 D_EXIT		DB	0
 D_INT28		DD	0
 D_INDOS		DD	0
+D_CRITERR	DD	0
 D_28SS		DW	0
 D_28SP		DW	0
 		DW	80H DUP(0)
 D_28STK		EQU	$
 
 INT_28		PROC	FAR
+		PUSHF
 		CMP	CS:D_EXIT,0
 		JZ	L_28C
-		MOV	AX,WORD PTR CS:D_INDOS+2
-		OR	AX,AX
-		JZ	L_28GO
+		PUSH	AX
+		PUSH	BX
+		PUSH	CX
+		PUSH	DX
+		PUSH	SI
+		PUSH	DI
+		PUSH	BP
+		PUSH	DS
+		PUSH	ES
+		CMP	CS:D_INKEY,0
+		JNZ	L_28RET
 		LES	BX,CS:D_INDOS
-		CMP	BYTE PTR ES:[BX+1],0
-		JNZ	L_28C
-L_28GO:
+		CMP	BYTE PTR ES:[BX],1
+		JA	L_28RET
+		LES	BX,CS:D_CRITERR
+		CMP	BYTE PTR ES:[BX],0
+		JNZ	L_28RET
 		MOV	AL,CS:D_EXIT
 		MOV	CS:D_EXIT,0
+		CLI
 		MOV	CS:D_28SS,SS
 		MOV	CS:D_28SP,SP
 		PUSH	CS
 		POP	SS
 		MOV	SP,OFFSET D_28STK
+		CLD
 		STI
 		CMP	AL,1
 		JZ	L_28EX
 		XOR	SI,SI
 		MOV	AX,4A06H
 		INT	2FH
+; A busy display driver can defer unloading. Retry at the next DOS idle.
+		MOV	AX,4A06H
+		MOV	SI,3
+		XOR	BX,BX
+		INT	2FH
+		CMP	BX,4A06H
+		JNZ	L_28DONE
+		MOV	CS:D_EXIT,2
+L_28DONE:
+; The reader frees CKBD without erasing it. Leave before another allocation.
+		CLI
+		MOV	SS,CS:D_28SS
+		MOV	SP,CS:D_28SP
+L_28RET:
+		POP	ES
+		POP	DS
+		POP	BP
+		POP	DI
+		POP	SI
+		POP	DX
+		POP	CX
+		POP	BX
+		POP	AX
+L_28C:
+		POPF
+		JMP	CS:D_INT28
 L_28EX:
+; Only the emergency key chord terminates the foreground process.
 		MOV	AX,4CFFH
 		INT	21H
-L_28C:
-		JMP	CS:D_INT28
 INT_28		ENDP
 
 A_BUF		DW	0			;公用缓冲区指针
@@ -4237,6 +4291,23 @@ L_SI_TABLE:
 		INT	21H
 		MOV	WORD PTR D_INDOS,BX
 		MOV	WORD PTR D_INDOS+2,ES
+; DOS 2 keeps CritErr after InDOS. DOS 3+ returns it at the SDA base;
+; querying that address also covers DOS 3.0 layouts which differ by OEM.
+		INC	BX
+		MOV	WORD PTR D_CRITERR,BX
+		MOV	WORD PTR D_CRITERR+2,ES
+		MOV	AH,30H
+		INT	21H
+		CMP	AL,3
+		JB	L_SI_FLAGS
+		PUSH	DS
+		MOV	AX,5D06H
+		INT	21H
+		MOV	AX,DS
+		POP	DS
+		MOV	WORD PTR D_CRITERR,SI
+		MOV	WORD PTR D_CRITERR+2,AX
+L_SI_FLAGS:
 
 
 		MOV	AX,D_SPCZ
