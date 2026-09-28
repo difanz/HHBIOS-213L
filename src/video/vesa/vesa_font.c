@@ -9,6 +9,12 @@
 #define FONT_MAP_CACHE 64U
 #define FONT_CACHE 60U
 
+enum {
+  kHalfGlyph = 0x8000U,
+  kCroppedGlyph = 0x4000U,
+  kCacheLengthMask = 0x3fffU
+};
+
 u32 CALL font_entry;
 u16 CALL font_kind;
 u16 CALL font_handle;
@@ -35,7 +41,8 @@ u8 CALL font_custom[256]; /* bit 0: application bitmap, bit 1: changed */
 static u16 custom_active;
 static u16 keys[FONT_CACHE];
 static u16 cache_offsets[FONT_CACHE];
-/* The high bit marks a compact, single-cell record. */
+/* Upper bits describe the record; lower bits count its arena bytes.
+ * Cropped records begin with two bytes: first row, then stored row count. */
 static u16 cache_lengths[FONT_CACHE];
 static u16 loaded_compact;
 /* Bit 0: valid, bit 1: recently used (second-chance replacement). */
@@ -140,17 +147,15 @@ static int TransferFontBytes(u32 offset, void* buffer, u16 size, u16 writing) {
 /* Western records often contain an entirely empty second cell. Store only
  * the first cell, without resampling or dropping any nonzero source pixels.
  * Small records already fit the alphabet and avoid this extra cache format. */
-static u16 CompactGlyph(u8* pixels) {
+static u16 CompactGlyph(u8* pixels, u16* format) {
   u16 stride = (font_width * 2 + 7) / 8;
   u16 half = (font_width + 7) / 8;
   u16 unused = font_width & 7;
   u16 x, y;
   u16 at = 0;
-  /* If even A-Z cannot remain resident, repeated alphabet output repacks
-   * every miss. Keep those large records raw instead of paying that cost. */
-  if (half * font_height > (sizeof(cache) - FONT_MAP_CACHE * 2) / 26) {
-    return 0;
-  }
+  u16 first = font_height;
+  u16 last = 0;
+  u16 length;
   for (y = 0; y < font_height; ++y) {
     if (unused && (pixels[y * stride + half - 1] & (255 >> unused))) {
       return 0;
@@ -160,11 +165,46 @@ static u16 CompactGlyph(u8* pixels) {
         return 0;
       }
     }
+    for (x = 0; x < half; ++x) {
+      if (pixels[y * stride + x]) {
+        if (first == font_height) {
+          first = y;
+        }
+        last = y + 1;
+        break;
+      }
+    }
   }
-  for (y = 0; y < font_height; ++y) {
+  *format = kHalfGlyph;
+  if (half * font_height <= (sizeof(cache) - FONT_MAP_CACHE * 2) / 26) {
+    first = 0;
+    last = font_height;
+  } else {
+    if (!last) {
+      first = 0;
+    }
+    length = (last - first) * half + 2;
+    /* Crop whole blank rows only when this lets an alphabet fit. Dense
+     * records stay raw rather than being repacked on every cache miss. */
+    if (length > (sizeof(cache) - FONT_MAP_CACHE * 2) / 26) {
+      return 0;
+    }
+    *format |= kCroppedGlyph;
+  }
+  for (y = first; y < last; ++y) {
     for (x = 0; x < half; ++x) {
       pixels[at++] = pixels[y * stride + x];
     }
+  }
+  if (*format & kCroppedGlyph) {
+    /* Move backwards: a header inserted before packing could overwrite
+     * source pixels when the first row contains ink. */
+    for (x = at; x; --x) {
+      pixels[x + 1] = pixels[x - 1];
+    }
+    pixels[0] = (u8)first;
+    pixels[1] = (u8)(last - first);
+    at += 2;
   }
   return at;
 }
@@ -175,10 +215,11 @@ static void CacheGlyph(u16 index, u16 slot, u16 size) {
   u16 compact = 0;
   u16 i;
   if (slot < 256 && size > FONT_RECORD) {
-    i = CompactGlyph(pixels);
+    i = CompactGlyph(pixels, &compact);
     if (i) {
       length = i;
-      compact = 0x8000;
+    } else {
+      compact = 0;
     }
   }
   if (next_byte + length > sizeof(cache) - FONT_MAP_CACHE * 2) {
@@ -187,7 +228,7 @@ static void CacheGlyph(u16 index, u16 slot, u16 size) {
   /* Reusing arena bytes retires every overlapping entry before the copy. */
   for (i = 0; i < FONT_CACHE; ++i) {
     if (valid[i] && cache_offsets[i] < next_byte + length &&
-        cache_offsets[i] + (cache_lengths[i] & 0x7fff) > next_byte) {
+        cache_offsets[i] + (cache_lengths[i] & kCacheLengthMask) > next_byte) {
       valid[i] = 0;
     }
   }
@@ -271,8 +312,17 @@ static u8* LoadGlyph(u16 code) {
   }
   valid[i] |= 2;
   lookup[bucket] = (u8)i;
-  loaded_compact = cache_lengths[i] & 0x8000;
-  return cache + FONT_MAP_CACHE * 2 + cache_offsets[i];
+  loaded_compact = cache_lengths[i] & kHalfGlyph;
+  glyph_data = cache + FONT_MAP_CACHE * 2 + cache_offsets[i];
+  if (cache_lengths[i] & kCroppedGlyph) {
+    u16 half = (font_width + 7) / 8;
+    u8* expanded = (u8*)doubled_glyph;
+    ClearBytes(expanded, half * font_height);
+    CopyBytes(expanded + glyph_data[0] * half, glyph_data + 2,
+              glyph_data[1] * half);
+    return expanded;
+  }
+  return glyph_data;
 }
 
 void CALL font_get(u16 code, u16* out) {

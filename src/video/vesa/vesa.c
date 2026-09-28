@@ -291,6 +291,24 @@ static void ShowCursor(void) {
     cursor_visible = active;
   }
 }
+static void MoveCursor(u16 page, u16 position) {
+  WriteBdaWord(0x50 + (page & 7) * 2, position);
+  if (page != active_page || (cursor_visible && cursor_position == position)) {
+    return;
+  }
+  if (!cursor_visible &&
+      (!cursor_on || (cursor_shape & 0x2000) || !IsTextPosition(position) ||
+       mouse_covers(position))) {
+    return;
+  }
+  /* Erase and draw under one graphics mapping. The BDA update must survive
+   * even when the adapter rejects that mapping and disables rendering. */
+  if (begin_draw()) {
+    HideCursor();
+    ShowCursor();
+    end_draw();
+  }
+}
 static void RefreshConsole(u16 show_cursor) {
   u16 changed;
   if (!active || !text_ready()) {
@@ -774,6 +792,20 @@ static void ScrollText(u16 page_number, u8 down, u16 count, u16 attribute,
       copied = active;
     }
   }
+  if (!left && right == TEXT_COLS - 1) {
+    u16 source = (first + (down ? 0 : count)) * TEXT_COLS;
+    u16 destination = (first + (down ? count : 0)) * TEXT_COLS;
+    u16 cleared = (down ? first : last + 1 - count) * TEXT_COLS;
+    u16 value = (attribute << 8) | 32;
+    move_cells(text, destination, source,
+                (last - first + 1 - count) * TEXT_COLS);
+    fill_cells(text + cleared, value, count * TEXT_COLS);
+    if (copied) {
+      fill_cells(PTR(u16, resident_segment, (u16)(shadow + cleared)),
+                  ~value, count * TEXT_COLS);
+    }
+    return;
+  }
   for (y = 0; y <= last - first; ++y) {
     u16 row = down ? last - y : first + y;
     for (x = left; x <= right; ++x) {
@@ -782,9 +814,6 @@ static void ScrollText(u16 page_number, u8 down, u16 count, u16 attribute,
         value = text[(down ? row - count : row + count) * 80 + x];
       }
       text[row * 80 + x] = value;
-      if (copied && (down ? row < first + count : row + count > last)) {
-        shadow[row * 80 + x] = ~value;
-      }
     }
   }
 }
@@ -1378,9 +1407,7 @@ u16 CALL dispatch(void) {
       ShowCursor();
       break;
     case 2:
-      HideCursor();
-      WriteBdaWord(0x50 + (page_number & 7) * 2, request.dx);
-      ShowCursor();
+      MoveCursor(page_number, request.dx);
       break;
     case 3:
       request.dx = CursorPosition(page_number);

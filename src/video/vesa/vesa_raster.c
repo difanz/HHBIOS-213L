@@ -391,7 +391,6 @@ u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down) {
   u16 width = TEXT_COLS * font_width * pixel_scale / 8 + (shift != 0);
   u16 lines = (last - first + 1 - count) * height;
   u16 row;
-  u16 index;
   u16 retained;
   u32 destination;
   u32 source;
@@ -432,14 +431,9 @@ u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down) {
     return 0;
   }
   retained = (last - first + 1 - count) * TEXT_COLS;
-  for (index = 0; index < retained; ++index) {
-    row = first * TEXT_COLS + (down ? retained - index - 1 : index);
-    if (down) {
-      shadow[row + count * TEXT_COLS] = shadow[row];
-    } else {
-      shadow[row] = shadow[row + count * TEXT_COLS];
-    }
-  }
+  move_cells(PTR(u16, resident_segment, (u16)shadow),
+              (first + (down ? count : 0)) * TEXT_COLS,
+              (first + (down ? 0 : count)) * TEXT_COLS, retained);
   return 1;
 }
 

@@ -822,6 +822,52 @@ def test_cursor_bank_failure_keeps_renderer_and_keyboard_disabled(vesa_driver,ax
     assert m.uc.mem_read(0x20101,1)==b'\xff'
 
 
+@pytest.mark.parametrize('failure', [None, 0, 1])
+def test_cursor_move_batches_banks_and_retains_logical_position(vesa_driver, failure):
+    banks = []
+
+    def bios(machine):
+        assert machine.get('AX') == 0x4f05
+        bank = machine.get('DX')
+        banks.append(bank)
+        machine.put('AX', 0x014f if bank == failure else 0x004f)
+
+    machine = Driver(vesa_driver, bios)
+    machine.write('active', b'\1')
+    machine.write('banked_text', b'\1')
+    machine.write('text_bank', b'\1\0')
+    machine.write('keyboard_segment', b'\0\x20')
+    machine.write('screen', struct.pack('<4H', 800, 600, 100, 0xa000))
+    machine.write('framebuffer', struct.pack('<H', 0xa000))
+    # Establish the cursor before arming bank failures.
+    wanted_failure, failure = failure, None
+    machine.run(AX=0x0100, CX=0x0d0e)
+    banks.clear()
+    failure = wanted_failure
+    machine.run(AX=0x0200, BX=0, DX=0x0103)
+    assert machine.uc.mem_read(0x450, 2) == b'\3\1'
+    assert banks == ([0] if failure == 0 else [0, 1])
+    if failure is not None:
+        assert machine.read('active') == b'\0'
+        assert machine.uc.mem_read(0x20101, 1) == b'\xff'
+        return
+    pixels = bytes(machine.uc.mem_read(0xa0000, 60000))
+    assert any(pixels)
+    # Repeated calls and another page's caret must leave the active pixels
+    # intact without entering the graphics bank at all.
+    for page, position in ((0, 0x0103), (1, 0x0709)):
+        banks.clear()
+        machine.run(AX=0x0200, BX=page << 8, DX=position)
+        assert banks == []
+        assert bytes(machine.uc.mem_read(0xa0000, 60000)) == pixels
+        assert machine.uc.mem_read(0x450 + page * 2, 2) == struct.pack('<H', position)
+    machine.run(AX=0x0100, CX=0x2000)
+    banks.clear()
+    machine.run(AX=0x0200, BX=0, DX=0x0207)
+    assert banks == []
+    assert machine.uc.mem_read(0x450, 2) == b'\7\2'
+
+
 def test_cursor_redraw_bank_failure_after_bios_failure_disables_keyboard(vesa_driver):
     banks=0
     def bios(m):

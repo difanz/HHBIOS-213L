@@ -10,6 +10,41 @@ from qa.spec.test_vesa_api import Driver, vesa_driver
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('kind', ['xms', 'ems'])
+@pytest.mark.parametrize('first,last', [(0, 0), (0, 1), (0, 25), (40, 64), (63, 64), (0, 64)])
+def test_cropped_glyph_preserves_blank_rows_and_background(vesa_driver, kind, first, last):
+    width, height, stride = 24, 64, 6
+    data = bytearray(sized_font(width, height))
+    record = 32 + 33736 + stride * height
+    for row in range(height):
+        if not first <= row < last:
+            data[record + row * stride:record + (row + 1) * stride] = bytes(stride)
+    machine = FontMachine(vesa_driver, kind, bytes(data))
+    assert machine.call('font_open') == 1
+    machine.write('screen', struct.pack('<4H', 1920, 1080, 240, 0xa000))
+    for name, value in dict(display_pitch=240, viewport_x=3, viewport_y=1,
+                            pixel_scale=1, raster_height=height).items():
+        machine.write(name, struct.pack('<H', value))
+    machine.write('active', b'\1')
+    original = [bytes((i * 29 + plane * 71) & 255 for i in range(65536))
+                for plane in range(4)]
+    memory = PlanarMemory(machine, original)
+    for attribute in (0x1e, 0xa5):
+        # A second glyph uses the shared unpack buffer between cache hits.
+        machine.call('font_get_large', 0xd6d0, machine.buffer)
+        machine.call('font_draw', 65, attribute, 0, 1)
+        for plane in range(4):
+            expected = bytearray(original[plane])
+            for row in range(height):
+                for column in range(width):
+                    ink = first <= row < last and (column * 3 + row * 5) % 11 < 4
+                    mask = 128 >> ((3 + column) & 7)
+                    offset = (1 + row) * 240 + (3 + column) // 8
+                    color = attribute & (1 << (plane if ink else plane + 4))
+                    expected[offset] = (expected[offset] & ~mask) | (mask if color else 0)
+            assert memory.planes[plane] == expected
+
+
 @pytest.mark.parametrize('width,height', [(8, 16), (9, 23), (10, 20), (12, 29),
                                          (16, 39), (17, 64), (23, 63), (24, 41)])
 @pytest.mark.parametrize('shift', [0, 3, 7])

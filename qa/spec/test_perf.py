@@ -116,7 +116,7 @@ def test_msdos_repeated_paint(dosbox_binary, guest_build, msdos_image, tmp_path,
         (1024, 768, 25): (23, 24, 12),
         (1280, 1024, 25): (16, 17, 14),
         (1280, 1024, 50): (23, 26, 19),
-        (1920, 1080, 25): (40, 18, 18),
+        (1920, 1080, 25): (27, 18, 18),
         (1920, 1080, 50): (24, 29, 21),
     }
     for name, budget in zip(('ASCII_8', 'CHINESE_8', 'SCROLL_16'),

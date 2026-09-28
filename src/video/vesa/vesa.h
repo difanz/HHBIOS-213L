@@ -149,6 +149,9 @@ u16 CALL aperture(void);
 void CALL reprobe(void);
 u16 CALL begin_draw(void);
 void CALL end_draw(void);
+/* Cell ranges must fit in one segment; move_cells permits overlap. */
+void CALL move_cells(u16 FAR* buffer, u16 destination, u16 source, u16 count);
+void CALL fill_cells(u16 FAR* destination, u16 value, u16 count);
 void CALL draw(u16 code, u16 attribute, u16 position);
 void CALL draw_wide(u16 code, u16 attribute, u16 position);
 void CALL bitmap(u16 segment, u16 offset, u16 attribute, u16 position,

@@ -309,7 +309,7 @@ def test_alphabet_fits_cache_and_batches_record_map_reads(vesa_driver, kind):
 
 
 @pytest.mark.parametrize('kind', ['xms', 'ems'])
-@pytest.mark.parametrize('filename,count', [('F1639.FNT', 26), ('F2441.FNT', 8)])
+@pytest.mark.parametrize('filename,count', [('F1639.FNT', 26), ('F2441.FNT', 26)])
 def test_large_native_working_set_reuses_cached_pixels(vesa_driver, kind, filename, count):
     data = (ROOT / 'fonts/large' / filename).read_bytes()
     width, height = struct.unpack_from('<HH', data, 8)
@@ -339,7 +339,7 @@ def test_large_native_working_set_reuses_cached_pixels(vesa_driver, kind, filena
         assert bytes(m.uc.mem_read(0x10000 + m.symbols['text_transfer'], 8192)) == snapshot
 
 
-def test_oversized_alphabet_does_not_repack_every_cache_miss(vesa_driver):
+def test_cropped_alphabet_stays_resident_without_repacking(vesa_driver):
     m = FontMachine(vesa_driver, data=(ROOT / 'fonts/large/F2441.FNT').read_bytes())
     assert m.call('font_open') == 1
     instructions = [0]
@@ -351,29 +351,38 @@ def test_oversized_alphabet_does_not_repack_every_cache_miss(vesa_driver):
     for code in range(65, 91):
         m.call('font_get_large', code, m.buffer)
     instructions[0] = 0
+    moves = m.moves
     for code in range(65, 91):
         m.call('font_get_large', code, m.buffer)
-    # The measured repacking regression exceeded 140,000 instructions here.
-    # Leave room for compiler variation while bounding work on cache misses.
+    assert m.moves == moves
+    # Leave room for compiler variation, but catch a return to the costly
+    # fetch/repack loop (over 140,000 instructions for this working set).
     assert 10000 < instructions[0] < 100000
 
 
 @pytest.mark.parametrize('kind', ['xms', 'ems'])
 @pytest.mark.parametrize('width,height', [(9, 23), (24, 64)])
-def test_dense_glyph_cache_wrap_keeps_every_pixel(vesa_driver, kind, width, height):
+def test_mixed_glyph_cache_wrap_keeps_every_pixel(vesa_driver, kind, width, height):
     stride = (width * 2 + 7) // 8
     record_bytes = (stride * height + 1) & ~1
     random_bytes = random.Random(213)
     records = [bytes(random_bytes.randrange(256) for _ in range(record_bytes))
                for _ in range(61)]
+    if width == 24:
+        for index in range(0, len(records), 3):
+            pixels = bytearray(record_bytes)
+            first = index % 40
+            for row in range(first, first + 20):
+                pixels[row * stride:row * stride + 3] = records[index][row * stride:row * stride + 3]
+            records[index] = bytes(pixels)
     mapping = [slot % len(records) for slot in range(8434)] * 2
     payload = struct.pack('<16868H', *mapping) + b''.join(records)
     data = struct.pack('<8s4HI12x', b'HHFONT2\n', width, height, 8434,
                        len(records), len(payload)) + payload
     m = FontMachine(vesa_driver, kind, data)
     assert m.call('font_open') == 1
-    # Dense records select raw storage. Repeated arena wraps interleave them
-    # with downloaded 16-byte glyphs; their unequal sizes must not alias.
+    # Repeated arena wraps interleave raw, cropped and downloaded 16-byte
+    # glyphs; their unequal sizes and format flags must not alias.
     custom_code = 200
     custom = bytes([0x81, 0x42, 0x24, 0x18] * 4)
     offset = len(payload) + 32768 + custom_code * 16

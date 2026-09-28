@@ -5,6 +5,87 @@
 .386
 extrn display_pitch:word, screen:byte, framebuffer:word
 
+; Text and shadow memory use ordinary loads/stores, not VGA latch copies.
+; Move pairs of cells together, choosing direction for overlapping ranges.
+public move_cells
+move_cells proc near
+    push bp
+    mov bp,sp
+    pushad
+    push ds
+    push es
+    pushf
+    les bx,[bp+4]
+    mov ax,es
+    mov ds,ax
+    mov di,[bp+8]
+    shl di,1
+    add di,bx
+    mov si,[bp+10]
+    shl si,1
+    add si,bx
+    mov cx,[bp+12]
+    jcxz move_cells_done
+    cmp di,si
+    je move_cells_done
+    jb move_cells_forward
+    mov ax,cx
+    shl ax,1
+    add si,ax
+    add di,ax
+    sub si,2
+    sub di,2
+    std
+    shr cx,1
+    jnc move_cells_backward
+    movsw
+move_cells_backward:
+    sub si,2
+    sub di,2
+    rep movsd
+    jmp short move_cells_done
+move_cells_forward:
+    cld
+    shr cx,1
+    rep movsd
+    jnc move_cells_done
+    movsw
+move_cells_done:
+    popf
+    pop es
+    pop ds
+    popad
+    pop bp
+    ret
+move_cells endp
+
+public fill_cells
+fill_cells proc near
+    push bp
+    mov bp,sp
+    pushad
+    push es
+    pushf
+    les di,[bp+4]
+    mov ax,[bp+8]
+    movzx eax,ax
+    mov edx,eax
+    shl eax,16
+    or eax,edx
+    mov cx,[bp+10]
+    cld
+    shr cx,1
+    rep stosd
+    jnc fill_cells_done
+    stosw
+fill_cells_done:
+    popf
+    pop es
+    popad
+    pop bp
+    ret
+fill_cells endp
+
 ; Align a packed cell to its destination byte without expanding both halves
 ; into 32-bit row arrays first. Read only the supplied 1..4 source bytes.
 public raster_pack

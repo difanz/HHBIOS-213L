@@ -11,6 +11,35 @@ from qa.spec.planar_memory import PlanarMemory
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('count', [0, 1, 2, 3, 79, 80, 81, 3920])
+@pytest.mark.parametrize('destination,source', [(0, 80), (80, 0), (1, 0), (0, 1), (0, 0)])
+def test_cell_block_move_preserves_overlap_and_registers(vesa_driver, count, destination, source):
+    machine = Driver(vesa_driver, lambda m: pytest.fail('text moves need no BIOS'))
+    original = bytes((i * 53 + 17) & 255 for i in range(8200))
+    machine.uc.mem_write(0x30000, original)
+    machine.uc.mem_write(0x1e002, struct.pack('<5H', 2, 0x3000, destination, source, count))
+    registers = {name: 0xa1234567 + i for i, name in
+                 enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP'))}
+    machine.run('move_cells', ES=0x4321, EFLAGS=0x602, **registers)
+    expected = bytearray(original)
+    start = 2 + destination * 2
+    expected[start:start + count * 2] = original[2 + source * 2:2 + (source + count) * 2]
+    assert machine.uc.mem_read(0x30000, len(original)) == expected
+    assert all(machine.get(name) == value for name, value in registers.items())
+    assert machine.get('DS') == 0x1000 and machine.get('ES') == 0x4321
+    assert machine.get('EFLAGS') & 0x400
+
+
+@pytest.mark.parametrize('count', [0, 1, 2, 3, 80, 4000])
+def test_cell_block_fill_preserves_guards(vesa_driver, count):
+    machine = Driver(vesa_driver, lambda m: pytest.fail('text fills need no BIOS'))
+    machine.uc.mem_write(0x30000, b'\xa5' * 8004)
+    machine.uc.mem_write(0x1e002, struct.pack('<4H', 2, 0x3000, 0x9e20, count))
+    machine.run('fill_cells', EFLAGS=0x602)
+    assert machine.uc.mem_read(0x30000, 8004) == b'\xa5' * 2 + b'\x20\x9e' * count + b'\xa5' * (8002 - count * 2)
+    assert machine.get('EFLAGS') & 0x400
+
+
 @pytest.mark.parametrize('width,scale,lines', [(8, 1, 0), (8, 1, 2), (16, 1, 16),
                                               (24, 2, 3), (24, 4, 32)])
 @pytest.mark.parametrize('shift', range(8))
