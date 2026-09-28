@@ -13,12 +13,17 @@ class DisplayMode(C.Structure):
     _fields_=[(s,C.c_uint) for s in 'number width height rows banked'.split()]
 
 
+class BiosDisplayMode(C.Structure):
+    _fields_=[(s,C.c_uint) for s in 'number width height bits_per_pixel status'.split()]
+
+
 class Machine(C.Structure):
     _fields_=[(s,C.c_uint) for s in ('dos_major dos_minor conventional_kb free_kb umb_kb cpu '
         'xms_version xms_largest xms_total ems_version ems_pages ems_frame dpmi adapter '
         'vbe_version modes loaded alloc_strategy umb_link edid_status preferred_width '
         'preferred_height preferred_bios display_count display_truncated').split()] + [
-        ('display_modes',DisplayMode*64)]
+        ('display_modes',DisplayMode*512), ('bios_mode_count',C.c_uint),
+        ('bios_modes',BiosDisplayMode*512)]
 
 
 class FontInfo(C.Structure):

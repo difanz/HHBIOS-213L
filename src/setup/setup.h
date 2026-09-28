@@ -17,7 +17,7 @@ enum {
   kVideoDetected,
   kVideoCount
 };
-enum { kMaxDisplayModes = 64, kMaxDisplayFonts = 257 };
+enum { kMaxDisplayModes = 512, kMaxDisplayFonts = 257 };
 enum { kEdidUnavailable, kEdidInvalid, kEdidNoPreferred, kEdidPreferred };
 typedef struct DisplayMode {
   unsigned number;
@@ -26,6 +26,15 @@ typedef struct DisplayMode {
   unsigned rows; /* Hardware limits: bits 0..2 are 80x25, 80x43, 80x50. */
   unsigned banked; /* Readable banking for the variable-size renderer. */
 } DisplayMode;
+enum { kModeUsable, kModeUnavailable, kModeText, kModeFormat,
+       kModeLayout, kModeBanking };
+typedef struct BiosDisplayMode {
+  unsigned number;
+  unsigned width;
+  unsigned height;
+  unsigned bits_per_pixel;
+  unsigned status;
+} BiosDisplayMode;
 enum { kImePinyin = 1, kImeShouwei = 2, kImeTelegraph = 4, kImeWubi = 8 };
 enum { kAdapterUnknown, kAdapterMda, kAdapterCga, kAdapterEga, kAdapterVga };
 enum {
@@ -87,6 +96,8 @@ typedef struct MachineCapabilities {
   unsigned display_count;
   unsigned display_truncated;
   DisplayMode display_modes[kMaxDisplayModes];
+  unsigned bios_mode_count;
+  BiosDisplayMode bios_modes[kMaxDisplayModes];
 } MachineCapabilities;
 typedef struct DisplayFont {
   char name[13];

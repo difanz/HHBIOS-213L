@@ -63,6 +63,39 @@ const DisplayMode* FindDisplayMode(const MachineCapabilities* machine,
   return 0;
 }
 
+static void RecordBiosMode(MachineCapabilities* machine, unsigned number,
+                          const unsigned char* info, unsigned status) {
+  unsigned i;
+  BiosDisplayMode mode;
+  for (i = 0; i < machine->bios_mode_count; ++i) {
+    if (machine->bios_modes[i].number == number) {
+      return;
+    }
+  }
+  if (machine->bios_mode_count == kMaxDisplayModes) {
+    machine->display_truncated = 1;
+    return;
+  }
+  mode.number = number;
+  mode.width = ReadWord(info + 18);
+  mode.height = ReadWord(info + 20);
+  mode.bits_per_pixel = info[25];
+  mode.status = status;
+  i = machine->bios_mode_count++;
+  while (i) {
+    const BiosDisplayMode* previous = &machine->bios_modes[i - 1];
+    if (previous->width < mode.width ||
+        (previous->width == mode.width && previous->height < mode.height) ||
+        (previous->width == mode.width && previous->height == mode.height &&
+         previous->bits_per_pixel <= mode.bits_per_pixel)) {
+      break;
+    }
+    machine->bios_modes[i] = *previous;
+    --i;
+  }
+  machine->bios_modes[i] = mode;
+}
+
 void AddDisplayMode(MachineCapabilities* machine, unsigned number,
                     const unsigned char* info) {
   struct VbeSurface surface;
@@ -81,13 +114,21 @@ void AddDisplayMode(MachineCapabilities* machine, unsigned number,
     machine->preferred_bios = 1;
   }
   if (!DecodeConsoleModeInfo(&surface, info, machine->vbe_version, number)) {
+    unsigned attributes = ReadWord(info);
+    unsigned status = !(attributes & 1) ? kModeUnavailable
+                      : !(attributes & 0x10) ? kModeText
+                      : info[25] != 4 || info[24] != 4 || info[27] != 3
+                          ? kModeFormat : kModeLayout;
+    RecordBiosMode(machine, number, info, status);
     return;
   }
   banked = machine->vbe_version >= 0x102 && info[29] &&
            (info[2 + surface.window] & 1);
   if (!banked && (width != 800 || height != 600 || surface.pitch != 100)) {
+    RecordBiosMode(machine, number, info, kModeBanking);
     return;
   }
+  RecordBiosMode(machine, number, info, kModeUsable);
   if (number == 0x102 || number == 0x104 || number == 0x106) {
     machine->modes |= 1U << ((number - 0x102) / 2);
   }

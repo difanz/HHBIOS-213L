@@ -308,3 +308,66 @@ def test_setup_selects_wide_mode_and_text_layout(dosbox_binary, setup_guest, lan
         'Alt-s', 'Return', 'Alt-x'],settings=(ROOT/'qa/profiles/vesa-hd.conf').read_text())
     batch = (setup_guest/'HHBIOS.BAT').read_text()
     assert '.\\VESA.COM /M:242 /R:50' in batch
+
+
+@pytest.mark.dos
+@pytest.mark.parametrize('language,adapter,driver', [
+    ('EN', 'svga_s3', 'VGA'), ('ZH', 'svga_s3', 'VGA'),
+    ('EN', 'cga', 'CGA'), ('EN', 'hercules', 'HGA'), ('ZH', 'svga_s3', '102')])
+def test_setup_color_preview_and_save(dosbox_binary, setup_guest, language, adapter, driver):
+    (setup_guest/'213L.INI').write_bytes(legacy_ini())
+    run_setup_ui(dosbox_binary, setup_guest, f'/{language} /VIDEO:{driver} /IME:NONE', [
+        'Alt-d', 'capture', 'Alt-l', 'capture', 'Alt-e', 'capture',
+        # White on bright magenta exercises both high intensity bits.
+        'End', 'Tab', 'Home', *(['Down'] * 13), 'capture',
+        'Alt-o', 'capture', 'Alt-o', 'Alt-o',
+        'F3', 'Alt-s', 'Return', 'Alt-x',
+    ], machine=adapter, cpu='386' if driver == '102' else '8086',
+        startup='READ5\nCKBD /E\nVESA' if driver == '102' else '')
+    saved = ini_values((setup_guest/'213L.INI').read_bytes())
+    expected = bytearray(LEGACY_VALUES)
+    expected[5] = 0xdf
+    expected[29:32] = b'NNN'
+    assert saved == expected
+    shots = json.loads((setup_guest/'screenshots.json').read_text())
+    dialogs = [shot for shot in shots if shot['before_key'] == 'dialog']
+    pixels = subprocess.check_output(['convert', str(setup_guest/dialogs[3]['file']),
+                                      '-depth', '8', 'rgb:-'])
+    if adapter == 'hercules':
+        # A monochrome UI must never interpret the requested colors as MDA
+        # underline, inverse video or blinking attributes.
+        palette = set(zip(pixels[::3], pixels[1::3], pixels[2::3]))
+        assert 1 < len(palette) <= 4
+    else:
+        # Both color columns must contain all sixteen swatches; the preview
+        # adds a much wider bright-magenta background. Check pixels, not just INI.
+        colors = list(zip(pixels[::3], pixels[1::3], pixels[2::3]))
+        for index in range(16):
+            level = 85 if index & 8 else 0
+            rgb = tuple(level + (170 if index & bit else 0) for bit in (4, 2, 1))
+            if index == 6:
+                rgb = (170, 85, 0)
+            assert sum(all(abs(a-b) <= 3 for a, b in zip(pixel, rgb))
+                       for pixel in colors) >= 250, (index, rgb)
+        magenta = lambda pixel: pixel[0] > 245 and 75 < pixel[1] < 95 and pixel[2] > 245
+        assert sum(map(magenta, colors)) > dialogs[3]['width'] * 5
+
+
+@pytest.mark.dos
+@pytest.mark.parametrize('language', ['EN', 'ZH'])
+def test_setup_mode_inventory_and_small_layout(dosbox_binary, setup_guest, language):
+    run_setup_ui(dosbox_binary, setup_guest, f'/{language} /VIDEO:102 /IME:NONE', [
+        'Alt-v', 'capture', 'Alt-a', 'capture', 'Next', 'capture', 'End', 'capture',
+        'Home', 'capture', 'Escape', 'Tab', 'End', 'Next', 'capture', 'Alt-o',
+        'F3', 'Alt-s', 'Return', 'Alt-x',
+    ], settings=(ROOT/'qa/profiles/vesa-hd.conf').read_text())
+    batch = (setup_guest/'HHBIOS.BAT').read_text()
+    assert '.\\VESA.COM /M:102' in batch
+    assert '/R:43' not in batch and '/R:50' not in batch
+    shots = json.loads((setup_guest/'screenshots.json').read_text())
+    dialogs = [shot for shot in shots if shot['before_key'] == 'dialog']
+    def pixels(index):
+        return subprocess.check_output(['convert', str(setup_guest/dialogs[index]['file']),
+                                        '-depth', '8', 'rgb:-'])
+    assert pixels(2) != pixels(3), 'End must move beyond the second page'
+    assert pixels(1) == pixels(4), 'Home must return to the first BIOS mode'

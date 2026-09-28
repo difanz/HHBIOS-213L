@@ -1,6 +1,8 @@
 /* Persistent keyboard, display and module choices from the 2.13L format. */
 #include <string.h>
 #include <stdlib.h>
+#include <conio.h>
+#include <dos.h>
 
 #include "forms.h"
 
@@ -141,39 +143,128 @@ void ShowKeyboardOptions(IniSettings* settings) {
 
 static const char* ColorName(unsigned color) {
   static const char* const english[] = {
-      "0 Black", "1 Blue", "2 Green", "3 Cyan", "4 Red", "5 Magenta",
-      "6 Brown", "7 Light gray", "8 Dark gray", "9 Bright blue",
-      "A Bright green", "B Bright cyan", "C Bright red", "D Bright magenta",
-      "E Yellow", "F White"};
+      "Black", "Blue", "Green", "Cyan", "Red", "Magenta",
+      "Brown", "Light gray", "Dark gray", "Bright blue",
+      "Bright green", "Bright cyan", "Bright red", "Bright magenta",
+      "Yellow", "White"};
   static const char* const chinese[] = {
-      "0 黑", "1 蓝", "2 绿", "3 青", "4 红", "5 紫", "6 棕", "7 浅灰",
-      "8 深灰", "9 亮蓝", "A 亮绿", "B 亮青", "C 亮红", "D 亮紫",
-      "E 黄", "F 白"};
+      "黑", "蓝", "绿", "青", "红", "紫", "棕", "浅灰",
+      "深灰", "亮蓝", "亮绿", "亮青", "亮红", "亮紫", "黄", "白"};
   return LocalizedText(english[color], chinese[color]);
+}
+
+static int HasColorDisplay(void) {
+  return UIData->colour != M_MONO && UIData->colour != M_BW;
+}
+
+static void PaintColor(VSCREEN* screen, unsigned row, unsigned col,
+                       unsigned width, unsigned color) {
+  SAREA area;
+  area.row = row;
+  area.col = col;
+  area.height = 1;
+  area.width = width;
+  /* A solid foreground glyph also shows bright colors on CGA, where the
+   * background intensity bit may still mean blink. */
+  uivfill(screen, area, (ATTR)color, (char)0xdb);
+}
+
+static void PaintColorPreview(a_dialog* dialog, unsigned row, unsigned col,
+                              unsigned width, unsigned attribute) {
+  SAREA area;
+  area.row = row;
+  area.col = col;
+  area.height = 1;
+  area.width = width;
+  char names[64];
+  const char* sample = LocalizedText("  HHBIOS  1. Chinese  2. Input  ",
+                                     "  HHBIOS  1. 中文  2. 输入  ");
+  if (!HasColorDisplay()) {
+    sprintf(names, "%s / %s", ColorName(attribute & 15),
+            ColorName(attribute >> 4));
+    sample = names;
+    attribute = UIData->attrs[ATTR_NORMAL];
+  }
+  uivfill(dialog->vs, area, (ATTR)attribute, ' ');
+  uivtextput(dialog->vs, row, col, (ATTR)attribute, sample,
+             strlen(sample) < width ? strlen(sample) : width);
+}
+
+/* In a native text screen, bit 7 must select bright paper, not blinking ink.
+ * Restore the caller's setting when the color dialog closes. HHBIOS graphics
+ * drivers already use all four background bits and ignore this BIOS call. */
+static unsigned SetColorBlink(unsigned enabled) {
+  unsigned char far* mode_control = (unsigned char far*)MK_FP(0x40, 0x65);
+  unsigned previous = (*mode_control & 0x20) != 0;
+  if (HasColorDisplay()) {
+    if (UIData->colour == M_CGA) {
+      *mode_control = (*mode_control & ~0x20) | (enabled ? 0x20 : 0);
+      outp(0x3d8, *mode_control);
+    } else {
+      union REGS registers;
+      memset(&registers, 0, sizeof(registers));
+      registers.x.ax = 0x1003;
+      registers.x.bx = enabled != 0;
+      int86(0x10, &registers, &registers);
+    }
+  }
+  return previous;
+}
+
+typedef struct ColorDialog {
+  a_list foreground;
+  a_list background;
+} ColorDialog;
+
+static void ColorChanged(a_dialog* dialog, void* data) {
+  const ColorDialog* colors = (const ColorDialog*)data;
+  if (HasColorDisplay()) {
+    for (unsigned i = 0; i < 16; ++i) {
+      PaintColor(dialog->vs, i + 2, 2, 3, i);
+      PaintColor(dialog->vs, i + 2, 30, 3, i);
+    }
+  }
+  PaintColorPreview(dialog, 19, 2, 54,
+                    (colors->background.choice << 4) | colors->foreground.choice);
 }
 
 static unsigned SelectColor(unsigned attribute) {
   Form form = {0};
-  a_list foreground = {0};
-  a_list background = {0};
+  ColorDialog selection = {0};
   const char* colors[17];
   for (unsigned i = 0; i < 16; ++i) {
     colors[i] = ColorName(i);
   }
   colors[16] = NULL;
-  foreground.data = background.data = colors;
-  foreground.choice = attribute & 15;
-  background.choice = attribute >> 4;
-  AddParagraph(&form, 1, 2, 25, LocalizedText("Text", "文字颜色"));
-  AddParagraph(&form, 1, 30, 25, LocalizedText("Background", "背景颜色"));
-  AddField(&form, 3, 2, 10, 25, FLD_LISTBOX, &foreground);
-  AddField(&form, 3, 30, 10, 25, FLD_LISTBOX, &background);
-  AddDialogButtons(&form, 15);
-  if (RunForm(&form, LocalizedText("Status color", "提示行颜色"), 17, 60, 0) ==
-      kCmdAccept) {
-    return (background.choice << 4) | foreground.choice;
+  selection.foreground.data = selection.background.data = colors;
+  selection.foreground.choice = attribute & 15;
+  selection.background.choice = attribute >> 4;
+  AddParagraph(&form, 0, 2, 25, LocalizedText("Text", "文字颜色"));
+  AddParagraph(&form, 0, 30, 25, LocalizedText("Background", "背景颜色"));
+  AddField(&form, 2, 6, 16, 21, FLD_LISTBOX, &selection.foreground);
+  AddField(&form, 2, 34, 16, 21, FLD_LISTBOX, &selection.background);
+  AddDialogButtons(&form, 21);
+  form.changed = ColorChanged;
+  form.change_data = &selection;
+  unsigned blink = SetColorBlink(0);
+  ui_event event = RunForm(&form, LocalizedText("Status color", "提示行颜色"),
+                           23, 60, 0);
+  SetColorBlink(blink);
+  if (event == kCmdAccept) {
+    return (selection.background.choice << 4) | selection.foreground.choice;
   }
   return attribute;
+}
+
+typedef struct StatusColors {
+  a_list list;
+  const IniSettings* settings;
+} StatusColors;
+
+static void StatusColorChanged(a_dialog* dialog, void* data) {
+  const StatusColors* colors = (const StatusColors*)data;
+  PaintColorPreview(dialog, 6, 2, 66,
+                    colors->settings->value[kIniColors + colors->list.choice]);
 }
 
 static void ShowColors(IniSettings* settings) {
@@ -187,22 +278,24 @@ static void ShowColors(IniSettings* settings) {
       "输入法标题（文本方式）"};
   for (;;) {
     Form form = {0};
-    a_list list = {0};
-    char labels[4][76];
+    StatusColors colors = {0};
     const char* items[5];
     for (unsigned i = 0; i < 4; ++i) {
-      sprintf(labels[i], "%02X  %s", trial.value[kIniColors + i],
-              LocalizedText(english[i], chinese[i]));
-      items[i] = labels[i];
+      items[i] = LocalizedText(english[i], chinese[i]);
     }
     items[4] = NULL;
-    list.data = items;
-    list.choice = selected;
-    AddField(&form, 1, 2, 4, 66, FLD_LISTBOX, &list);
-    AddButton(&form, 7, 24, 22, LocalizedText("&Edit", "修改 (&E)"), kCmdChange, 0);
+    colors.list.data = items;
+    colors.list.choice = selected;
+    colors.settings = &trial;
+    AddField(&form, 1, 2, 4, 66, FLD_LISTBOX, &colors.list);
+    AddButton(&form, 8, 24, 22, LocalizedText("&Edit", "修改 (&E)"), kCmdChange, 0);
     AddDialogButtons(&form, 10);
+    form.changed = StatusColorChanged;
+    form.change_data = &colors;
+    unsigned blink = SetColorBlink(0);
     ui_event event = RunForm(&form, LocalizedText("Status colors", "提示行颜色"),
                              12, 70, 0);
+    SetColorBlink(blink);
     if (event == kCmdAccept) {
       *settings = trial;
       return;
@@ -210,7 +303,7 @@ static void ShowColors(IniSettings* settings) {
     if (event != kCmdChange) {
       return;
     }
-    selected = list.choice;
+    selected = colors.list.choice;
     trial.value[kIniColors + selected] =
         (unsigned char)SelectColor(trial.value[kIniColors + selected]);
   }
@@ -223,6 +316,13 @@ typedef struct DisplayOption {
   const char* english;
   const char* chinese;
 } DisplayOption;
+
+static void BandColorChanged(a_dialog* dialog, void* data) {
+  const a_list* band = (const a_list*)data;
+  if (HasColorDisplay()) {
+    PaintColor(dialog->vs, 15, 2, 28, band->choice);
+  }
+}
 
 void ShowDisplayOptions(IniSettings* settings) {
   static const DisplayOption options[] = {
@@ -241,8 +341,12 @@ void ShowDisplayOptions(IniSettings* settings) {
   for (;;) {
     Form form = {0};
     a_list band = {0};
-    static const char* const bands[] = {
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", NULL};
+    const char* bands[11];
+    bands[0] = LocalizedText("No band", "无光带");
+    for (unsigned i = 1; i < 10; ++i) {
+      bands[i] = ColorName(i);
+    }
+    bands[10] = NULL;
     unsigned count = sizeof(options) / sizeof(options[0]);
     unsigned old_band = trial.value[kIniBand];
     unsigned band_choice = old_band >= '0' && old_band <= '9' ? old_band - '0' : 0;
@@ -256,9 +360,11 @@ void ShowDisplayOptions(IniSettings* settings) {
               old_band > '9');
     band.data = (void*)bands;
     band.choice = band_choice;
-    AddParagraph(&form, 14, 2, 48,
+    AddParagraph(&form, 14, 2, 29,
                  LocalizedText("VGA status-band color:", "VGA 提示行光带颜色："));
-    AddField(&form, 14, 49, 3, 7, FLD_LISTBOX, &band);
+    AddField(&form, 14, 34, 3, 22, FLD_LISTBOX, &band);
+    form.changed = BandColorChanged;
+    form.change_data = &band;
     AddButton(&form, 17, 14, 32,
               LocalizedText("Status co&lors (all drivers)", "提示行颜色（所有驱动）(&L)"),
               kCmdColors, 0);

@@ -219,7 +219,8 @@ static void ProbeVideo(MachineCapabilities* machine) {
     DecodePreferredTiming(machine, edid);
   }
   /* Normalize every far address; a BIOS list can cross a segment boundary. */
-  for (i = 0; address && address <= 0xffffeUL && i < 512; ++i, address += 2) {
+  for (i = 0; address && address <= 0xffffeUL && i < kMaxDisplayModes;
+       ++i, address += 2) {
     number = *(unsigned far*)MK_FP((unsigned)(address >> 4),
                                    (unsigned)(address & 15));
     if (number == 0xffff) {
@@ -241,7 +242,7 @@ static void ProbeVideo(MachineCapabilities* machine) {
       AddDisplayMode(machine, number, info);
     }
   }
-  if (i == 512 || address > 0xffffeUL) {
+  if (i == kMaxDisplayModes || address > 0xffffeUL) {
     machine->display_truncated = 1;
   }
 }

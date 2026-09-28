@@ -35,6 +35,8 @@ typedef struct Form {
   unsigned check_count;
   unsigned text_used;
   char text[4096];
+  void (*changed)(a_dialog* dialog, void* data);
+  void* change_data;
 } Form;
 
 const char* LocalizedText(const char* en, const char* zh);
@@ -54,5 +56,7 @@ void ShowMessage(const char* text);
 void ShowKeyboardOptions(IniSettings* settings);
 void ShowDisplayOptions(IniSettings* settings);
 void ShowModuleOptions(SetupChoices* choices);
+void ShowVideoOptions(const MachineCapabilities* machine,
+                      const InstallationFiles* files, SetupChoices* choices);
 
 #endif  // HHBIOS_SRC_SETUP_FORMS_H_

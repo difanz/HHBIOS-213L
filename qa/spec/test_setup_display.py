@@ -106,10 +106,30 @@ def test_reject_incompatible_1366_mode(setup_policy,offset,value):
 
 def test_bounded_mode_catalog_does_not_overrun(setup_policy):
     m = Machine(vbe_version=0x200)
-    for number in range(0x200,0x245):
+    for number in range(0x200,0x405):
         add_mode(setup_policy,m,number,mode_info(1280,800))
-    assert m.display_count == 64 and m.display_truncated == 1
-    assert m.display_modes[63].number == 0x23f
+    assert m.display_count == 512 and m.display_truncated == 1
+    assert m.display_modes[511].number == 0x3ff
+    assert m.bios_mode_count == 512
+
+
+def test_complete_catalog_keeps_color_modes_and_rejection_reasons(setup_policy):
+    m = Machine(vbe_version=0x200)
+    add_mode(setup_policy, m, 0x242, mode_info(1920, 1080))
+    add_mode(setup_policy, m, 0x243, mode_info(1920, 1080, bpp=32))
+    add_mode(setup_policy, m, 0x106, mode_info(1280, 1024, pages=0))
+    small = mode_info(640, 480)
+    add_mode(setup_policy, m, 0x12f, small)
+    text = mode_info(132, 50)
+    struct.pack_into('<H', text, 0, 9)
+    add_mode(setup_policy, m, 0x109, text)
+    unavailable = mode_info(800, 600)
+    unavailable[0] &= ~1
+    add_mode(setup_policy, m, 0x200, unavailable)
+    add_mode(setup_policy, m, 0x242, mode_info(1920, 1080))
+    assert m.display_count == 1
+    assert [(mode.number, mode.status) for mode in m.bios_modes[:m.bios_mode_count]] == [
+        (0x109, 2), (0x12f, 4), (0x200, 1), (0x106, 5), (0x242, 0), (0x243, 3)]
 
 
 @pytest.mark.parametrize('video,rows', [(0,43),(4,50),(7,60),(3,51),(3,0xffff)])

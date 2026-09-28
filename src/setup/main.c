@@ -62,16 +62,16 @@ static void DescribeDisplay(char* out, const SetupChoices* selected) {
   const DisplayMode* mode =
       FindDisplayMode(&machine, SelectedVbeMode(selected));
   if (mode) {
-    sprintf(out, "VESA %ux%u (%03Xh), 80x%u", mode->width, mode->height,
-            mode->number, selected->rows ? selected->rows : 25);
+    sprintf(out, "VESA %ux%u, 80x%u", mode->width, mode->height,
+            selected->rows ? selected->rows : 25);
   } else {
     sprintf(out, "%s, 80x%u", kVideoNames[selected->video],
             selected->rows ? selected->rows : 25);
   }
   const DisplayFont* font = SelectedDisplayFont(&machine, &files, selected);
   if (font) {
-    sprintf(out + strlen(out), ", %ux%u %s", font->info.width,
-            font->info.height, font->name);
+    sprintf(out + strlen(out), LocalizedText(", %ux%u pixels/cell", ", 字格 %ux%u"),
+            font->info.width, font->info.height);
   }
 }
 
@@ -86,10 +86,10 @@ static void DescribeMonitor(char* out) {
       }
     }
     strcat(out,
-           LocalizedText(" (no compatible VBE mode)", "（无兼容 VBE 模式）"));
+           LocalizedText(" (unavailable for HHBIOS)", "（HHBIOS 暂不可用）"));
   } else {
-    strcpy(out, LocalizedText("Screen preferred: unknown (EDID unavailable)",
-                              "屏幕首选：未知（无可用 EDID 首选时序）"));
+    strcpy(out, LocalizedText("Screen preferred resolution was not detected.",
+                              "未检测到屏幕首选分辨率。"));
   }
 }
 
@@ -242,7 +242,9 @@ ui_event RunForm(Form* form, const char* title, unsigned rows,
                  unsigned cols, int home) {
   char padded_title[128];
   static ui_event events[] = {kCmdProbe, kCmdExit, __rend__, EV_ESCAPE,
-                              EV_ALT_X,  EV_F2,    EV_F3,    __end__};
+                              EV_ALT_X, EV_F2, EV_F3, EV_LIST_BOX_CHANGED,
+                              EV_HOME, EV_END,
+                              __end__};
   if (machine.loaded && chinese) {
     /* Separate raw GB2312 from CP437 frame bytes at both title edges. */
     snprintf(padded_title, sizeof(padded_title), " %s ", title);
@@ -252,10 +254,26 @@ ui_event RunForm(Form* form, const char* title, unsigned rows,
   if (!dialog) {
     return kCmdCancel;
   }
+  if (form->changed) {
+    form->changed(dialog, form->change_data);
+  }
   uipushlist(events);
   ui_event event;
   do {
     event = uidialog(dialog);
+    if (dialog->curr && dialog->curr->typ == FLD_LISTBOX &&
+        (event == EV_HOME || event == EV_END || event == EV_LIST_BOX_CHANGED)) {
+      a_list* list = dialog->curr->u.list;
+      unsigned count = uilistsize(list);
+      if (count && (event != EV_LIST_BOX_CHANGED || list->choice >= count)) {
+        list->choice = event == EV_HOME ? 0 : count - 1;
+        uiupdatelistbox(list);
+        event = EV_LIST_BOX_CHANGED;
+      }
+    }
+    if (event == EV_LIST_BOX_CHANGED && form->changed) {
+      form->changed(dialog, form->change_data);
+    }
     if (home && event == EV_F2) {
       event = kCmdProbe;
     } else if (home && event == EV_F3) {
@@ -368,68 +386,6 @@ static void ShowMemoryDialog(void) {
       kCmdAccept) {
     choices.font = font.value;
     choices.low = low.value;
-  }
-}
-
-static void ShowVideoDialog(void) {
-  Form form;
-  memset(&form, 0, sizeof(form));
-  a_list video = {0};
-  a_radio_group rows = {0};
-  char monitor[96];
-  char labels[kMaxDisplayModes][64];
-  const char* items[kMaxDisplayModes + 5];
-  unsigned count = 1;
-  unsigned mode_number = SelectedVbeMode(&choices);
-  items[0] = kVideoNames[kVideoVga];
-  for (unsigned i = 0; i < machine.display_count; ++i) {
-    const DisplayMode* mode = &machine.display_modes[i];
-    sprintf(labels[i], "VESA %ux%u (%03Xh)%s", mode->width, mode->height,
-            mode->number,
-            machine.edid_status == kEdidPreferred &&
-                    mode->width == machine.preferred_width &&
-                    mode->height == machine.preferred_height
-                ? LocalizedText(" - screen preferred", " - 屏幕首选")
-                : "");
-    items[count] = labels[i];
-    if (mode_number == mode->number) {
-      video.choice = count;
-    }
-    ++count;
-  }
-  for (unsigned i = kVideoEga; i <= kVideoCga; ++i) {
-    if (choices.video == i) {
-      video.choice = count;
-    }
-    items[count++] = kVideoNames[i];
-  }
-  items[count] = NULL;
-  video.data = items;
-  rows.value = rows.def = choices.rows ? choices.rows : 25;
-  DescribeMonitor(monitor);
-  AddParagraph(&form, 1, 2, 64, monitor);
-  AddField(&form, 3, 2, 8, 62, FLD_LISTBOX, &video);
-  AddParagraph(&form, 12, 2, 60,
-               LocalizedText("Text layout (font selected automatically):",
-                             "文本布局（自动选择合适字号）："));
-  AddRadio(&form, 13, "80x25", &rows, 25);
-  AddRadio(&form, 14, "80x43", &rows, 43);
-  AddRadio(&form, 15, "80x50", &rows, 50);
-  AddDialogButtons(&form, 17);
-  if (RunForm(&form, LocalizedText("Display", "显示设置"), 19, 68, 0) ==
-      kCmdAccept) {
-    SetupChoices trial = choices;
-    trial.rows = rows.value;
-    trial.mode = 0;
-    if (!video.choice) {
-      trial.video = kVideoVga;
-    } else if (video.choice <= machine.display_count) {
-      trial.video = kVideoDetected;
-      trial.mode = machine.display_modes[video.choice - 1].number;
-    } else {
-      trial.video = kVideoEga + video.choice - machine.display_count - 1;
-    }
-    choices = trial;
   }
 }
 
@@ -565,7 +521,7 @@ static void RunApplication(void) {
         ShowMemoryDialog();
         break;
       case kCmdVideo:
-        ShowVideoDialog();
+        ShowVideoOptions(&machine, &files, &choices);
         break;
       case kCmdInput:
         ShowInputDialog();
