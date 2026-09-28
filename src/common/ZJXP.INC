@@ -500,6 +500,35 @@ D_ZBF		DB	01000100B,01010100B,01100100B,10011000B
 		DB	10011001B,01100110B,00010100B,01000001B
 	;		× 0D7H	  Ø 0D8H    Ù 0D9H    Ú 0DAH
 
+        extrn syscall TextHasHorizontalJoin:near
+
+; DS:SI = candidate endpoint, D_COL = its column. ZF=1 confirms a frame
+; connection. S_QSX supplies the existing CP437 stroke-property table.
+S_RAILEND proc near
+    push es
+    push ds
+    pop es
+    save_c_regs
+    mov bl,es:[si]
+    call S_QSX
+    jc rail_end_no
+    mov cl,dh
+    xor ch,ch
+    mov bx,si
+    xor dx,dx
+    mov dl,cs:D_COL
+    call TextHasHorizontalJoin
+    cmp ax,1
+    jmp short rail_end_done
+rail_end_no:
+    xor ax,ax
+    cmp ax,1
+rail_end_done:
+    restore_c_regs
+    pop es
+    ret
+S_RAILEND endp
+
 ;×Ó³ÌÐò:ÊúÏòÉ¨Ãè
 S_SXSM		PROC	NEAR
 		MOV	CS:D_COL,0
@@ -570,7 +599,13 @@ L_ZX3:
 		MOV	CL,4
 		SHR	DH,CL			;ÒÆµÍ4Î»
 		CMP	CH,DH			;ÅÐ?
-		JZ	L_ZX7
+        JNZ L_ZXBT
+        PUSH SI
+        MOV SI,DI
+        SUB SI,160
+        CALL S_RAILEND
+        POP SI
+        JZ L_ZX7
 ; A long open-top rail can also be anchored by a bottom corner.
 L_ZXBT:		PUSH	AX
 		MOV	AX,SI
@@ -583,7 +618,9 @@ L_ZXBT:		PUSH	AX
 		JC	L_ZX5
 		AND	DH,0CH
 		CMP	CH,DH
-		JZ	L_ZX7
+        JNZ L_ZX5
+        CALL S_RAILEND
+        JZ L_ZX7
 L_ZX5:
         ; A lone unanchored rail may be the first byte of a Han character.
         ; Do not irreversibly alias it before the next byte arrives.
@@ -621,6 +658,11 @@ L_ZX7:
 		SHL	DH,CL
 		CMP	CH,DH			;ÅÐ?
 		JNZ	L_ZX8
+        PUSH SI
+        MOV SI,DI
+        CALL S_RAILEND
+        POP SI
+        JNZ L_ZX8
 		PUSH	SI
 		MOV	SI,DI
 		ADD	SI,2

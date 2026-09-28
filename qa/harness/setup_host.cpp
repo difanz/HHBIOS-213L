@@ -1,6 +1,64 @@
 /* Host ABI only: all decisions and emitted bytes come from production code. */
 #include "setup.h"
+#ifdef SETUP_IO_TEST
+#include <errno.h>
+#include <sys/stat.h>
+
+static unsigned file_failures[4];
+static unsigned file_calls[4];
+
+static bool FailFileCall(unsigned operation) {
+  unsigned call = file_calls[operation]++;
+  if (call < 32 && (file_failures[operation] & (1U << call))) {
+    errno = operation < 2 ? EACCES : ENOSPC;
+    return true;
+  }
+  return false;
+}
+#endif
 extern "C" {
+#ifdef SETUP_IO_TEST
+int __real_rename(const char*, const char*);
+int __real_remove(const char*);
+size_t __real_fwrite(const void*, size_t, size_t, FILE*);
+int __real_fclose(FILE*);
+
+void hh_save_failures(unsigned renames, unsigned removals,
+                      unsigned writes, unsigned closes) {
+  file_failures[0] = renames;
+  file_failures[1] = removals;
+  file_failures[2] = writes;
+  file_failures[3] = closes;
+  for (unsigned i = 0; i < 4; ++i) {
+    file_calls[i] = 0;
+  }
+}
+int __wrap_rename(const char* source, const char* destination) {
+  struct stat info;
+  if (FailFileCall(0)) {
+    return -1;
+  }
+  // DOS rename cannot replace a destination, unlike the host's rename.
+  if (!stat(destination, &info)) {
+    errno = EEXIST;
+    return -1;
+  }
+  return __real_rename(source, destination);
+}
+int __wrap_remove(const char* name) {
+  return FailFileCall(1) ? -1 : __real_remove(name);
+}
+size_t __wrap_fwrite(const void* data, size_t size, size_t count, FILE* file) {
+  if (FailFileCall(2)) {
+    return count ? __real_fwrite(data, size, count - 1, file) : 0;
+  }
+  return __real_fwrite(data, size, count, file);
+}
+int __wrap_fclose(FILE* file) {
+  int result = __real_fclose(file);
+  return FailFileCall(3) ? EOF : result;
+}
+#endif
 unsigned hh_abi_size(unsigned type) {
   switch (type) {
     case 0: return sizeof(MachineCapabilities);

@@ -13,6 +13,8 @@ typedef unsigned short TextWord;
 
 int TextIsFrame(const TextWord TEXT_FAR* cell, TextWord position,
                 TextWord last_row);
+int TextHasHorizontalJoin(const TextWord TEXT_FAR* cell, TextWord column,
+                          TextWord strokes);
 int TextRowSame(const TextByte* previous, const TextWord TEXT_FAR* current);
 int TextRowShifted(const TextByte* previous, const TextWord TEXT_FAR* current,
                    TextWord column, TextWord count);
@@ -20,6 +22,8 @@ int TextRowShifted(const TextByte* previous, const TextWord TEXT_FAR* current,
 #ifdef __WATCOMC__
 #pragma aux TextIsFrame \
     "TextIsFrame" parm[es bx][dx][cx] value[ax] modify[ax bx cx dx si di];
+#pragma aux TextHasHorizontalJoin \
+    "TextHasHorizontalJoin" parm[es bx][dx][cx] value[ax] modify[ax bx cx dx si di];
 #pragma aux TextRowSame \
     "TextRowSame" parm[si][es bx] value[ax] modify[ax bx cx dx si di];
 #pragma aux TextRowShifted "TextRowShifted" parm[si][es bx][dx] \

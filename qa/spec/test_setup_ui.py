@@ -88,17 +88,24 @@ def run_setup_ui(binary, directory, options, keys_to_press, *, cpu='386', boot_i
                     assert time.monotonic() < deadline, 'SETUP did not show its dialog'
                     time.sleep(.5)
                 for key in keys_to_press:
-                    if isinstance(key, tuple):
-                        col, row = key
-                        width = keyboard.captures[-1]['width']
+                    if isinstance(key, (tuple, dict)):
+                        if isinstance(key, tuple):
+                            col, row = key
+                            width = keyboard.captures[-1]['width']
+                            x, y = col*width//80+width//160, row*16+8
+                            click = True
+                        else:
+                            x, y = key['x'], key['y']
+                            click = key.get('click', False)
                         assert keyboard.t.XTestFakeMotionEvent(
-                            keyboard.display, -1, col*width//80+width//160, row*16+8, 0)
+                            keyboard.display, -1, x, y, 0)
                         keyboard.x.XSync(keyboard.display, 0)
                         time.sleep(.25)
-                        for pressed in (1, 0):
-                            assert keyboard.t.XTestFakeButtonEvent(keyboard.display, 1, pressed, 0)
-                            keyboard.x.XSync(keyboard.display, 0)
-                            time.sleep(.15)
+                        if click:
+                            for pressed in (1, 0):
+                                assert keyboard.t.XTestFakeButtonEvent(keyboard.display, 1, pressed, 0)
+                                keyboard.x.XSync(keyboard.display, 0)
+                                time.sleep(.15)
                         time.sleep(.4)
                         continue
                     if key == 'capture':

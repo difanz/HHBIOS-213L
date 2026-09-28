@@ -70,6 +70,27 @@ static int HasVertical(const TextWord TEXT_FAR* cell, TextWord row,
   return row != 0 && IsVertical((TextByte)cell[-80]);
 }
 
+static int IsHorizontal(TextByte ch, TextWord weight) {
+  return weight == 1 ? ch == 0xc4 || ch == 0x12
+                    : weight == 2 && (ch == 0xcd || ch == 0x95);
+}
+
+/* A raw corner or junction cannot anchor a rail from its vertical bits
+ * alone: those bytes also occur in adjacent lines of Chinese text. Require
+ * a connected horizontal stroke. Previously converted aliases are known
+ * frame cells; a plain vertical endpoint needs no horizontal neighbor. */
+int TextHasHorizontalJoin(const TextWord TEXT_FAR* cell, TextWord column,
+                          TextWord strokes) {
+  TextByte ch = (TextByte)*cell;
+  TextWord left = (strokes >> 4) & 3;
+  TextWord right = strokes & 3;
+  if (ch <= 0xa0 || !(left | right)) {
+    return 1;
+  }
+  return (column && IsHorizontal((TextByte)cell[-1], left)) ||
+         (column < 79 && IsHorizontal((TextByte)cell[1], right));
+}
+
 int TextIsFrame(const TextWord TEXT_FAR* cell, TextWord position,
                 TextWord last_row) {
   TextWord column = position & 255;

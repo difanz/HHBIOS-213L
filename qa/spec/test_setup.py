@@ -49,6 +49,7 @@ class Ini(C.Structure):
 def setup_policy(tmp_path_factory,source_dir):
     out=tmp_path_factory.mktemp('setup-host')/'setup.so'
     result=subprocess.run(['c++','-std=c++98','-shared','-fPIC','-Wall','-Wextra','-Werror','-DVESA_HOST',
+        '-DSETUP_IO_TEST', '-Wl,--wrap=rename,--wrap=remove,--wrap=fwrite,--wrap=fclose',
         '-I'+str(source_dir/'setup'), '-I'+str(source_dir/'video/vesa'), str(source_dir/'setup/config.c'),
         str(source_dir/'setup/modules.c'),
         str(source_dir/'setup/font.c'), str(source_dir/'common/font_file.c'),
@@ -66,6 +67,7 @@ def setup_policy(tmp_path_factory,source_dir):
     lib.hh_batch.argtypes=[C.c_char_p,C.POINTER(Choices),C.c_char_p]
     lib.hh_ini.argtypes=lib.hh_batch.argtypes
     lib.hh_save.argtypes=[C.c_char_p,C.c_char_p]
+    lib.hh_save_failures.argtypes=[C.c_uint]*4
     lib.hh_read_ini.argtypes=[C.c_char_p,C.POINTER(Ini)]
     lib.hh_make_ini.argtypes=[C.c_char_p,C.POINTER(Ini),C.c_char_p]
     lib.hh_validate_ini.argtypes=[C.POINTER(Ini)]
@@ -153,16 +155,84 @@ def test_reject_invalid_ini_without_guessing_values(setup_policy,data):
 
 
 @pytest.mark.unit
-def test_save_backs_up_pair_and_never_overwrites_previous_backup(setup_policy,tmp_path,monkeypatch):
+def test_repeated_save_backs_up_immediately_previous_pair(setup_policy,tmp_path,monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path/'HHBIOS.BAT').write_bytes(b'old batch')
     (tmp_path/'213L.INI').write_bytes(b'old ini')
     assert setup_policy.hh_save(b'new batch',b'new ini') is None
     assert (tmp_path/'HHBIOS.BAK').read_bytes()==b'old batch'
     assert (tmp_path/'213L.BAK').read_bytes()==b'old ini'
-    assert setup_policy.hh_save(b'third batch',b'third ini')
-    assert (tmp_path/'HHBIOS.BAT').read_bytes()==b'new batch'
-    assert (tmp_path/'213L.INI').read_bytes()==b'new ini'
+    assert setup_policy.hh_save(b'third batch',b'third ini') is None
+    assert (tmp_path/'HHBIOS.BAK').read_bytes()==b'new batch'
+    assert (tmp_path/'213L.BAK').read_bytes()==b'new ini'
+    assert (tmp_path/'HHBIOS.BAT').read_bytes()==b'third batch'
+    assert (tmp_path/'213L.INI').read_bytes()==b'third ini'
+    assert not list(tmp_path.glob('*.$$$'))
+
+
+@pytest.fixture
+def save_failures(setup_policy):
+    setup_policy.hh_save_failures(0, 0, 0, 0)
+    yield setup_policy.hh_save_failures
+    setup_policy.hh_save_failures(0, 0, 0, 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('operation,call', [(0, 0), (0, 1), (0, 2), (0, 3),
+    (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)])
+def test_failed_repeated_save_restores_active_pair(setup_policy, save_failures,
+                                                  tmp_path, monkeypatch, operation, call):
+    monkeypatch.chdir(tmp_path)
+    for name in ('HHBIOS.BAT', '213L.INI', 'HHBIOS.BAK', '213L.BAK'):
+        (tmp_path / name).write_bytes(('before ' + name).encode())
+    failures = [0] * 4
+    failures[operation] = 1 << call
+    save_failures(*failures)
+    assert setup_policy.hh_save(b'new batch', b'new ini')
+    assert (tmp_path / 'HHBIOS.BAT').read_bytes() == b'before HHBIOS.BAT'
+    assert (tmp_path / '213L.INI').read_bytes() == b'before 213L.INI'
+    assert not list(tmp_path.glob('*.$$$'))
+    if operation >= 2:
+        # New data must be completely written before any backup is discarded.
+        assert (tmp_path / 'HHBIOS.BAK').read_bytes() == b'before HHBIOS.BAK'
+        assert (tmp_path / '213L.BAK').read_bytes() == b'before 213L.BAK'
+    save_failures(0, 0, 0, 0)
+    assert setup_policy.hh_save(b'retry batch', b'retry ini') is None
+    assert (tmp_path / 'HHBIOS.BAK').read_bytes() == b'before HHBIOS.BAT'
+    assert (tmp_path / '213L.BAK').read_bytes() == b'before 213L.INI'
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('renames,removals,batch_left', [
+    ((1 << 3) | (1 << 4), 0, False), (1 << 3, 1, True)])
+def test_failed_rollback_keeps_recovery_backup(setup_policy, save_failures, tmp_path,
+                                               monkeypatch, renames, removals, batch_left):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'HHBIOS.BAT').write_bytes(b'old batch')
+    (tmp_path / '213L.INI').write_bytes(b'old ini')
+    # Fail the second install rename, then either removing the new batch or
+    # restoring its backup. Keep the old bytes available for manual recovery.
+    save_failures(renames, removals, 0, 0)
+    assert b'recovery' in setup_policy.hh_save(b'new batch', b'new ini')
+    assert (tmp_path / 'HHBIOS.BAK').read_bytes() == b'old batch'
+    assert (tmp_path / '213L.INI').read_bytes() == b'old ini'
+    assert (tmp_path / 'HHBIOS.BAT').exists() == batch_left
+    if batch_left:
+        assert (tmp_path / 'HHBIOS.BAT').read_bytes() == b'new batch'
+    assert not list(tmp_path.glob('*.$$$'))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('backup', ['HHBIOS.BAK', '213L.BAK'])
+def test_backup_directory_is_not_removed(setup_policy, tmp_path, monkeypatch, backup):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'HHBIOS.BAT').write_bytes(b'old batch')
+    (tmp_path / '213L.INI').write_bytes(b'old ini')
+    (tmp_path / backup).mkdir()
+    assert setup_policy.hh_save(b'new batch', b'new ini')
+    assert (tmp_path / backup).is_dir()
+    assert (tmp_path / 'HHBIOS.BAT').read_bytes() == b'old batch'
+    assert (tmp_path / '213L.INI').read_bytes() == b'old ini'
     assert not list(tmp_path.glob('*.$$$'))
 
 

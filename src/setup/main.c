@@ -21,6 +21,39 @@ static int chinese = 0;
 static int ini_ok = 1;
 static int batch_ok = 1;
 
+static unsigned ConsoleCursorShape(void) {
+  union REGS registers;
+  memset(&registers, 0, sizeof(registers));
+  registers.h.ah = 0x0f;
+  int86(0x10, &registers, &registers);
+  registers.h.ah = 3;
+  int86(0x10, &registers, &registers);
+  return registers.x.cx;
+}
+
+static void ClearConsole(unsigned cursor_shape) {
+  union REGS registers;
+  unsigned columns = *(unsigned far*)MK_FP(0x40, 0x4a);
+  unsigned rows = *(unsigned char far*)MK_FP(0x40, 0x84) + 1;
+  unsigned page = *(unsigned char far*)MK_FP(0x40, 0x62);
+  if (rows < 25) {
+    rows = 25;  /* CGA and MDA BIOSes do not supply the EGA row count. */
+  }
+  memset(&registers, 0, sizeof(registers));
+  registers.x.ax = 0x0600;
+  registers.x.bx = 0x0700;
+  registers.h.dh = rows - 1;
+  registers.h.dl = columns - 1;
+  int86(0x10, &registers, &registers);
+  registers.x.ax = 0x0200;
+  registers.x.bx = page << 8;
+  registers.x.dx = 0;
+  int86(0x10, &registers, &registers);
+  registers.x.ax = 0x0100;
+  registers.x.cx = cursor_shape & 0x1f1f;
+  int86(0x10, &registers, &registers);
+}
+
 const char* LocalizedText(const char* en, const char* zh) {
   return chinese ? (IsScreenActive() ? EncodeScreenText(zh) : zh) : en;
 }
@@ -611,6 +644,7 @@ static int SelectVideoOption(const char* value) {
 
 int main(int argc, char** argv) {
   int i;
+  unsigned console_cursor;
   int automatic = 0;
   int report = 0;
   int language = -1;
@@ -742,6 +776,7 @@ int main(int argc, char** argv) {
     puts(error ? error : "Saved HHBIOS.BAT and 213L.INI.");
     return error ? 1 : 0;
   }
+  console_cursor = ConsoleCursorShape();
   ConfigureScreen(!machine.loaded && language != 0 && machine.adapter == kAdapterVga);
   ConfigureResidentText(machine.loaded != 0);
   if (!uiinit(INIT_MOUSE_INITIALIZED)) {
@@ -759,5 +794,6 @@ int main(int argc, char** argv) {
   RunApplication();
   uifini();
   StopScreen();
+  ClearConsole(console_cursor);
   return 0;
 }

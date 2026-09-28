@@ -318,6 +318,47 @@ def test_adjacent_open_top_panes_use_connected_bottom_corners(machine):
             assert machine.cell(row, col) == ('char', 0xb3, 7)
 
 
+@pytest.mark.parametrize('row,col', [(0, 0), (11, 5), (22, 64)])
+@pytest.mark.parametrize('labels', [
+    ('字库存放：', '程序驻留：', '显示驱动：'),
+    ('卢', '程', ''),  # C2 above B3 also resembles a vertical connection.
+])
+def test_stacked_chinese_does_not_form_vertical_frames(machine, row, col, labels):
+    from qa.spec.machine import SCREEN
+    screen = blank()
+    for index, label in enumerate(labels):
+        put(screen, row + index, col, label, 0x1b + index)
+    machine.scan(screen)
+    assert bytes(machine.uc.mem_read(SCREEN, 4000)) == screen
+    for index, label in enumerate(labels):
+        raw = label.encode('gb2312')
+        for position in range(0, len(raw), 2):
+            code = int.from_bytes(raw[position:position + 2], 'big')
+            assert machine.cell(row + index, col + position) == (
+                'hanzi-left', code, 0x1b + index)
+            assert machine.cell(row + index, col + position + 1) == (
+                'hanzi-right', code, 0x1b + index)
+    machine.scan(screen)
+    assert not machine.draws
+
+
+@pytest.mark.parametrize('lines', [('┌─┬─┐', '│ │ │', '└─┴─┘'),
+                                   ('╔═╤═╗', '║ │ ║', '╚═╧═╝'),
+                                   ('╓─┬─╖', '║ │ ║', '╙─┴─╜')])
+def test_vertical_junctions_keep_stacked_chinese_in_neighboring_pane(machine, lines):
+    screen = blank()
+    for row, line in enumerate(lines, 5):
+        put(screen, row, 2, line.encode('cp437'), 0x2e)
+    put(screen, 5, 10, '程序驻留', 0x1b)
+    put(screen, 6, 10, '显示驱动', 0x1b)
+    machine.scan(screen)
+    for row, line in enumerate(lines, 5):
+        for column, character in enumerate(line.encode('cp437'), 2):
+            assert machine.cell(row, column) == ('char', character, 0x2e)
+    assert machine.cell(5, 10) == ('hanzi-left', 0xb3cc, 0x1b)
+    assert machine.cell(6, 10) == ('hanzi-left', 0xcfd4, 0x1b)
+
+
 @pytest.mark.parametrize('parent', [b'[-]', b'[+]', b'   '])
 def test_directory_branch_requires_a_parent_node(machine, parent):
     screen = blank()

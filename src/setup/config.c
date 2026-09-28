@@ -531,6 +531,7 @@ const char* SaveConfigurationFiles(const char* batch, const char* ini) {
   int movedbat = 0;
   int movedini = 0;
   int newbat = 0;
+  int restored = 1;
   if (!IsRegularFileOrAbsent("HHBIOS.BAT") ||
       !IsRegularFileOrAbsent("213L.INI")) {
     return "HHBIOS.BAT and 213L.INI must be ordinary files, not "
@@ -540,19 +541,26 @@ const char* SaveConfigurationFiles(const char* batch, const char* ini) {
     return "Temporary HHBAT.$$$/HHINI.$$$ already exist. Inspect them before "
            "retrying.";
   }
-  if ((bat && FileExists("HHBIOS.BAK")) || (oldini && FileExists("213L.BAK"))) {
-    return "A .BAK backup already exists. Move it aside before saving again.";
+  if ((bat && !IsRegularFileOrAbsent("HHBIOS.BAK")) ||
+      (oldini && !IsRegularFileOrAbsent("213L.BAK"))) {
+    return "Backup .BAK names must be ordinary files, not directories/devices.";
   }
   if (!WriteFile("HHBAT.$$$", batch) || !WriteFile("HHINI.$$$", ini)) {
     goto fail;
   }
   if (bat) {
+    if (FileExists("HHBIOS.BAK") && remove("HHBIOS.BAK")) {
+      goto fail;
+    }
     if (rename("HHBIOS.BAT", "HHBIOS.BAK")) {
       goto fail;
     }
     movedbat = 1;
   }
   if (oldini) {
+    if (FileExists("213L.BAK") && remove("213L.BAK")) {
+      goto fail;
+    }
     if (rename("213L.INI", "213L.BAK")) {
       goto fail;
     }
@@ -567,17 +575,21 @@ const char* SaveConfigurationFiles(const char* batch, const char* ini) {
   }
   return 0;
 fail:
-  if (newbat) {
-    remove("HHBIOS.BAT");
+  if (newbat && remove("HHBIOS.BAT")) {
+    restored = 0;
   }
-  if (movedbat) {
-    rename("HHBIOS.BAK", "HHBIOS.BAT");
+  if (movedbat && rename("HHBIOS.BAK", "HHBIOS.BAT")) {
+    restored = 0;
   }
-  if (movedini) {
-    rename("213L.BAK", "213L.INI");
+  if (movedini && rename("213L.BAK", "213L.INI")) {
+    restored = 0;
   }
   remove("HHBAT.$$$");
   remove("HHINI.$$$");
+  if (!restored) {
+    return "Could not restore the previous configuration. Keep the .BAK "
+           "files for recovery.";
+  }
   return "Could not save both files. Check write access/free space and any "
          ".BAK files.";
 }
