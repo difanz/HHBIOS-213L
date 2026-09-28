@@ -10,6 +10,7 @@ from qa.spec.dos import ROOT, digest, run_dos
 from qa.spec.pixels import native_rows
 from qa.spec.test_dos_display import guest_build
 from qa.spec.test_application import keyboard_config
+from qa.spec.machine import FRAME_ALIASES
 
 pytestmark = pytest.mark.application
 FRAME_SIZE = 8280
@@ -126,8 +127,15 @@ def screen_pixels(directory, frame, rows):
     for col in (35, 36):
         for row in (6, 7, 8):
             glyph(row*80+col, 0xb3)
-    for col, code in ((3, 0xc0), (4, 0xc4)):
-        glyph(7*80+col, code)
+    raw_codes = {alias: code for code, alias in FRAME_ALIASES.items()}
+    frame_chars = bytes(raw_codes.get(code, code) for code in chars)
+    branches = [cell for cell in range(len(chars)-4)
+                if frame_chars[cell] in (0xc0, 0xc3) and
+                frame_chars[cell+1:cell+3] == b'\xc4[']
+    assert branches
+    for cell in branches:
+        glyph(cell, frame_chars[cell])
+        glyph(cell+1, 0xc4)
     # The system IME row is separate from the application's last text row.
     for col, char in ((0, '英'), (2, '文')):
         code = int.from_bytes(char.encode('gb2312'), 'big')
@@ -145,6 +153,19 @@ def screen_pixels(directory, frame, rows):
         expected = tuple(sum(((logo[col*16+y*16//20] >> (7-x*8//10)) & 1)
                              << (9-x) for x in range(10)) for y in range(20))
         glyph(rows*80+76+col, 0, expected=(expected+(0,)*3)[:ch])
+
+
+@pytest.mark.parametrize('mode,rows', [('L', 25), ('H2', 50)])
+def test_dosshell_directory_branches(dosbox_binary, guest_build, shell_dir, mode, rows):
+    for name in ('APPS', 'DOCS', 'TOOLS'):
+        (shell_dir/name).mkdir()
+    (shell_dir/'APPS'/'EDITORS').mkdir()
+    frames, _ = exercise(dosbox_binary, shell_dir, guest_build, 'vesa', mode,
+                         [0xffff]+EXIT, [])
+    chars = frames[0]['text'][::2]
+    raw_codes = {alias: code for code, alias in FRAME_ALIASES.items()}
+    assert bytes(raw_codes.get(code, code) for code in chars).count(b'\xc3\xc4[') >= 2
+    screen_pixels(shell_dir, frames[0], rows)
 
 
 @pytest.mark.parametrize('display', ['native', 'vesa'])

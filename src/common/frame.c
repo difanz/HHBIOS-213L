@@ -58,8 +58,8 @@ static TextByte Corner(TextByte ch) {
 }
 
 static int IsVertical(TextByte ch) {
-  return ch == 0x1e || ch == 0x1f || ch == 0xb3 || ch == 0xba || ch == 0x14 ||
-         ch == 0x15;
+  return ch == 0x18 || ch == 0x19 || ch == 0x1e || ch == 0x1f ||
+         ch == 0xb3 || ch == 0xba || ch == 0x14 || ch == 0x15;
 }
 
 static int HasVertical(const TextWord TEXT_FAR* cell, TextWord row,
@@ -91,6 +91,43 @@ int TextHasHorizontalJoin(const TextWord TEXT_FAR* cell, TextWord column,
          (column < 79 && IsHorizontal((TextByte)cell[1], right));
 }
 
+static int IsTreeNode(const TextWord TEXT_FAR* cell) {
+  TextByte marker = (TextByte)cell[3];
+  return IsHorizontal((TextByte)cell[1], 1) && (TextByte)cell[2] == '[' &&
+         (marker == ' ' || marker == '+' || marker == '-') &&
+         (TextByte)cell[4] == ']';
+}
+
+/* Follow a directory's vertical stem back to its ASCII parent. C3 C4 also
+ * spells a Hanzi, so an isolated pair followed by brackets is insufficient.
+ * Earlier rows may already contain HHBIOS's unambiguous frame aliases. */
+static int IsDirectoryBranch(const TextWord TEXT_FAR* cell, TextWord column,
+                              TextWord row) {
+  TextByte ch = (TextByte)*cell;
+  if (ch == 0xc4 && column) {
+    --cell;
+    --column;
+    ch = (TextByte)*cell;
+  }
+  if (!column || column > 75 || (ch != 0xc0 && ch != 0xc3 &&
+                                ch != 0x8a && ch != 0x8d) || !IsTreeNode(cell)) {
+    return 0;
+  }
+  while (row--) {
+    cell -= 80;
+    ch = (TextByte)*cell;
+    if ((ch == '+' || ch == '-') && (TextByte)cell[-1] == '[' &&
+        (TextByte)cell[1] == ']') {
+      return 1;
+    }
+    if (ch != 0xb3 && ch != 0x14 &&
+        !((ch == 0xc3 || ch == 0x8d) && IsTreeNode(cell))) {
+      return 0;
+    }
+  }
+  return 0;
+}
+
 int TextIsFrame(const TextWord TEXT_FAR* cell, TextWord position,
                 TextWord last_row) {
   TextWord column = position & 255;
@@ -98,17 +135,9 @@ int TextIsFrame(const TextWord TEXT_FAR* cell, TextWord position,
   TextByte ch = (TextByte)*cell;
   TextByte corner;
 
-  /* Directory branches C0 C4 [x] may hang below an ASCII [+]/[-] node. */
-  if (row && (ch == 0xc0 || (ch == 0xc4 && column))) {
-    TextWord node_column = column - (ch == 0xc4);
-    const TextWord TEXT_FAR* node = cell - (ch == 0xc4);
-    if (node_column && node_column <= 75 && (TextByte)node[0] == 0xc0 &&
-        (TextByte)node[1] == 0xc4 && (TextByte)node[2] == '[' &&
-        (TextByte)node[4] == ']' && (TextByte)node[-81] == '[' &&
-        (TextByte)node[-79] == ']' &&
-        ((TextByte)node[-80] == '+' || (TextByte)node[-80] == '-')) {
-      return 1;
-    }
+  if ((ch == 0xc0 || ch == 0xc3 || ch == 0xc4) &&
+      IsDirectoryBranch(cell, column, row)) {
+    return 1;
   }
 
   corner = Corner(ch);

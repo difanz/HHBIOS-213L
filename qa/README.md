@@ -213,7 +213,7 @@ repository. Supply copies you can use via these options or environment variables
 | Option / environment | Fixture |
 | --- | --- |
 | `--borland-bin` / `BORLAND_BIN` | BC 3.1 BIN directory with BC.EXE, DPMI16BI.OVL, DPMILOAD.EXE and DPMIMEM.DLL |
-| `--qbasic` / `QBASIC_EXE` | QBASIC 1.1 executable, invoked with `/EDITOR` |
+| `--qbasic` / `QBASIC_EXE` | QBASIC 1.1 executable, used as the IDE and with `/EDITOR` |
 | `--msedit2` / `MSEDIT2_COM` | Standalone MS-DOS Editor 2.0.026 EDIT.COM |
 | `--dos-apps` / `DOS_APPS` | Root containing `tc201/TC.EXE` and `tc30/TC.EXE`; tc30 also needs the three DPMI files above |
 | `--pctools` / `PCTOOLS_DIR` | Unpacked PC Tools 9 directory, including PCSHELL.EXE, its configuration and overlays |

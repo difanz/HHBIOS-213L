@@ -219,11 +219,12 @@ def test_hanzi_disable_switch_preserves_legacy_api(machine):
 
 
 @pytest.mark.parametrize('top', [True, False])
-def test_scrollbar_arrow_connects_short_frame_cap(machine, top):
+@pytest.mark.parametrize('arrow', [0x18, 0x1e])
+def test_scrollbar_arrow_connects_short_frame_cap(machine, top, arrow):
     screen = blank()
     row = 1 if top else 23
     put(screen, row, 78, b'\xcd' + (b'\xbb' if top else b'\xbc'), 0x1f)
-    put(screen, row+(1 if top else -1), 79, b'\x1e' if top else b'\x1f', 0x1a)
+    put(screen, row+(1 if top else -1), 79, bytes([arrow if top else arrow+1]), 0x1a)
     machine.scan(screen)
     assert machine.cell(row, 78) == ('char', 0xcd, 0x1f)
     assert machine.cell(row, 79) == ('char', 0xbb if top else 0xbc, 0x1f)
@@ -370,6 +371,34 @@ def test_directory_branch_requires_a_parent_node(machine, parent):
     else:
         assert machine.cell(7, 3) == ('char', 0xc0, 7)
         assert machine.cell(7, 4) == ('char', 0xc4, 7)
+
+
+@pytest.mark.parametrize('column', [1, 3, 75])
+@pytest.mark.parametrize('parent', [b'[-]', b'[+]', b'   '])
+def test_directory_siblings_and_last_branch(machine, column, parent):
+    screen = blank()
+    put(screen, 0, column-1, parent)
+    for row in range(1, 25):
+        branch = 0xc0 if row == 24 else 0xc3
+        put(screen, row, column, bytes([branch, 0xc4])+b'[ ]')
+    machine.scan(screen)
+    for row in range(1, 25):
+        branch = 0xc0 if row == 24 else 0xc3
+        if parent == b'   ':
+            assert machine.cell(row, column) == ('hanzi-left', branch*256+0xc4, 7)
+        else:
+            assert machine.cell(row, column) == ('char', branch, 7)
+            assert machine.cell(row, column+1) == ('char', 0xc4, 7)
+
+
+@pytest.mark.parametrize('arrow', [0x18, 0x1e])
+def test_qbasic_short_scrollbar_cap(machine, arrow):
+    screen = blank()
+    put(screen, 1, 75, b'\xb4\x18\xc3\xc4\xbf', 0x1f)
+    put(screen, 2, 79, bytes([arrow]), 0x17)
+    machine.scan(screen)
+    for column, code in enumerate(b'\xc3\xc4\xbf', 77):
+        assert machine.cell(1, column) == ('char', code, 0x1f)
 
 
 @pytest.mark.parametrize('mode', [1, 2])
