@@ -202,30 +202,6 @@ L_IO_DONE:
                 RET
 S_INDEX_OPEN    ENDP
 
-S_INDEX_SIZE    PROC    NEAR
-                MOV     AX,[SI]
-                OR      AX,AX
-                JZ      L_IZ_EMPTY
-                CMP     AX,T_BASE
-                JB      L_IZ_BAD
-                MOV     DX,[SI+2]
-                CMP     DX,BP
-                JA      L_IZ_BAD
-                SUB     DX,AX
-                CMP     DX,6768*2
-                JNE     L_IZ_BAD
-                ADD     CX,DX
-                RET
-L_IZ_EMPTY:
-                CMP     WORD PTR [SI+2],0
-                JNE     L_IZ_BAD
-                CLC
-                RET
-L_IZ_BAD:
-                STC
-                RET
-S_INDEX_SIZE    ENDP
-
 ; AX mask, BX packed keys, SI inclusive cursor, DI exclusive boundary.
 ; CF=0 handled, CF=1 use the unchanged linear scanner. Preserve its order,
 ; candidate count, paging cursor, and reverse STOSW direction.

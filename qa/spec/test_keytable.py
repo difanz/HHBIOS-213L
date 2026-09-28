@@ -22,7 +22,8 @@ SYMBOLS = ('S_TABLE_WORD', 'S_TABLE_NEXT', 'S_TABLE_OPEN', 'T_XMS', 'T_HANDLE',
            'D_2BB0', 'D_2BB1', 'D_2BB9', 'D_2BBA', 'D_2BD2', 'D_9597',
            'S_A9C0', 'D_PY', 'L_A597', 'D_DB', 'D_SW', 'S_INDEX_OPEN',
            'I_HANDLE', 'I_SW', 'I_PY', 'I_LENGTH', 'P_HANDLE', 'P_LENGTH',
-           'S_PHRASE_OPEN', 'S_A9000', 'D_SPCZ', 'D_2CC1', 'D_9648')
+           'S_PHRASE_OPEN', 'S_A9000', 'D_SPCZ', 'D_2CC1', 'D_9648',
+           'S_INDEX_SIZE', 'S_PHRASE_NEXT', 'D_959D', 'L_S60')
 
 
 @pytest.fixture(scope='session', params=['8086', '386', '586'])
@@ -38,6 +39,14 @@ def table_binary(assembler, source_dir, tmp_path_factory, request):
     symbols = dict(zip(SYMBOLS, struct.unpack_from('<'+str(len(SYMBOLS))+'H', raw,
                                                   raw.rindex(b'HHTABLE1')+8)))
     return raw, symbols
+
+
+def test_install_helpers_fit_existing_return_buffer_prefix(table_binary):
+    _, symbols = table_binary
+    start = symbols['D_959D']
+    assert start == symbols['S_INDEX_SIZE'] < symbols['S_PHRASE_NEXT'] < start + 64
+    assert symbols['L_S60'] == start + 64
+    assert symbols['T_CACHE'] == start + 1024
 
 
 class Tables:

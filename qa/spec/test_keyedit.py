@@ -9,7 +9,7 @@ import subprocess
 import pytest
 from qa.spec.build import build_mixed
 from qa.spec.dos import ROOT
-from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_MEM_READ
+from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_READ
 from unicorn import x86_const as reg
 
 from qa.spec.machine import CODE, SCREEN, STACK, blank, put
@@ -36,6 +36,7 @@ class Keyboard:
         self.display = display
         self.screen_segment = 0xb800
         self.keys = []
+        self.boundary_queries = []
         self.uc.hook_add(UC_HOOK_INTR, self.interrupt)
 
     def get(self, name):
@@ -61,6 +62,7 @@ class Keyboard:
                 self.set('AX', self.keys.pop(0))
         else:
             assert number == 0x10 and self.get('AX') == 0x1410
+            self.boundary_queries.append(self.get('DX'))
             self.display.uc.mem_write(SCREEN, bytes(uc.mem_read(self.screen_segment*16, 4000)))
             self.display.call('keypos', DX=self.get('DX'))
             self.set('AX', self.display.read('AX'))
@@ -157,6 +159,37 @@ def test_disabled_filter_preserves_the_bios_request(keyboard):
     keyboard.screen('中文abc', 5)
     assert keyboard.call(key=DEL) is None
     assert keyboard.keys == [DEL]
+
+
+@pytest.mark.parametrize('function,key,column,result,queries', [
+    (0x11, DEL, 6, BS, [6]),
+    (0x11, DEL, 5, DEL, [5]),
+    (0x11, DEL, 8, DEL, [8]),
+    (0x10, DEL, 6, BS, [6]),
+    (0x10, DEL, 5, DEL, [5]),
+    (0x10, RIGHT, 5, RIGHT, [5]),
+    # Backward edits still need the previous cell, not the cursor's role.
+    (0x10, LEFT, 7, LEFT, [7, 6]),
+    (0x10, BS, 7, BS, [7, 6]),
+])
+def test_edit_checks_each_required_boundary_once(keyboard, function, key,
+                                                column, result, queries):
+    keyboard.screen('中文abc', column)
+    assert keyboard.call(function, key) == result
+    assert keyboard.boundary_queries == [0x400 + col for col in queries]
+
+
+def test_forward_edit_does_not_rescan_the_row_prefix(keyboard):
+    instructions = []
+    for uc in (keyboard.uc, keyboard.display.uc):
+        uc.hook_add(UC_HOOK_CODE,
+                    lambda uc, address, size, unused: instructions.append(address))
+    keyboard.screen('中文abc', 66, start=64)
+    assert keyboard.call(0x10, DEL) == DEL
+    assert keyboard.uc.mem_read(CODE + keyboard.state, 1) == b'\1'
+    # Count the linked filter and renderer together. The duplicate prefix scan
+    # took 2343-2537 instructions; one scan takes 1423-1520 across CPU builds.
+    assert 0 < len(instructions) < 1800
 
 
 @pytest.mark.parametrize('key,updated,column', [

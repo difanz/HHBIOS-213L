@@ -15,20 +15,6 @@ S_PHRASE_MOVE   PROC    NEAR
                 RET
 S_PHRASE_MOVE   ENDP
 
-; DS is the dictionary; SI is just after a group header. Return the next
-; header, bounded by the basic two-character section, including empty groups.
-S_PHRASE_NEXT   PROC    NEAR
-L_PN_SCAN:
-                CMP     SI,CS:P_END
-                JAE     L_PN_DONE
-                TEST    WORD PTR [SI],8080H
-                JZ      L_PN_DONE
-                ADD     SI,2
-                JMP     SHORT L_PN_SCAN
-L_PN_DONE:
-                RET
-S_PHRASE_NEXT   ENDP
-
 ; Called after SPCZ.DAT is loaded. Borrow the table cache only during setup;
 ; raw pinyin lookups then use private stack words, not the staging buffer.
 S_PHRASE_OPEN   PROC    NEAR

@@ -5,9 +5,14 @@ struct PinyinFinal {
   unsigned char key;
 };
 
+struct PinyinShortFinal {
+  char spelling[2];
+  unsigned char key;
+};
+
 /* Keep the historical aliases: phrase tables use these as well as full
  * spellings. For example, both "ong" and "on" map to 's'. */
-static const struct PinyinFinal kTwoLetterFinals[] = {
+static const struct PinyinShortFinal kTwoLetterFinals[] = {
     {"ai", 'l'}, {"an", 'j'}, {"ao", 'k'}, {"ei", 'd'}, {"en", 'f'},
     {"on", 's'}, {"ou", 'p'}, {"ia", 'r'}, {"ie", 't'}, {"ih", 'x'},
     {"ij", 'b'}, {"ik", 'm'}, {"in", 'n'}, {"io", 's'}, {"iu", 'q'},
@@ -19,15 +24,25 @@ static const struct PinyinFinal kThreeLetterFinals[] = {
 static const struct PinyinFinal kFourLetterFinals[] = {
     {"iang", 'x'}, {"iong", 's'}, {"uang", 'x'}};
 
+static unsigned char FindShortFinal(const unsigned char* spelling) {
+  const struct PinyinShortFinal* entry = kTwoLetterFinals;
+  unsigned short count = sizeof(kTwoLetterFinals) / sizeof(kTwoLetterFinals[0]);
+  for (; count; --count, ++entry) {
+    if (spelling[0] == entry->spelling[0] &&
+        spelling[1] == entry->spelling[1]) {
+      return entry->key;
+    }
+  }
+  return 0;
+}
+
 static unsigned char FindFinal(const unsigned char* spelling,
                                unsigned short length) {
   const struct PinyinFinal* entry;
   unsigned short count;
   switch (length) {
     case 2:
-      entry = kTwoLetterFinals;
-      count = sizeof(kTwoLetterFinals) / sizeof(kTwoLetterFinals[0]);
-      break;
+      return FindShortFinal(spelling);
     case 3:
       entry = kThreeLetterFinals;
       count = sizeof(kThreeLetterFinals) / sizeof(kThreeLetterFinals[0]);

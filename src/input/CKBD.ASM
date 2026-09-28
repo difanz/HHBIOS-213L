@@ -4071,7 +4071,11 @@ D_959D		EQU	$			;返回码区(容量256)
 D_BUF		EQU	$+256			;公用缓冲区(512字节)
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-		ORG	$+64
+                INCLUDE KEYINIT.INC
+                IF ($ - D_959D) GT 64
+                .ERR <Keyboard installation helpers exceed return buffer prefix>
+                ENDIF
+                ORG 64
 L_S60:
 		CMP	K_SW,'Y'                ;安装首尾码表?
 		JNZ	L_S70

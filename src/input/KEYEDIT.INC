@@ -111,11 +111,6 @@ EP_CHECK:
         PUSH BP
         CALL S_ECURSOR
         JC EP_ORIGINAL
-        MOV AX,1410H
-        XOR BX,BX
-        INT 10H
-        CMP BX,4B48H
-        JNE EP_ORIGINAL
         CMP AX,2
         JNE EP_ORIGINAL
         POP BP
@@ -131,6 +126,7 @@ EP_DONE:
 S_EPEEK ENDP
 
 ; BIOS-visible, unmodified, page-zero cursor in HHBIOS's 80-column text view.
+; On success AX is the cell role and ES is the stable text snapshot.
 S_ECURSOR PROC NEAR
         MOV BX,40H
         MOV ES,BX
@@ -186,6 +182,7 @@ ES_EXT:
 ES_KEY:
         CALL S_ECURSOR
         JC ES_DONE
+        MOV CX,AX               ; reuse the current-cell classification
         MOV D_ECUR,DX
         MOV D_EOLD,DX
         MOV AX,DI
@@ -194,7 +191,7 @@ ES_KEY:
         CMP AH,4BH
         JE ES_LEFT
         CMP AH,0EH
-        JNE ES_QUERY
+        JNE ES_ROLE
 ES_LEFT:
         OR DL,DL
         JZ ES_DONE
@@ -209,9 +206,10 @@ ES_QUERY:
         POP DI
         CMP BX,4B48H
         JNE ES_DONE
-        OR AX,AX
-        JZ ES_DONE
         MOV CX,AX
+ES_ROLE:
+        OR CX,CX
+        JZ ES_DONE
         MOV AX,DI
         CMP AH,4BH
         JE ES_BACK

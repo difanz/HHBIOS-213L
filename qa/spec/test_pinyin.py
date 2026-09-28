@@ -107,6 +107,19 @@ def test_final_codebook(pinyin_binary, final, key, initial, query_initial):
         assert abbreviated
 
 
+@pytest.mark.parametrize('first', [0, 0x60, *range(0x61, 0x7b), 0x7b, 0x80, 0xff])
+def test_two_letter_final_rejections_and_buffer_tail(pinyin_binary, first):
+    # Enumerate the complete alphabet, including holes in each initial's
+    # codebook, and the non-letter boundaries accepted by the byte API.
+    for second in [0, 0x60, *range(0x61, 0x7b), 0x7b, 0x80, 0xff]:
+        final = bytes([first, second])
+        key = FINALS.get(final.decode('latin1'))
+        spelling = b'b' + final
+        assert prepare(pinyin_binary, spelling) == (
+            b'b' + key.encode() if key else b'',
+            spelling.ljust(10, b'\xa5'), bool(key))
+
+
 @pytest.mark.parametrize('length', [0, 9, 10, 255])
 def test_invalid_length_leaves_resident_buffers_alone(pinyin_binary, length):
     assert prepare(pinyin_binary, b'abcdefgh', length=length) == (b'', b'\xa5'*10, False)
