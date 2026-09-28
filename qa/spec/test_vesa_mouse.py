@@ -122,8 +122,8 @@ def test_mickey_ratio_is_forwarded_without_using_state_storage(vesa_driver):
 def test_mouse_exclusion_and_show_use_logical_cells(vesa_driver):
     m,state=mouse(vesa_driver)
     m.run('int33_handler',AX=4,CX=624,DX=384)
-    m.run('mouse_poll')
     m.run('int33_handler',AX=1)
+    m.run('mouse_poll')
     def visible():
         m.uc.mem_write(0x1e002,struct.pack('<H',48*256+78))
         m.run('mouse_covers')
@@ -135,6 +135,25 @@ def test_mouse_exclusion_and_show_use_logical_cells(vesa_driver):
     assert visible()
     m.run('int33_handler',AX=2)
     assert not visible()
+
+
+def test_hidden_mouse_keeps_queries_without_polling_during_paint(vesa_driver):
+    m, state = mouse(vesa_driver)
+    m.run('int33_handler', AX=4, CX=624, DX=384)
+    state['calls'].clear()
+    for _ in range(32):
+        m.run('mouse_poll')
+    assert not state['calls']
+    m.run('int33_handler', AX=3)
+    assert (m.get('CX'), m.get('DX')) == (624, 384)
+    assert state['calls'] == [3]
+    m.run('int33_handler', AX=1)
+    m.run('mouse_poll')
+    assert state['calls'] == [3, 3]
+    # A cursor on another display page cannot contribute pixels either.
+    m.run('int33_handler', AX=0x1d, BX=1)
+    m.run('mouse_poll')
+    assert state['calls'] == [3, 3]
 
 
 def test_stationary_mouse_and_caret_do_not_redraw_on_idle_ticks(vesa_driver):

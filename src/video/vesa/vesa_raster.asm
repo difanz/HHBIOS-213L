@@ -238,6 +238,110 @@ span_done:
     ret
 raster_span endp
 
+; Native masked cells: fill their background, then stencil the foreground
+; into all four planes. Latch reads retain every pixel outside the edge masks.
+public raster_stencil
+raster_stencil proc near
+    push bp
+    mov bp,sp
+    sub sp,2
+    pushad
+    push es
+    mov ax,word ptr screen+6
+    mov es,ax
+    mov dx,3ceh
+    xor al,al
+    out dx,al
+    inc dx
+    in al,dx
+    dec dx
+    mov ah,al
+    xor al,al
+    push ax                    ; original set/reset color
+    mov dx,3c4h
+    mov ax,0f02h
+    out dx,ax
+    mov dx,3ceh
+    mov ax,0f01h
+    out dx,ax
+    mov ax,[bp+14]
+    and ax,0f0h
+    shl ax,4
+    out dx,ax
+    mov bx,[bp+12]
+    mov si,[bp+10]
+    mov di,[bp+6]
+stencil_background_column:
+    mov al,8
+    mov ah,[bx]
+    out dx,ax
+    mov cx,[bp+8]
+    push di
+    cmp ah,0ffh
+    je stencil_background_full
+stencil_background_masked:
+    mov al,es:[di]
+    mov es:[di],al
+    add di,cs:display_pitch
+    loop stencil_background_masked
+    jmp short stencil_background_next
+stencil_background_full:
+    mov es:[di],al
+    add di,cs:display_pitch
+    loop stencil_background_full
+stencil_background_next:
+    pop di
+    inc di
+    inc bx
+    dec si
+    jnz stencil_background_column
+    mov ax,[bp+14]
+    and ax,0fh
+    shl ax,8
+    out dx,ax
+    mov ax,0305h
+    out dx,ax
+    mov ax,[bp+10]
+    mov [bp-2],ax
+    mov bx,[bp+12]
+    mov si,[bp+4]
+    mov di,[bp+6]
+stencil_foreground_column:
+    mov al,8
+    mov ah,[bx]
+    out dx,ax
+    mov cx,[bp+8]
+    push si
+    push di
+stencil_foreground_row:
+    mov al,es:[di]
+    mov al,[si]
+    mov es:[di],al
+    add si,16
+    add di,cs:display_pitch
+    loop stencil_foreground_row
+    pop di
+    pop si
+    inc di
+    inc si
+    inc bx
+    dec word ptr [bp-2]
+    jnz stencil_foreground_column
+    mov ax,1                   ; normal plane writes for the next glyph
+    out dx,ax
+    mov ax,5
+    out dx,ax
+    mov ax,0ff08h
+    out dx,ax
+    pop ax
+    out dx,ax
+    pop es
+    popad
+    mov sp,bp
+    pop bp
+    ret
+raster_stencil endp
+
 ; Forward, non-overlapping spans, at most 64 KiB. Plane selection is owned
 ; by the caller. Wide accesses are safe in VGA write mode zero only.
 public raster_copy

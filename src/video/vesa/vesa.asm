@@ -659,7 +659,7 @@ text_changed proc near
     mov al,cs:D_ZBFS
     cmp al,cs:D_LASTMODE
     jne text_is_changed
-    mov al,cs:K_HZ1
+    mov al,byte ptr cs:K_HZ1
     cmp al,cs:D_LASTHZ
     jne text_is_changed
     xor si,si
@@ -687,6 +687,7 @@ refresh endp
 
 refresh_dirty proc near
     save_regs
+    cld
     call classifier_policy
     mov ds,cs:D_B800
     push cs
@@ -703,6 +704,8 @@ refresh_dirty proc near
 refresh_ready:
     call video_begin
     jc refresh_done
+    call refresh_ascii
+    jnc refresh_finish
     call S_XR
     cmp cs:banked_text,0
     je refresh_finish
@@ -713,6 +716,123 @@ refresh_done:
     load_regs
     ret
 refresh_dirty endp
+
+; Printable single cells neither join a Hanzi pair nor supply frame strokes.
+; Check every change before updating the shadow: a later non-ASCII change
+; must still reach the full classifier with the entire old page intact.
+refresh_ascii proc near
+    save_regs
+    cmp cs:glyph_width,1
+    jne ascii_fallback
+    mov al,cs:D_ZBFS
+    cmp al,cs:D_LASTMODE
+    jne ascii_fallback
+    mov al,byte ptr cs:K_HZ1
+    cmp al,cs:D_LASTHZ
+    jne ascii_fallback
+    xor si,si
+    mov di,offset D_XPQ
+    mov cx,cs:text_cells
+ascii_check:
+    call compare_text_words
+    je ascii_valid
+    mov ax,[si-2]
+    mov bx,es:[di-2]
+    cmp al,20h
+    jb ascii_fallback
+    cmp al,7eh
+    ja ascii_fallback
+    cmp bl,20h
+    jb ascii_fallback
+    cmp bl,7eh
+    ja ascii_fallback
+    cmp al,bl
+    je ascii_next_check
+    ; ASCII [+]/[-] nodes can anchor an unchanged CP437 directory branch.
+    cmp al,'['
+    je ascii_fallback
+    cmp al,']'
+    je ascii_fallback
+    cmp al,'+'
+    je ascii_fallback
+    cmp al,'-'
+    je ascii_fallback
+    cmp bl,'['
+    je ascii_fallback
+    cmp bl,']'
+    je ascii_fallback
+    cmp bl,'+'
+    je ascii_fallback
+    cmp bl,'-'
+    je ascii_fallback
+ascii_next_check:
+    or cx,cx
+    jnz ascii_check
+ascii_valid:
+    xor si,si
+    mov di,offset D_XPQ
+    mov cx,cs:text_cells
+ascii_paint:
+    call compare_text_words
+    je ascii_finished
+    save_regs
+    mov ax,si
+    sub ax,2
+    shr ax,1
+    mov dl,80
+    div dl
+    xchg ah,al
+    mov dx,ax
+    mov ax,[si-2]
+    mov es:[di-2],ax
+    mov bl,ah
+    call S_XSZF
+    load_regs
+    or cx,cx
+    jnz ascii_paint
+ascii_finished:
+    load_regs
+    clc
+    ret
+ascii_fallback:
+    load_regs
+    stc
+    ret
+refresh_ascii endp
+
+; Keep CMPSW's first unequal cell and remaining count while skipping equal
+; pairs with 386 dword reads. The caller needs ZF, SI, DI and CX only.
+public compare_text_words
+compare_text_words proc near
+    push ax
+    jcxz compare_words_done
+    mov ax,cx
+    shr cx,1
+    jz compare_words_tail
+    repe cmpsd
+    jne compare_words_split
+compare_words_tail:
+    mov cx,ax
+    and cx,1
+    jz compare_words_done
+    repe cmpsw
+compare_words_done:
+    pop ax
+    ret
+compare_words_split:
+    sub si,4
+    sub di,4
+    shl cx,1
+    and ax,1
+    add cx,ax
+    add cx,2
+    dec cx
+    cmpsw
+    jne compare_words_done
+    dec cx
+    cmpsw
+    jmp short compare_words_done
+compare_text_words endp
 
 ; A font downloader can temporarily unmap B800 between its direct I/O writes.
 ; IRQ refresh/capture must wait until the application restores a text aperture.

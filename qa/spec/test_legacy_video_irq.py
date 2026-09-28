@@ -25,7 +25,8 @@ def legacy_video(request, assembler, source_dir, tmp_path_factory):
     symbols = ['INT_10', 'D_INT10', 'D_INT16', 'IN_INT10', 'S_VIDEO_RETURN']
     if name in ('VGA', 'EGA', 'HGA'):
         symbols += ['INT_8', 'D_INT8', 'D_8', 'K_INT8', 'D_B800', 'D_XPQ',
-                    'S_SETB8', 'S_XR']
+                    'S_SETB8', 'S_XR', 'K_HZ1', 'D_LASTHZ', 'D_ZBFS',
+                    'D_LASTMODE', 'L_0830']
     if name in ('VGA', 'EGA'):
         symbols += ['D_VBEBUSY']
     if name in ('CGA11', 'CGA16'):

@@ -28,6 +28,8 @@ void CALL raster_latches(u16 destination, u16 source, u16 count);
 void CALL raster_span(const u8* source, u16 offset, u16 rows, u16 width,
                       const u8* masks, u16 foreground, u16 background,
                       u16 repeats, u16 phase);
+void CALL raster_stencil(const u8* source, u16 offset, u16 rows, u16 width,
+                         const u8* masks, u16 attribute);
 
 static u8 FAR* MapFramebufferByte(u32 offset) {
   u16 block = (u16)(offset >> 16);
@@ -220,16 +222,21 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
       if (rows > raster_height * pixel_scale - done) {
         rows = raster_height * pixel_scale - done;
       }
-      for (plane_index = 0; plane_index < 4; ++plane_index) {
-        if (!SelectGlyphPlanes(plane_index, attribute,
-                               !(shift | (width & 7)))) {
-          continue;
+      if (pixel_scale == 1 && (shift || (width & 7))) {
+        raster_stencil(scratch.glyph.ink[done], (u16)offset, rows, bytes,
+                       scratch.glyph.masks, attribute);
+      } else {
+        for (plane_index = 0; plane_index < 4; ++plane_index) {
+          if (!SelectGlyphPlanes(plane_index, attribute,
+                                 !(shift | (width & 7)))) {
+            continue;
+          }
+          raster_span(scratch.glyph.ink[done / pixel_scale], (u16)offset, rows,
+                      bytes, scratch.glyph.masks,
+                      (attribute & (1 << plane_index)) ? 65535U : 0,
+                      (attribute & (16 << plane_index)) ? 65535U : 0, pixel_scale,
+                      done % pixel_scale);
         }
-        raster_span(scratch.glyph.ink[done / pixel_scale], (u16)offset, rows,
-                    bytes, scratch.glyph.masks,
-                    (attribute & (1 << plane_index)) ? 65535U : 0,
-                    (attribute & (16 << plane_index)) ? 65535U : 0, pixel_scale,
-                    done % pixel_scale);
       }
     }
     offset += MultiplyWide(rows, display_pitch);

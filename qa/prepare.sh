@@ -87,6 +87,7 @@ ROWGUARD rowguard
 SELECTMD selectmode
 SHELLCAP shellcap appcap videolog
 SNAPSHOT snapshot
+STREAM dosstream
 TEXTMODE textmode
 VBETEST vbe
 VESATEST vesatest

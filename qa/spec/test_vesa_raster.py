@@ -6,6 +6,7 @@ from unicorn import UC_HOOK_INSN, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WR
 from unicorn import x86_const as reg
 
 from qa.spec.test_vesa_api import Driver, vesa_driver
+from qa.spec.planar_memory import PlanarMemory
 
 pytestmark = pytest.mark.unit
 
@@ -98,59 +99,28 @@ def test_word_rows_preserve_neighbors_and_tail(vesa_driver, shift, rows, foregro
     (10, 23, 4, False), (10, 23, 1, True), (10, 23, 2, True), (10, 23, 4, True)])
 @pytest.mark.parametrize('shift', [0, 3, 7])
 def test_raster_preparation_across_bank_edges(vesa_driver, width, height, scale, shift, legacy):
-    # Emulate only bank/plane selection, with ordinary memory stores. Actual
-    # VGA latch and scanout behavior are covered by the DOS pixel tests.
+    # Execute the complete preparation and bank-splitting paths with VGA
+    # latches; actual scanout is also checked by the DOS pixel tests.
     initial = bytes((i * 19 + i // 160) & 255 for i in range(131072))
-    planes = [bytearray(initial) for _ in range(4)]
-    state = dict(bank=0, plane=0, writes=15)
-    def save():
-        start = state['bank'] * 65536
-        planes[state['plane']][start:start + 65536] = m.uc.mem_read(0xa0000, 65536)
-    def load():
-        start = state['bank'] * 65536
-        m.uc.mem_write(0xa0000, bytes(planes[state['plane']][start:start + 65536]))
     def bios(m):
         assert m.get('AX') == 0x4f05
-        save()
-        state['bank'] = m.get('DX')
-        assert state['bank'] in (0, 1)
-        load()
+        memory.bank = m.get('DX')
+        assert memory.bank in (0, 1)
         m.put('AX', 0x004f)
     m = Driver(vesa_driver, bios)
+    memory = PlanarMemory(m, [initial] * 4)
     m.write('screen', struct.pack('<4H', 1280, 1024, 160, 0xa000))
     for name, value in dict(font_width=width, font_height=height, raster_height=height,
                             viewport_x=760 + shift, viewport_y=409,
                             pixel_scale=scale, display_pitch=160, bank_step=1).items():
         m.write(name, struct.pack('<H', value))
     m.write('active', b'\1')
-    load()
-    def out(uc, port, size, value, _):
-        assert size == 2
-        if port == 0x3ce:
-            assert value & 255 == 4
-            save()
-            state['plane'] = value >> 8
-            load()
-        else:
-            assert port == 0x3c4 and value & 255 == 2
-            state['writes'] = value >> 8
-    def memory(uc, access, address, size, value, _):
-        assert address + size <= 0xb0000
-        assert state['writes'] & (1 << state['plane'])
-        if access == UC_MEM_WRITE:
-            start = state['bank'] * 65536 + address - 0xa0000
-            for plane in range(4):
-                if state['writes'] & (1 << plane):
-                    planes[plane][start:start+size] = value.to_bytes(size, 'little')
-    m.uc.hook_add(UC_HOOK_INSN, out, None, 1, 0, reg.UC_X86_INS_OUT)
-    m.uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, memory, begin=0xa0000, end=0xaffff)
     rows = [sum(1 << (31 - x) for x in range(width) if (x * 3 + y * 5) % 11 < 4)
             for y in range(height)]
     packed = struct.pack(f'<{height}H', *(r >> 16 for r in rows)) if legacy else struct.pack(f'<{height}I', *rows)
     m.uc.mem_write(0x1d000, packed)
     m.uc.mem_write(0x1e002, struct.pack('<3H', 0xd000, 0xa5, 0))
     m.run('raster_cell' if legacy else 'raster_large_cell', limit=3000000)
-    save()
     for plane in range(4):
         expected = bytearray(initial)
         for y in range(height * scale):
@@ -160,7 +130,7 @@ def test_raster_preparation_across_bank_edges(vesa_driver, width, height, scale,
                 ink = rows[y // scale] & (0x80000000 >> (x // scale))
                 color = 0xa5 & (1 << (plane if ink else plane + 4))
                 expected[offset] = (expected[offset] & ~mask) | (mask if color else 0)
-        assert planes[plane] == expected, plane
+        assert memory.planes[plane] == expected, plane
 
 
 @pytest.mark.parametrize('width', [1, 3, 4, 5, 13])

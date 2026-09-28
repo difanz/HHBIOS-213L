@@ -13,6 +13,7 @@ D_LASTHZ		DB	0
 D_COL		DB	0
 D_ROW		DB	0
 D_PAIR		DB	0
+D_FIRSTCOL	DB	0
 		INCLUDE frame.inc
 
 ;子程序:处理直接写屏
@@ -21,7 +22,7 @@ S_XR		PROC	NEAR
 		MOV	AL,CS:D_ZBFS
 		CMP	AL,CS:D_LASTMODE
 		JNZ	L_XRPOL
-		MOV	AL,CS:K_HZ1
+		MOV	AL,BYTE PTR CS:K_HZ1
 		CMP	AL,CS:D_LASTHZ
 		JZ	L_XRSCAN
 L_XRPOL:
@@ -38,7 +39,7 @@ L_XRINV:
 L_XRSCAN:
 		MOV	AL,CS:D_ZBFS
 		MOV	CS:D_LASTMODE,AL
-		MOV	AL,CS:K_HZ1
+		MOV	AL,BYTE PTR CS:K_HZ1
 		MOV	CS:D_LASTHZ,AL
 		CMP	CS:D_ZBFS,1		;=1不处理制表符
 		JBE	L_XR10
@@ -53,14 +54,14 @@ L_XR1:
 		XOR	SI,SI
 L_XR2:
 		LODSW				;取字符
-        IFDEF XR_CUSTOM
-        CALL S_CUSTOM
-        JNZ L_XR9
-        ENDIF
 		CMP	AL,0B0H 		;判西文制表符
 		JB	L_XR9
 		CMP	AL,0E0H
 		JAE	L_XR9
+        IFDEF XR_CUSTOM
+        CALL S_CUSTOM
+        JNZ L_XR9
+        ENDIF
 
 		PUSH	SI			;西文制表符处理
 		PUSH	CX
@@ -163,6 +164,7 @@ S_XR		ENDP
 ; Redraw a changed row so a byte edit can repair the rest of a DBCS run.
 ; DS:SI is the changed word, DX its position; ES is the shadow segment.
 S_XRROW		PROC	NEAR
+        MOV CS:D_FIRSTCOL,DL
 		XOR	AH,AH
 		MOV	AL,DL
 		SHL	AX,1
@@ -778,6 +780,18 @@ L_XXTRAIL:
 		MOV	BL,BH			;	 属性
 		MOV	AH,CL			;当前字符
 		MOV	BH,CH			;	 属性
+        ; Keep pairing state, but do not fetch an unchanged pair wholly
+        ; before the first changed cell. Direct S_XRHZ callers bypass this.
+        IFDEF XR_CUSTOM
+        CMP CS:glyph_width,1
+        JNE S_XRHZ
+        ENDIF
+        PUSH DX
+        INC DL
+        CMP DL,CS:D_FIRSTCOL
+        POP DX
+        JAE S_XRHZ
+        RET
    ;子程序:显示汉字 前字节AH,属性BH,位置SI;后字节AL,属性BL
 S_XRHZ:
 		CMP	DL,79			;在行尾?

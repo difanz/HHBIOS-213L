@@ -383,7 +383,7 @@ u16 CALL mouse_erase(void) {
 void CALL mouse_poll(void) {
   struct BiosRegisters bios_registers;
   struct BiosRegisters FAR* registers_ptr = STACK(&bios_registers);
-  if (!present || !attached) {
+  if (!present || !attached || visibility < 0 || mouse_page != active_page) {
     return;
   }
   ClearRegisters(registers_ptr);
