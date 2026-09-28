@@ -31,8 +31,8 @@ def test_native_stencil_preserves_edges_and_registers(vesa_driver, width, shift,
         masks[pixel // 8] |= 128 >> (pixel & 7)
     machine.uc.mem_write(0x1d000, source)
     machine.uc.mem_write(0x1d400, bytes(masks))
-    machine.uc.mem_write(0x1e002, struct.pack('<6H', 0xd000, offset, rows,
-                                             span, 0xd400, attribute))
+    machine.uc.mem_write(0x1e002, struct.pack('<7H', 0xd000, offset, rows,
+                                             span, 0xd400, attribute, 16))
     registers = {name: 0xa1234567 + index for index, name in
                  enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP'))}
     machine.run('raster_stencil', ES=0x3000, **registers)
@@ -47,7 +47,8 @@ def test_native_stencil_preserves_edges_and_registers(vesa_driver, width, shift,
                 position = offset + row * pitch + byte
                 expected[position] = (expected[position] & ~mask) | (mask if color else 0)
         assert memory.planes[plane] == expected
-    assert len(memory.reads) == rows * (span + sum(mask != 255 for mask in masks))
+    edges = sum(mask != 255 for mask in masks)
+    assert len(memory.reads) <= 2 * rows * edges + span - edges
     assert memory.gc[0] == 9 and memory.gc[1] == memory.gc[5] == 0 and memory.gc[8] == 255
     assert all(machine.get(name) == value for name, value in registers.items())
     assert machine.get('ES') == 0x3000

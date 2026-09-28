@@ -200,9 +200,9 @@ class Driver:
     def run(self,entry='int10_handler',limit=300000,**registers):
         near=entry not in ('int10_handler','int33_handler','int8_handler')
         # Installation code extends past E000h; keep its C stack above the
-        # complete COM image, as the DOS loader does.
+        # complete COM image. Resident-call fixtures place arguments at E002h.
         context=dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
-                     SP=0xfe00 if near else 0xe000,EFLAGS=0x202)
+                     SP=0xfe00 if entry == 'initialize' else 0xe000,EFLAGS=0x202)
         context.update(registers)
         for name,value in context.items(): self.put(name,value)
         address=(self.get('SS')<<4)+self.get('SP')

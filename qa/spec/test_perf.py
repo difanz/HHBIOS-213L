@@ -112,12 +112,12 @@ def test_msdos_repeated_paint(dosbox_binary, guest_build, msdos_image, tmp_path,
     # Repainting eight complete pages, including every character/attribute;
     # these bounds catch cache thrashing as glyph size and text rows increase.
     budgets = {
-        (800, 600, 25): (42, 36, 9),
-        (1024, 768, 25): (46, 45, 12),
-        (1280, 1024, 25): (42, 42, 14),
-        (1280, 1024, 50): (58, 56, 19),
-        (1920, 1080, 25): (72, 48, 18),
-        (1920, 1080, 50): (64, 65, 21),
+        (800, 600, 25): (22, 24, 9),
+        (1024, 768, 25): (23, 24, 12),
+        (1280, 1024, 25): (16, 17, 14),
+        (1280, 1024, 50): (23, 26, 19),
+        (1920, 1080, 25): (40, 18, 18),
+        (1920, 1080, 50): (24, 29, 21),
     }
     for name, budget in zip(('ASCII_8', 'CHINESE_8', 'SCROLL_16'),
                             budgets[width, height, rows]):

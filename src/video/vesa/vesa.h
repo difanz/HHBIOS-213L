@@ -133,6 +133,8 @@ extern u8 CALL font_extended;
 extern char CALL font_name[64];
 void CALL font_get_large(u16 code, u32* out);
 void CALL font_draw(u16 code, u16 attribute, u16 position, u16 wide);
+void CALL raster_packed_cell(const u8* source, u16 attribute, u16 position,
+                             u16 source_pitch, u16 source_bit);
 void CALL font_bitmap_draw(const u8* source, u16 attribute, u16 position);
 void CALL bios(struct BiosRegisters* r);
 void CALL refresh(void);

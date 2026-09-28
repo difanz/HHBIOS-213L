@@ -40,6 +40,8 @@ static u16 cache_lengths[FONT_CACHE];
 static u16 loaded_compact;
 /* Bit 0: valid, bit 1: recently used (second-chance replacement). */
 static u8 valid[FONT_CACHE];
+/* A hint only: arena reuse and hash collisions still check the full key. */
+static u8 lookup[64];
 static u16 map_page = 0xffff;
 /* The first 128 bytes cache record IDs. Variable-sized glyphs use the rest. */
 static u8 cache[2176];
@@ -83,6 +85,12 @@ static void ClearBytes(void* buffer, u16 size) {
 static void CopyBytes(void* destination, const void* source, u16 size);
 #pragma aux CopyBytes = "push es" "push ds" "pop es" "rep movsb" "pop es" \
     parm [di] [si] [cx] modify [di si cx];
+
+static u16 SameFontBytes(const u8* first, const u8* second);
+#pragma aux SameFontBytes = \
+    "push es" "push ds" "pop es" "mov cx,1024" "xor ax,ax" \
+    "repe cmpsd" "jne different" "inc ax" "different:" "pop es" \
+    parm [si] [di] value [ax] modify [si di cx];
 
 static int TransferFontBytes(u32 offset, void* buffer, u16 size, u16 writing) {
   struct BiosRegisters bios_registers;
@@ -195,6 +203,7 @@ static u8* LoadGlyph(u16 code) {
   u16 slot;
   u16 i;
   u16 record_index;
+  u16 bucket;
   u8* glyph_data = (u8*)doubled_glyph;
   if (code < 256) {
     slot = (font_custom[code] & 1) ? code | 0x8000 : code;
@@ -208,10 +217,13 @@ static u8* LoadGlyph(u16 code) {
       slot += FONT_SLOTS;
     }
   }
-  for (i = 0; i < FONT_CACHE; ++i) {
-    if (valid[i] && keys[i] == slot) {
-      valid[i] |= 2;
-      break;
+  bucket = (slot ^ (slot >> 8)) & 63;
+  i = lookup[bucket];
+  if (!valid[i] || keys[i] != slot) {
+    for (i = 0; i < FONT_CACHE; ++i) {
+      if (valid[i] && keys[i] == slot) {
+        break;
+      }
     }
   }
   if (i == FONT_CACHE) {
@@ -257,6 +269,8 @@ static u8* LoadGlyph(u16 code) {
     }
     CacheGlyph(i, slot, (slot & 0x8000) ? 16 : record_bytes);
   }
+  valid[i] |= 2;
+  lookup[bucket] = (u8)i;
   loaded_compact = cache_lengths[i] & 0x8000;
   return cache + FONT_MAP_CACHE * 2 + cache_offsets[i];
 }
@@ -346,6 +360,23 @@ static void DrawLargeHalf(const u32* bits, u16 attribute, u16 position,
 }
 
 void CALL font_draw(u16 code, u16 attribute, u16 position, u16 wide) {
+  if (pixel_scale == 1 && wide == 1 &&
+      (code >= 256 || !(font_custom[code] & 1))) {
+    u8* pixels = LoadGlyph(code);
+    u16 stride = ((loaded_compact ? font_width : font_width * 2) + 7) / 8;
+    if (!pixels) {
+      stride = (font_width * 2 + 7) / 8;
+      ClearBytes(large_glyph, stride * raster_height);
+      pixels = (u8*)large_glyph;
+    }
+    raster_packed_cell(pixels, code < 256 ? attribute : attribute >> 8,
+                       position, stride, 0);
+    if (code >= 256 && (position & 255) < TEXT_COLS - 1) {
+      raster_packed_cell(pixels, attribute & 255, position + 1, stride,
+                         font_width);
+    }
+    return;
+  }
   font_get_large(code, large_glyph);
   DrawLargeHalf(large_glyph, code < 256 ? attribute : attribute >> 8, position,
                 wide == 2);
@@ -387,6 +418,9 @@ void CALL font_sync(void) {
   if (custom_active &&
       !TransferFontBytes(text_storage + 32768UL, text_transfer, 4096, 0)) {
     font_fault = 1;
+    return;
+  }
+  if (custom_active && SameFontBytes(current, text_transfer)) {
     return;
   }
   for (code = 0; code < 256; ++code) {

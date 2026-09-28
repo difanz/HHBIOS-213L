@@ -5,6 +5,53 @@
 .386
 extrn display_pitch:word, screen:byte, framebuffer:word
 
+; Align a packed cell to its destination byte without expanding both halves
+; into 32-bit row arrays first. Read only the supplied 1..4 source bytes.
+public raster_pack
+raster_pack proc near
+    push bp
+    mov bp,sp
+    pushad
+    mov si,[bp+4]
+    mov di,[bp+6]
+    mov bx,[bp+8]
+pack_row:
+    xor eax,eax
+    cmp word ptr [bp+12],4
+    je pack_dword
+    mov ah,[si]
+    cmp word ptr [bp+12],1
+    je pack_high_word
+    mov al,[si+1]
+pack_high_word:
+    shl eax,16
+    cmp word ptr [bp+12],3
+    jne pack_shift
+    mov ah,[si+2]
+    jmp short pack_shift
+pack_dword:
+    mov eax,[si]
+    xchg al,ah
+    ror eax,16
+    xchg al,ah
+pack_shift:
+    mov cx,[bp+14]
+    shl eax,cl
+    mov cx,[bp+16]
+    shr eax,cl
+    xchg al,ah
+    ror eax,16
+    xchg al,ah
+    mov [di],eax
+    add si,[bp+10]
+    add di,16
+    dec bx
+    jnz pack_row
+    popad
+    pop bp
+    ret
+raster_pack endp
+
 ; Two left-aligned ten-bit rows fit in EAX. Their six low zero bits keep
 ; shifts from carrying pixels into the next row. No read crosses a bank.
 public raster_words

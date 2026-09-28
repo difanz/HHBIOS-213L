@@ -30,6 +30,9 @@ void CALL raster_span(const u8* source, u16 offset, u16 rows, u16 width,
                       u16 repeats, u16 phase);
 void CALL raster_stencil(const u8* source, u16 offset, u16 rows, u16 width,
                          const u8* masks, u16 attribute, u16 source_pitch);
+void CALL raster_pack(const u8* source, u8* destination, u16 rows,
+                      u16 source_pitch, u16 source_bytes, u16 source_shift,
+                      u16 destination_shift);
 
 static u8 FAR* MapFramebufferByte(u32 offset) {
   u16 block = (u16)(offset >> 16);
@@ -64,6 +67,84 @@ static u16 SelectGlyphPlanes(u16 plane, u16 attribute, u16 whole_bytes) {
   WritePortWord(0x3ce, 4 | (plane << 8));
   WritePortWord(0x3c4, 2 | (mask << 8));
   return 1;
+}
+
+/* Emit packed rows directly from the font cache or the shifted-row scratch.
+ * Split only at window boundaries; a scanline crossing one needs byte stores. */
+static void DrawPackedRows(const u8* source, u16 source_pitch, u16 attribute,
+                           u16 x, u16 y, u16 bytes, const u8* masks) {
+  u32 offset = MultiplyWide(y, display_pitch) + x / 8;
+  u16 remaining = raster_height;
+  while (remaining) {
+    u16 rows;
+    if (!MapFramebufferByte(offset)) {
+      return;
+    }
+    if ((u16)offset > 65535U - (bytes - 1)) {
+      u16 byte_index;
+      for (byte_index = 0; byte_index < bytes; ++byte_index) {
+        u16 plane;
+        u8 FAR* destination = MapFramebufferByte(offset + byte_index);
+        if (!destination) {
+          return;
+        }
+        for (plane = 0; plane < 4; ++plane) {
+          u8 foreground = (attribute & (1 << plane)) ? 255 : 0;
+          u8 background = (attribute & (16 << plane)) ? 255 : 0;
+          u8 value = (source[byte_index] & (foreground ^ background)) ^ background;
+          if (SelectGlyphPlanes(plane, attribute, masks[byte_index] == 255)) {
+            *destination = (*destination & ~masks[byte_index]) |
+                           (value & masks[byte_index]);
+          }
+        }
+      }
+      rows = 1;
+    } else {
+      rows = (65535U - (bytes - 1) - (u16)offset) / display_pitch + 1;
+      if (rows > remaining) {
+        rows = remaining;
+      }
+      raster_stencil(source, (u16)offset, rows, bytes, masks, attribute,
+                     source_pitch);
+    }
+    source += rows * source_pitch;
+    offset += MultiplyWide(rows, display_pitch);
+    remaining -= rows;
+  }
+  WritePortWord(0x3c4, 0x0f02);
+}
+
+void CALL raster_packed_cell(const u8* source, u16 attribute, u16 position,
+                             u16 source_pitch, u16 source_bit) {
+  u16 x;
+  u16 y;
+  u16 shift;
+  u16 bytes;
+  u16 i;
+  if ((position & 255) >= TEXT_COLS || (position >> 8) > text_rows) {
+    return;
+  }
+  x = viewport_x + (position & 255) * font_width;
+  y = viewport_y + (position >> 8) * raster_height;
+  shift = x & 7;
+  bytes = (shift + font_width + 7) / 8;
+  for (i = 0; i < bytes; ++i) {
+    scratch.glyph.masks[i] = 255;
+  }
+  scratch.glyph.masks[0] >>= shift;
+  if ((shift + font_width) & 7) {
+    scratch.glyph.masks[bytes - 1] &= 255 << (8 - ((shift + font_width) & 7));
+  }
+  source += source_bit / 8;
+  source_bit &= 7;
+  if (shift || source_bit) {
+    raster_pack(source, scratch.glyph.ink[0], raster_height, source_pitch,
+                (source_bit + font_width + 7) / 8, source_bit, shift);
+    source = scratch.glyph.ink[0];
+    source_pitch = sizeof(scratch.glyph.ink[0]);
+  }
+  DrawPackedRows(source, source_pitch, attribute, x, y, bytes,
+                 scratch.glyph.masks);
 }
 
 static void DrawWordRows(const u16* bits, u16 attribute, u16 x, u16 y) {
@@ -191,6 +272,11 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
       }
     }
   }
+  if (pixel_scale == 1) {
+    DrawPackedRows(scratch.glyph.ink[0], sizeof(scratch.glyph.ink[0]),
+                   attribute, x, y, bytes, scratch.glyph.masks);
+    return;
+  }
   offset = MultiplyWide(y, display_pitch) + x / 8;
   while (done < raster_height * pixel_scale) {
     if (!MapFramebufferByte(offset)) {
@@ -222,22 +308,16 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
       if (rows > raster_height * pixel_scale - done) {
         rows = raster_height * pixel_scale - done;
       }
-      if (pixel_scale == 1) {
-        raster_stencil(scratch.glyph.ink[done], (u16)offset, rows, bytes,
-                       scratch.glyph.masks, attribute,
-                       sizeof(scratch.glyph.ink[0]));
-      } else {
-        for (plane_index = 0; plane_index < 4; ++plane_index) {
-          if (!SelectGlyphPlanes(plane_index, attribute,
-                                 !(shift | (width & 7)))) {
-            continue;
-          }
-          raster_span(scratch.glyph.ink[done / pixel_scale], (u16)offset, rows,
-                      bytes, scratch.glyph.masks,
-                      (attribute & (1 << plane_index)) ? 65535U : 0,
-                      (attribute & (16 << plane_index)) ? 65535U : 0, pixel_scale,
-                      done % pixel_scale);
+      for (plane_index = 0; plane_index < 4; ++plane_index) {
+        if (!SelectGlyphPlanes(plane_index, attribute,
+                               !(shift | (width & 7)))) {
+          continue;
         }
+        raster_span(scratch.glyph.ink[done / pixel_scale], (u16)offset, rows,
+                    bytes, scratch.glyph.masks,
+                    (attribute & (1 << plane_index)) ? 65535U : 0,
+                    (attribute & (16 << plane_index)) ? 65535U : 0, pixel_scale,
+                    done % pixel_scale);
       }
     }
     offset += MultiplyWide(rows, display_pitch);

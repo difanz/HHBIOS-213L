@@ -1034,60 +1034,15 @@ classifier_policy endp
 ; Each glyph has a planar backend. Pixel pitch is explicit; classifier
 ; row/column values never stand for framebuffer byte offsets.
 S_XSZF proc near
-    cmp cs:font_extended,0
-    je ascii_fixed_font
     xor ah,ah
-    jmp draw_large_font
-ascii_fixed_font:
-    push dx
-    push bx
-    xor ah,ah
-    push cs
-    pop ds
-    mov si,offset glyph_bits
-    push si
-    push ax
-    call font_get
-    add sp,4
-    pop bx
-    pop dx
-    push cs
-    pop ds
-    mov si,offset glyph_bits
-    call blit_cell
-    ret
+    jmp draw_font
 S_XSZF endp
 
 S_XSHZ proc near
-    cmp cs:font_extended,0
-    jne draw_large_font
-    push dx
-    push bx
-    push cs
-    pop ds
-    mov si,offset glyph_bits
-    push si
-    push ax
-    call font_get
-    add sp,4
-    pop bx
-    pop dx
-    push cs
-    pop ds
-    push bx
-    push dx
-    mov bl,bh
-    mov si,offset glyph_bits
-    call blit_cell
-    pop dx
-    pop bx
-    add dl,cs:glyph_width
-    mov si,offset glyph_bits+CELL_HEIGHT*2
-    call blit_cell
-    ret
+    jmp draw_font
 S_XSHZ endp
 
-draw_large_font proc near
+draw_font proc near
     save_regs
     push cs
     pop ds
@@ -1101,7 +1056,7 @@ draw_large_font proc near
     add sp,8
     load_regs
     ret
-draw_large_font endp
+draw_font endp
 
 ; DS:SI is 23 left-aligned ten-bit words. Wide text doubles each pixel and
 ; splits at a cell boundary; the ten-pixel grid is unchanged.

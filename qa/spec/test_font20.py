@@ -460,7 +460,14 @@ def test_downloaded_glyph_updates_without_invalidating_unrelated_cells(vesa_driv
     moves=m.moves
     assert len(invalidations)==1
     invalidations.clear()
-    m.uc.mem_write(address,bytes(bitmap)); m.call('font_sync'); m.call('font_get',code,m.buffer)
+    instructions=[]
+    trace=m.uc.hook_add(UC_HOOK_CODE,lambda uc,pc,size,data: instructions.append(pc))
+    m.uc.mem_write(address,bytes(bitmap)); m.call('font_sync')
+    m.uc.hook_del(trace)
+    # An unchanged 4 KiB snapshot needs one dword comparison per four bytes,
+    # not a per-character ROM comparison and another walk over the text page.
+    assert len(instructions)<4096
+    m.call('font_get',code,m.buffer)
     assert m.moves==moves+1, 'Unchanged glyph must reuse its decoded cache entry'
     assert invalidations==[]
     screen=bytes([code,7,65,7])*1000
