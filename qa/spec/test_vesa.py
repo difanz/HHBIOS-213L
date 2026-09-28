@@ -47,7 +47,7 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
     resident=files['RESIDENT.BIN'].read_bytes()
     abi=struct.unpack_from('<10H',resident)
     assert abi[:3]==(0x5356,1,28) and abi[4]==1
-    assert 0 < abi[5] < 55*1024  # bounded cache and font catalog; payloads stay in XMS/EMS
+    assert 0 < abi[5] < 56*1024  # bounded cache and font catalog; payloads stay in XMS/EMS
     assert (abi[8]<0xa000)==bool(residency)
     owner,paragraphs=struct.unpack_from('<HH',resident,49)
     assert owner==abi[8] and paragraphs==(abi[5]+15)//16
@@ -80,13 +80,14 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
             if screen[2*(row*80+col)]==32:
                 for plane in planes:
                     assert plane_bits(plane,100,col*10,row*23,10,23)==(0,)*23, (row,col)
-    # CKBD's persistent IME row occupies 575..597, independently of B800.
+    # The status frame uses the two spare lines; all 23 glyph rows remain.
     for p, plane in enumerate(planes):
         for col, code in ((0, 0xd3a2), (2, 0xcec4)):
             for half in (0, 1):
-                expected=colored_rows(native_rows(code,half),10,23,0x4a,p)
-                assert plane_bits(plane,100,(col+half)*10,575,10,23)==expected
-        assert not any(plane[59800:])
+                expected=colored_rows(native_rows(code,half),10,23,0x70,p)
+                assert plane_bits(plane,100,(col+half)*10,576,10,23)==expected
+        assert plane[57500:57600] == b'\xff' * 100
+        assert plane[59900:60000] == bytes([255 if p == 3 else 0]) * 100
 
 
 @pytest.mark.parametrize('cpu',['8086','286'])
@@ -162,7 +163,7 @@ def test_vesa_prompt_bitmap_wide_text_and_pixels(dosbox_binary,vesa_build,tmp_pa
         for p in range(4):
             expected=colored_rows(bits,width,23,attr,p)
             if clip: expected=tuple(row >> (width-10) for row in expected)
-            assert plane_bits(planes[p],100,col*10,575,10 if clip else width,23)==expected
+            assert plane_bits(planes[p],100,col*10,576,10 if clip else width,23)==expected
     for col in range(4):
         check(col,bytes((i*3+7) & 255 for i in range(col*16,col*16+16))+b'\0\0',0x4b)
     glyphs=[native_rows(65),native_rows(0xd6d0),native_rows(0xd6d0,1),native_rows(90)]
@@ -170,7 +171,9 @@ def test_vesa_prompt_bitmap_wide_text_and_pixels(dosbox_binary,vesa_build,tmp_pa
         # Column 79 is subsequently overwritten by the clipped A.
         check(70+i*2,glyph,0x2e,20,clip=i==3)
         if i==0: check(79,glyph,0x2e,20,clip=True)
-    for p in range(4): assert planes[p][59800:59999]==b'\0'*199
+    for p in range(4):
+        assert planes[p][57500:57600] == b'\xff' * 100
+        assert planes[p][59900:59999] == bytes([255 if p == 3 else 0]) * 99
     for p in range(4): assert planes[p][-1] & 1 == (9 >> p) & 1
 
 

@@ -58,7 +58,7 @@ def test_prompt_lifetime_bitmaps_and_visibility(dosbox_binary, guest_build, prom
     # Opening is optional. A closed bar stays hidden through repaint.
     for n in (0, 7):
         if keep:
-            cell(frames[n], 0, native_rows(0xd3a2), 0x4a)  # English mode, CKBD's text-mode color
+            cell(frames[n], 0, native_rows(0xd3a2), 0x70)
         else:
             assert not any(b for plane in frames[n][-1] for b in plane)
     assert not any(b for plane in frames[6][-1] for b in plane)

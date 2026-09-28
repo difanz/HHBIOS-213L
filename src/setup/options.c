@@ -272,9 +272,9 @@ static void ShowColors(IniSettings* settings) {
   unsigned selected = 0;
   static const char* const english[] = {
       "Candidates: characters / phrase numbers", "Candidates: phrases / character numbers",
-      "Input method title: graphics mode", "Input method title: text mode"};
+      "Menu selection / graphics title", "Input method title: text mode"};
   static const char* const chinese[] = {
-      "候选字、词序号", "候选词、字序号", "输入法标题（图形方式）",
+      "候选字、词序号", "候选词、字序号", "菜单选中项、图形方式标题",
       "输入法标题（文本方式）"};
   for (;;) {
     Form form = {0};
@@ -317,61 +317,38 @@ typedef struct DisplayOption {
   const char* chinese;
 } DisplayOption;
 
-static void BandColorChanged(a_dialog* dialog, void* data) {
-  const a_list* band = (const a_list*)data;
-  if (HasColorDisplay()) {
-    PaintColor(dialog->vs, 15, 2, 28, band->choice);
-  }
-}
-
 void ShowDisplayOptions(IniSettings* settings) {
   static const DisplayOption options[] = {
+      {kIniDisplay, 2, 0, "Keep the input status bar visible", "保持显示输入法状态栏"},
+      {kIniDisplay, 8, 1, "Show startup information", "显示启动信息"},
+      {kIniDisplay3, 2, 1, "Allow programs to set cursor shape", "允许程序改变光标形状"},
       {kIniDisplay, 1, 0, "Extended character font", "使用扩展字符库"},
       {kIniDisplay2, 1, 0, "Translate direct text-memory writes", "支持直接写屏"},
       {kIniDisplay3, 1, 1, "Use Chinese display for modes above 5", "显示方式大于 5 时进入中文显示"},
-      {kIniDisplay, 8, 1, "Show startup information", "显示启动信息"},
       {kIniDisplay2, 8, 0, "Move the cursor down two scanlines", "光标下移两条扫描线"},
       {kIniDisplay3, 8, 0, "Pass CGA palette calls to BIOS", "允许 BIOS 设置 CGA 调色板"},
-      {kIniDisplay, 2, 0, "Keep the input status bar visible", "保持显示输入法提示行"},
-      {kIniDisplay3, 2, 1, "Allow programs to set cursor shape", "允许程序改变光标形状"},
       {kIniDisplay3, 4, 0, "Initialize display attributes", "初始化显示属性寄存器"},
       {kIniDisplay2, 2, 0, "Map B800 in graphics modes", "图形方式打开 B800 段"},
       {kIniDisplay2, 4, 0, "Use BIOS character drawing and scrolling", "字符显示及滚屏调用 BIOS"}};
   IniSettings trial = *settings;
   for (;;) {
     Form form = {0};
-    a_list band = {0};
-    const char* bands[11];
-    bands[0] = LocalizedText("No band", "无光带");
-    for (unsigned i = 1; i < 10; ++i) {
-      bands[i] = ColorName(i);
-    }
-    bands[10] = NULL;
     unsigned count = sizeof(options) / sizeof(options[0]);
-    unsigned old_band = trial.value[kIniBand];
-    unsigned band_choice = old_band >= '0' && old_band <= '9' ? old_band - '0' : 0;
+    AddParagraph(&form, 0, 2, 54, LocalizedText("Appearance", "外观"));
+    AddParagraph(&form, 5, 2, 54, LocalizedText("Program compatibility", "程序兼容性"));
     for (unsigned i = 0; i < count; ++i) {
       const DisplayOption* option = &options[i];
       int checked = (trial.value[option->offset] & option->mask) != 0;
-      AddCheck(&form, i + 1, LocalizedText(option->english, option->chinese),
+      AddCheck(&form, i + (i < 3 ? 1 : 3), LocalizedText(option->english, option->chinese),
                 checked != option->inverted);
     }
-    AddCheck(&form, 12, LocalizedText("Disable split screen", "取消屏幕分割"),
-              old_band > '9');
-    band.data = (void*)bands;
-    band.choice = band_choice;
-    AddParagraph(&form, 14, 2, 29,
-                 LocalizedText("VGA status-band color:", "VGA 提示行光带颜色："));
-    AddField(&form, 14, 34, 3, 22, FLD_LISTBOX, &band);
-    form.changed = BandColorChanged;
-    form.change_data = &band;
-    AddButton(&form, 17, 14, 32,
-              LocalizedText("Status co&lors (all drivers)", "提示行颜色（所有驱动）(&L)"),
+    AddButton(&form, 15, 14, 32,
+              LocalizedText("Status bar co&lors", "状态栏颜色 (&L)"),
               kCmdColors, 0);
-    AddDialogButtons(&form, 20);
+    AddDialogButtons(&form, 18);
     ui_event event = RunForm(&form,
-                             LocalizedText("Legacy display parameters", "传统显示参数"),
-                             22, 60, 0);
+                             LocalizedText("Display settings", "显示设置"),
+                             20, 60, 0);
     if (event != kCmdAccept && event != kCmdColors) {
       return;
     }
@@ -381,9 +358,6 @@ void ShowDisplayOptions(IniSettings* settings) {
       if (!!form.checks[i].val != option->inverted) {
         trial.value[option->offset] |= (unsigned char)option->mask;
       }
-    }
-    if (!!form.checks[count].val != (old_band > '9') || band.choice != band_choice) {
-      trial.value[kIniBand] = form.checks[count].val ? 'A' : '0' + band.choice;
     }
     if (event == kCmdAccept) {
       *settings = trial;

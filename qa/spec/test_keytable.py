@@ -479,9 +479,9 @@ def test_tables_and_vesa_release_all_memory(dosbox_binary, memory_build, table_b
     assert result.returncode == 0, result.stdout+result.stderr
     keyboard_config(tmp_path)
     config = (tmp_path/'213L.INI').read_bytes().splitlines()
-    config[29] = b'59'  # PYMB
+    config[28] = b'59'  # PYMB
     if all_tables:
-        config[30] = config[31] = b'59'
+        config[29] = config[30] = b'59'
     (tmp_path/'213L.INI').write_bytes(b'\r\n'.join(config)+b'\r\n')
     codes = [(i % 26+1) | ((i//26 % 26+1) << 5) for i in range(6768)]
     (tmp_path/'PYMB').write_bytes(bytes(572)+struct.pack('<6768H', *codes))
@@ -600,7 +600,7 @@ def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, l
     config = (tmp_path/'213L.INI').read_bytes().splitlines()
     config[30 if mode == 'type' else 29] = b'59'
     if mode == 'phrase':
-        config[28] = b'31'  # mutable phrase extension space
+        config[27] = b'31'  # mutable phrase extension space
     (tmp_path/'213L.INI').write_bytes(b'\r\n'.join(config)+b'\r\n')
     codes = [(i % 26+1) | ((i//26 % 26+1) << 5) | ((i//676 % 26+1) << 10)
              for i in range(6768)]

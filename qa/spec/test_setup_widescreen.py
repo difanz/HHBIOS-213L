@@ -52,6 +52,8 @@ def assert_text_pixels(shot,text,pairs,font):
     # check the English-mode indicator's exact glyphs, colors and placement.
     first = (shot.origin_y + shot.rows * shot.cell_height * shot.scale) * shot.pitch
     last = first + shot.cell_height * shot.scale * shot.pitch
+    inset = last + 2 * shot.pitch <= shot.height * shot.pitch
+    last += 2 * shot.pitch * inset
     for actual, wanted in zip(shot.planes,expected):
         assert actual[:first] == wanted[:first]
         assert actual[last:] == wanted[last:]
@@ -59,12 +61,12 @@ def assert_text_pixels(shot,text,pairs,font):
         for half in (0,1):
             for plane in range(4):
                 glyph = colored_rows(native_rows(code,half),shot.cell_width,
-                                     shot.cell_height,0x4a,plane)
+                                     shot.cell_height,0x70,plane)
                 scaled = tuple(sum(((row >> (shot.cell_width-1-x//shot.scale)) & 1)
                                    << (shot.cell_width*shot.scale-1-x)
                                    for x in range(shot.cell_width*shot.scale))
                                for row in glyph for _ in range(shot.scale))
-                assert shot.glyph(shot.rows,index*2+half,plane) == scaled
+                assert shot.glyph(shot.rows,index*2+half,plane,y_offset=inset) == scaled
 
 
 @pytest.mark.parametrize('width,height,rows',[

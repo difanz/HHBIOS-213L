@@ -222,17 +222,16 @@ def test_setup_legacy_controls_save_exact_configuration(dosbox_binary, setup_gue
         'Alt-f', 'Alt-e', *(['Up'] * 26), 'Alt-o', 'Alt-o', 'Alt-o',
         'Alt-d',
         *(['space', 'Tab'] * 11),
-        'Tab', 'Down', 'Down',
         'Alt-l', 'Alt-e', *(['Up'] * 13), 'Tab', 'Down',
         'Alt-o', 'Alt-o', 'Alt-o',
         'Alt-a', 'Down', 'Tab', 'Home', *(['Down'] * 6), 'Tab', 'space',
         'capture', 'Alt-o', 'F3', 'capture', 'Alt-s', 'Return', 'Alt-x',
     ], cpu='8086')
     expected = bytearray(LEGACY_VALUES)
-    expected[:4] = bytes.fromhex('89 86 A6 39')
-    expected[5] = 0x21
-    expected[10:18] = bytes.fromhex('01 3B F1 F2 F3 F4 F5 F6')
-    expected[27:29] = b'Y9'
+    expected[:3] = bytes.fromhex('89 86 A6')
+    expected[4] = 0x21
+    expected[9:17] = bytes.fromhex('01 3B F1 F2 F3 F4 F5 F6')
+    expected[26:28] = b'Y9'
     saved = (setup_guest/'213L.INI').read_bytes()
     assert ini_values(saved) == expected
     expected_lines = original.splitlines(keepends=True)
@@ -326,8 +325,8 @@ def test_setup_color_preview_and_save(dosbox_binary, setup_guest, language, adap
         startup='READ5\nCKBD /E\nVESA' if driver == '102' else '')
     saved = ini_values((setup_guest/'213L.INI').read_bytes())
     expected = bytearray(LEGACY_VALUES)
-    expected[5] = 0xdf
-    expected[29:32] = b'NNN'
+    expected[4] = 0xdf
+    expected[28:31] = b'NNN'
     assert saved == expected
     shots = json.loads((setup_guest/'screenshots.json').read_text())
     dialogs = [shot for shot in shots if shot['before_key'] == 'dialog']

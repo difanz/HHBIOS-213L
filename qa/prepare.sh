@@ -88,6 +88,7 @@ SELECTMD selectmode
 SHELLCAP shellcap appcap videolog
 SNAPSHOT snapshot
 STREAM dosstream
+STATUSV statusv
 TEXTMODE textmode
 VBETEST vbe
 VESATEST vesatest

@@ -36,14 +36,15 @@ def assert_font_pixels(shot, text, pairs, font):
         witnesses[shot.rows, column] = (code, 0)
         witnesses[shot.rows, column + 1] = (code, 1)
     for (row, column), (code, half) in witnesses.items():
-        attribute = text[(row * 80 + column) * 2 + 1] if row < shot.rows else 0x4a
+        attribute = text[(row * 80 + column) * 2 + 1] if row < shot.rows else 0x70
+        inset = row == shot.rows and shot.origin_y + (shot.rows + 1) * shot.cell_height * shot.scale + 2 <= shot.height
         for plane in range(4):
             mask = (1 << width) - 1
             foreground = mask if attribute & (1 << plane) else 0
             background = mask if attribute & (16 << plane) else 0
             expected = tuple((bits & foreground) | ((mask ^ bits) & background)
                              for bits in font_rows(font, code, half))
-            assert shot.glyph(row, column, plane) == expected, (row, column, plane)
+            assert shot.glyph(row, column, plane, y_offset=inset) == expected, (row, column, plane)
 
 
 @pytest.mark.parametrize('video,width,height,rows,font_name,cell', [

@@ -47,6 +47,56 @@ static void SelectPlane(u16 plane_index) {
   WritePortWord(0x3c4, 2 | (0x100 << plane_index));
 }
 
+/* One scanline, clipped to the text viewport. Set/reset broadcasts the
+ * solid color to all four planes; only partial edge bytes need a latch read. */
+void CALL raster_status_edge(u16 y, u16 color) {
+  u16 x = viewport_x;
+  u16 remaining = TEXT_COLS * font_width * pixel_scale;
+  u32 offset = MultiplyWide(y, display_pitch) + x / 8;
+  if (y >= screen.height) {
+    return;
+  }
+  WritePortWord(0x3c4, 0x0f02);
+  WritePortWord(0x3ce, color << 8);
+  WritePortWord(0x3ce, 0x0f01);
+  while (remaining) {
+    volatile u8 FAR* destination = MapFramebufferByte(offset);
+    u16 count;
+    if (!destination) {
+      break;
+    }
+    if ((x & 7) || remaining < 8) {
+      u8 mask = 255 >> (x & 7);
+      u8 latch;
+      count = 8 - (x & 7);
+      if (count > remaining) {
+        count = remaining;
+        mask &= 255 << (8 - (x & 7) - count);
+      }
+      WritePortWord(0x3ce, 8 | ((u16)mask << 8));
+      latch = *destination;
+      *destination = latch;
+      ++offset;
+    } else {
+      u16 bytes = remaining / 8;
+      if ((u16)offset && bytes > 0U - (u16)offset) {
+        bytes = 0U - (u16)offset;
+      }
+      WritePortWord(0x3ce, 0xff08);
+      fill_cells((u16 FAR*)destination, 0xffff, bytes / 2);
+      if (bytes & 1) {
+        destination[bytes - 1] = 255;
+      }
+      count = bytes * 8;
+      offset += bytes;
+    }
+    x += count;
+    remaining -= count;
+  }
+  WritePortWord(0x3ce, 1);
+  WritePortWord(0x3ce, 0xff08);
+}
+
 /* Whole-byte stores can broadcast identical ink/background bits to several
  * planes. Partial edge bytes still read and preserve each plane separately. */
 static u16 SelectGlyphPlanes(u16 plane, u16 attribute, u16 whole_bytes) {

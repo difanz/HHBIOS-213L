@@ -47,7 +47,7 @@ class Choices(C.Structure):
 
 
 class Ini(C.Structure):
-    _fields_=[('value', C.c_ubyte*32)]
+    _fields_=[('value', C.c_ubyte*31)]
 
 
 @pytest.fixture(scope='module')
@@ -146,15 +146,15 @@ def test_reject_batch_expansion_and_legacy_path_overflow(setup_policy,path):
 
 @pytest.mark.unit
 def test_ini_preserves_comments_and_unrelated_values(setup_policy):
-    lines=[f'{i:02X}H\t; '.encode()+'原配置'.encode('gb2312')+b'\r\n' for i in range(32)]
+    lines=[f'{i:02X}H\t; '.encode()+'原配置'.encode('gb2312')+b'\r\n' for i in range(31)]
     source=b''.join(lines)+b'\x1a';out=C.create_string_buffer(8192)
     assert setup_policy.hh_ini(source,Choices(0,0,0,5,1),out)
-    expected=lines[:29]+[b'59'+lines[29][2:],b'4E'+lines[30][2:],b'59'+lines[31][2:]]
+    expected=lines[:28]+[b'59'+lines[28][2:],b'4E'+lines[29][2:],b'59'+lines[30][2:]]
     assert out.value==b''.join(expected)+b'\x1a'
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize('data',[b'02\n'*31,b'garbage\n'*32,b'02\n'*31+b'4E',b'0Z\n'*32])
+@pytest.mark.parametrize('data',[b'02\n'*30,b'garbage\n'*31,b'02\n'*30+b'4E',b'0Z\n'*31,b'02\n'*32])
 def test_reject_invalid_ini_without_guessing_values(setup_policy,data):
     assert not setup_policy.hh_ini(data,Choices(),C.create_string_buffer(8192))
 
@@ -287,10 +287,10 @@ def test_missing_assets_and_unavailable_managers_block_save(setup_policy):
     assert setup_policy.hh_validate(m,f,c) is None
 
 
-# The shipped 2.13L INI uses Great Wall pseudo scan codes, ASCII switches and
-# two reserved byte pairs. Keep this independent of generated defaults.
+# Exercise Great Wall pseudo scan codes, ASCII switches and reserved bytes,
+# independently of generated defaults.
 LEGACY_VALUES = bytes([
-    2, 1, 5, 0x39, 0, 0x1e, 0x1a, 0x4e, 0x4a, 0, 0x10,
+    2, 1, 5, 0, 0x1e, 0x1a, 0x4e, 0x4a, 0, 0x10,
     0x64, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0x6c, 0x71,
     0x86, 0x85, 0x62, 0x70, 0x67, 0, 0, ord('Y'), ord('1'),
     ord('Y'), ord('N'), ord('N')])
@@ -299,6 +299,17 @@ LEGACY_VALUES = bytes([
 def legacy_ini():
     return b''.join(f'{v:02X}H\t; '.encode() + '原配置'.encode('gb2312') + b'\r\n'
                     for v in LEGACY_VALUES) + b'; trailing comment\r\n\x1a'
+
+
+@pytest.mark.unit
+def test_distribution_ini_keeps_input_bindings_and_default_colors(setup_policy):
+    defaults, shipped = Ini(), Ini()
+    assert setup_policy.hh_read_ini(b'', defaults)
+    assert setup_policy.hh_read_ini((ROOT/'src/setup/213L.INI').read_bytes(), shipped)
+    expected = bytearray(LEGACY_VALUES)
+    expected[4:8] = bytes(defaults.value[4:8])
+    assert bytes(shipped) == expected
+    assert setup_policy.hh_validate_ini(shipped) is None
 
 
 @pytest.mark.unit
@@ -312,9 +323,9 @@ def test_legacy_great_wall_roundtrip_and_disable(setup_policy):
     assert setup_policy.hh_make_ini(source, settings, output)
     assert output.value == source
     assert setup_policy.hh_great_wall(settings, 0)
-    assert bytes(settings.value[12:18]) == bytes([0x68, 0x69, 0x6a, 0x6b, 0x66, 0x6d])
-    assert bytes(settings.value[:12]) == LEGACY_VALUES[:12]
-    assert bytes(settings.value[18:27]) == LEGACY_VALUES[18:27]
+    assert bytes(settings.value[11:17]) == bytes([0x68, 0x69, 0x6a, 0x6b, 0x66, 0x6d])
+    assert bytes(settings.value[:11]) == LEGACY_VALUES[:11]
+    assert bytes(settings.value[17:26]) == LEGACY_VALUES[17:26]
     assert setup_policy.hh_validate_ini(settings) is None
     assert setup_policy.hh_make_ini(source, settings, output)
     assert output.value.endswith(b'; trailing comment\r\n\x1a')
@@ -324,7 +335,7 @@ def test_legacy_great_wall_roundtrip_and_disable(setup_policy):
 
 @pytest.mark.unit
 def test_conflicting_keys_and_great_wall_remap_are_transactional(setup_policy):
-    settings = Ini((C.c_ubyte*32).from_buffer_copy(LEGACY_VALUES))
+    settings = Ini((C.c_ubyte*31).from_buffer_copy(LEGACY_VALUES))
     before = bytes(settings)
     assert not setup_policy.hh_assign(settings, 0, 0x62)
     assert not setup_policy.hh_assign(settings, 0, 0)
@@ -350,10 +361,10 @@ def test_function_key_names_match_stored_scan_codes(setup_policy,key,name):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize('index,value', [(10,3),(28,ord(':')),(27,ord('y')),
-    (29,0),(11,0),(11,0x62)])
+@pytest.mark.parametrize('index,value', [(9,3),(27,ord(':')),(26,ord('y')),
+    (28,0),(10,0),(10,0x62)])
 def test_reject_invalid_editable_ini_values(setup_policy,index,value):
-    settings=Ini((C.c_ubyte*32).from_buffer_copy(LEGACY_VALUES))
+    settings=Ini((C.c_ubyte*31).from_buffer_copy(LEGACY_VALUES))
     settings.value[index]=value
     assert setup_policy.hh_validate_ini(settings)
 
@@ -362,8 +373,8 @@ def test_reject_invalid_editable_ini_values(setup_policy,index,value):
 @pytest.mark.parametrize('ending',[b'\n',b'\r\n'])
 def test_ini_retains_unknown_bits_reserved_bytes_and_short_hex(setup_policy,ending):
     lines=[f'{v:02x}h ; keep'.encode()+ending for v in LEGACY_VALUES]
-    lines[4]=b'0 ; reserved'+ending
-    lines[25]=b'A5H ; vendor extension'+ending
+    lines[3]=b'0 ; reserved'+ending
+    lines[24]=b'A5H ; vendor extension'+ending
     source=b''.join(lines)+b'\x1a'
     settings=Ini(); output=C.create_string_buffer(8192)
     assert setup_policy.hh_read_ini(source,settings)
@@ -378,7 +389,7 @@ def test_ini_retains_unknown_bits_reserved_bytes_and_short_hex(setup_policy,endi
 
 @pytest.mark.unit
 def test_nearly_full_ini_does_not_need_extra_save_slack(setup_policy):
-    prefix=b'02\n'*32
+    prefix=b'02\n'*31
     source=prefix+b';'*(8190-len(prefix))+b'\x1a'
     settings=Ini(); output=C.create_string_buffer(8192)
     assert setup_policy.hh_read_ini(source,settings)
@@ -390,9 +401,9 @@ def test_nearly_full_ini_does_not_need_extra_save_slack(setup_policy):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize('source',[b'02\n'*31+b'\x1a02\n',b'0\t\n'*32,b'02\n'*32+b'x'*8192])
+@pytest.mark.parametrize('source',[b'02\n'*30+b'\x1a02\n',b'0\t\n'*31,b'02\n'*31+b'x'*8192])
 def test_invalid_ini_leaves_settings_untouched(setup_policy,source):
-    settings=Ini((C.c_ubyte*32).from_buffer_copy(LEGACY_VALUES))
+    settings=Ini((C.c_ubyte*31).from_buffer_copy(LEGACY_VALUES))
     assert not setup_policy.hh_read_ini(source,settings)
     assert bytes(settings.value)==LEGACY_VALUES
 

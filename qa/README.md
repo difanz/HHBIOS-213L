@@ -133,10 +133,10 @@ Ctrl+F9, Ctrl+F10 and F11/F12. Emulator shortcuts are unbound except
 Ctrl+Alt+F10 for mouse capture; use DOSBox-X's menus for other emulator commands.
 This does not change the desktop or remote client's own shortcuts.
 
-The original `213L.INI` selects the Great Wall keyboard layout: Insert, Home,
-PageUp, Delete, End and PageDown select input modes. Ctrl+F5, then the sixth
-item (仿长城键), switches to the standard Alt+function-key layout for the current
-session. The DOS `README` command opens the installed GB2312 help file beside
+The supplied `213L.INI` selects the Great Wall keyboard layout: Insert, Home,
+PageUp, Delete, End and PageDown select input modes. Ctrl+F5, then 6 (仿长城键),
+switches to the standard Alt+function-key layout for the current session.
+The DOS `README` command opens the installed GB2312 help file beside
 `README.COM`, even when invoked from another directory through PATH.
 
 Preparation refuses to update a disk held open by DOSBox. Close DOSBox first,

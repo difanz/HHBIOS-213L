@@ -18,6 +18,7 @@ stage_distribution() {
     done
     # SETUP.EXE is the configuration editor in the runnable distribution.
     rm -f "$dist/LSETUP.COM"
+    sed 's/$/\r/' "$root/src/setup/213L.INI" > "$dist/213L.INI"
 }
 remove_guest_lsetup() {
     if mdir -b -i "$volume" ::HHBIOS/LSETUP.COM >/dev/null 2>&1; then

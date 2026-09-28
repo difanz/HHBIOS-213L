@@ -38,7 +38,7 @@ D_A000		DW	0A000H			;显示缓冲区段
 D_B800		DW	0B800H			;直接写屏区段
 D_0068		DW	0		   ;保存光标位置
 D_0069		DB	1			;=0繁体,非0简体
-D_TUXBL 	DB	1EH			;提示行颜色
+D_TUXBL 	DB	70H			;提示行颜色
 D_ZJXP		DB	2			;直接写屏周期
 
 D_VBEBUSY	DB	0			; BIOS mode-set recursion guard

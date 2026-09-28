@@ -11,6 +11,35 @@ from qa.spec.planar_memory import PlanarMemory
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('shift', [0, 1, 3, 7])
+@pytest.mark.parametrize('color', [0, 7, 8, 15])
+def test_status_frame_preserves_neighbors_across_banks(vesa_driver, shift, color):
+    initial = bytes((i * 53 + 17) & 255 for i in range(131072))
+
+    def bios(machine):
+        assert machine.get('AX') == 0x4f05
+        memory.bank = machine.get('DX')
+        machine.put('AX', 0x004f)
+
+    machine = Driver(vesa_driver, bios)
+    memory = PlanarMemory(machine, [initial] * 4)
+    machine.write('screen', struct.pack('<4H', 1920, 1080, 240, 0xa000))
+    for name, value in dict(viewport_x=shift, font_width=10, pixel_scale=1,
+                            display_pitch=240, bank_step=1).items():
+        machine.write(name, struct.pack('<H', value))
+    machine.write('active', b'\1')
+    # Scanline 273 crosses the 64 KiB aperture after sixteen bytes.
+    machine.uc.mem_write(0x1e002, struct.pack('<2H', 273, color))
+    machine.run('raster_status_edge')
+    for plane in range(4):
+        expected = bytearray(initial)
+        for x in range(shift, shift + 800):
+            offset, mask = 273 * 240 + x // 8, 128 >> (x & 7)
+            expected[offset] = (expected[offset] & ~mask) | (mask if color & (1 << plane) else 0)
+        assert memory.planes[plane] == expected
+    assert memory.gc[1] == 0 and memory.gc[8] == 255
+
+
 @pytest.mark.parametrize('count', [0, 1, 2, 3, 79, 80, 81, 3920])
 @pytest.mark.parametrize('destination,source', [(0, 80), (80, 0), (1, 0), (0, 1), (0, 0)])
 def test_cell_block_move_preserves_overlap_and_registers(vesa_driver, count, destination, source):

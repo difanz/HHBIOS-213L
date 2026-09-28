@@ -19,7 +19,9 @@ class FontMachine:
         self.uc=Uc(UC_ARCH_X86,UC_MODE_16); self.uc.mem_map(0,0x100000)
         self.uc.mem_write(0x10100,raw)
         self.buffer=(len(raw)+0x10f)&~15
-        assert self.buffer+520<0xf000, 'Test buffer must fit below the test stack'
+        # The near buffer follows installation code; leave 1.5 KiB below
+        # the FE00h stack. The XMS callback lives in a separate F000h segment.
+        assert self.buffer+520<0xf800, 'Test buffer must fit below the test stack'
         self.kind,self.failure=kind,failure
         self.data=data if data is not None else (ROOT/'fonts/HH20.FNT').read_bytes()
         self.position=0; self.moves=0; self.closed=0; self.allocated=False

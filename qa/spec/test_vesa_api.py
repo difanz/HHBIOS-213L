@@ -668,7 +668,7 @@ def test_status_bitmap_replacement_and_noop_updates(status_renderer):
     assert not writes and not banks
     # Same character/attribute, new pixels in only the last bitmap cell.
     bitmap(bits[:-1]+b'\xff')
-    assert writes == {0xa0000+y*100+x for y in range(575, 598) for x in (98, 99)}
+    assert writes == {0xa0000+y*100+x for y in range(576, 599) for x in (98, 99)}
     assert banks == [0, 1]
     machine.run(AX=0x1404, limit=1000000)
     writes.clear(); banks.clear()

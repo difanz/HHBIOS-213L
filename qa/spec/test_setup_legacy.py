@@ -8,11 +8,11 @@ from qa.spec.dos import ROOT, run_dos
 from qa.spec.test_setup import setup_guest
 
 
-# The 32-byte CKBD file format, independently taken from the legacy menus:
-# three display flag bytes, band, reserved, four colors, reserved, Shift,
+# The 31-entry CKBD file format, with independent non-default settings:
+# three display flag bytes, reserved, four colors, reserved, Shift,
 # fourteen scan codes, two reserved bytes, Great Wall, phrases, PY/SW/DB.
 LEGACY_VALUES = bytes.fromhex(
-    '82 89 A9 37 13 1E 2F 30 4A 15 10 '
+    '82 89 A9 13 1E 2F 30 4A 15 10 '
     '64 68 69 6A 6B 66 6D 6C 71 86 85 62 70 67 '
     '17 19 4E 35 4E 4E 4E')
 
@@ -24,7 +24,7 @@ def legacy_ini(values=LEGACY_VALUES):
 
 
 def ini_values(data):
-    return bytes(int(line[:2], 16) for line in data.splitlines()[:32])
+    return bytes(int(line[:2], 16) for line in data.splitlines()[:31])
 
 
 @pytest.mark.dos
@@ -37,7 +37,7 @@ def test_setup_configuration_directory(dosbox_binary, setup_guest, current_direc
             shutil.copy2(path, other)
     root_ini = legacy_ini()
     other_values = bytearray(LEGACY_VALUES)
-    other_values[28] = ord('8')
+    other_values[27] = ord('8')
     other_ini = legacy_ini(other_values)
     (setup_guest/'213L.INI').write_bytes(root_ini)
     (other/'213L.INI').write_bytes(other_ini)

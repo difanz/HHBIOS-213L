@@ -21,7 +21,7 @@ def menu_binary(assembler, source_dir, tmp_path_factory, request):
              'D_INKEY', 'D_INT16', 'L_XTK1D', 'S_QTXS', 'S_CXTUX', 'S_SETINT',
              'INT_9', 'D_INT9', 'K_SHIFT', 'K_DEL', 'INT_16', 'D_DEFER',
              'D_PUMP', 'D_IRQ', 'S_FOREGROUND_EXIT', 'S_JRCL', 'D_95D5',
-             'D_KEYCONSUMED', 'D_2BAA', 'D_KBDBUF')
+             'D_KEYCONSUMED', 'D_2BAA', 'D_KBDBUF', 'S_CDKZ')
     # Export addresses for observation, without replacing production code.
     source = source.replace(b'SEG_A ENDS',
                             ('PUBLIC ' + ','.join(names) + '\r\nSEG_A ENDS').encode())
@@ -109,6 +109,36 @@ class KeyboardModule:
         assert self.get('IP') == RETURN, 'handler did not return'
         assert self.get('SS') == self.initial['SS']
         assert self.get('SP') == self.initial['SP'] + len(frame)
+
+
+@pytest.mark.parametrize('keys,selected', [
+    ([0x0231], 1), ([0x0938], 8), ([0x0a39, 0x0534], 4),
+    ([0x4f00, 0x1c0d], 8), ([0x4f00, 0x4700, 0x1c0d], 1),
+    ([0x0f09, 0x1c0d], 2), ([0x4f00, 0x0f09, 0x1c0d], 1),
+    ([0x4900], 0x48), ([0x5100], 0x50), ([0x011b], 0x1b),
+])
+def test_control_menu_navigation(menu_binary, keys, selected):
+    machine = KeyboardModule(menu_binary)
+    queue = list(keys)
+    machine.write('D_INT16', struct.pack('<HH', 0xf000, BASE//16))
+    machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
+    machine.uc.mem_write(BASE+0xe000, b''.join(
+        f'{i}Option   '.encode() for i in range(1, 9)) + b'\0')
+
+    def bios(uc, number, _):
+        if number == 0x10:
+            assert machine.get('AX') >> 8 == 0x14
+        else:
+            assert number == 0x60 and queue, 'menu did not accept its key'
+            machine.set('AX', queue.pop(0))
+
+    machine.uc.hook_add(UC_HOOK_INTR, bios)
+    machine.set('DS', BASE//16)
+    machine.set('SI', 0xe000)
+    machine.set('CX', 0x0800)
+    machine.call('S_CDKZ')
+    assert not queue
+    assert machine.get('AX') & 255 == selected
 
 
 @pytest.mark.parametrize('toggle', [1, 2, 0x10])

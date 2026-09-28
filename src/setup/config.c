@@ -305,7 +305,7 @@ int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
 }
 
 static const unsigned char kIniDefaults[kIniCount] = {
-    2,    1,    5,    0x39, 0,    0x1e, 0x1a, 0x4e, 0x4a, 0,    2,
+    2,    1,    5,    0,    0x70, 0x71, 0x1f, 0x70, 0,    2,
     0x64, 0x68, 0x69, 0x6a, 0x6b, 0x66, 0x6d, 0x6c, 0x71, 0x86, 0x85,
     0x62, 0x70, 0x67, 0,    0,    0x4e, 0x30, 0x4e, 0x4e, 0x4e};
 
@@ -341,6 +341,9 @@ int ReadIni(const char* original, IniSettings* settings) {
       }
       parsed.value[i] = (unsigned char)(low < 0 ? high : high * 16 + low);
       line = end + 1;
+    }
+    if (isxdigit((unsigned char)*line)) {
+      return 0;
     }
   }
   *settings = parsed;

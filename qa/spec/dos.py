@@ -129,9 +129,9 @@ class Snapshot:
         return cls(raw[:text_bytes], (raw[text_bytes+1], raw[text_bytes]), raw[text_bytes+2:start],
                    [raw[start+i*size:start+(i+1)*size] for i in range(4)],*geometry)
 
-    def glyph(self, row, col, plane=0):
+    def glyph(self, row, col, plane=0, y_offset=0):
         return plane_bits(self.planes[plane],self.pitch,self.origin_x+col*self.cell_width*self.scale,
-                          self.origin_y+row*self.cell_height*self.scale,
+                          self.origin_y+row*self.cell_height*self.scale+y_offset,
                           self.cell_width*self.scale,self.cell_height*self.scale)
 
     def save_ppm(self, path):

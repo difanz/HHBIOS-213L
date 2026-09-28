@@ -34,8 +34,8 @@ def test_msdos_csp_preserves_live_extensions_and_saves_basic_dictionary(
     copy_in(csp_drive, '::HHBIOS/CSPDRIVE.COM')
     keyboard_config(tmp_path)
     settings = (tmp_path / '213L.INI').read_bytes().splitlines()
-    settings[28] = b'31'  # 1 KiB of mutable phrase space.
-    settings[29] = b'59'  # The immutable pinyin table can use XMS.
+    settings[27] = b'31'  # 1 KiB of mutable phrase space.
+    settings[28] = b'59'  # The immutable pinyin table can use XMS.
     (tmp_path / '213L.INI').write_bytes(b'\r\n'.join(settings) + b'\r\n')
     copy_in(tmp_path / '213L.INI', '::HHBIOS/213L.INI')
     (tmp_path / 'PYMB').write_bytes(b'\xb0\xa1' * 286 + struct.pack('<6768H', *([0x8041] * 6768)))

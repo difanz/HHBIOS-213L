@@ -105,12 +105,13 @@ def screen_pixels(directory, frame, rows):
 
     def glyph(cell, code, half=0, expected=None):
         row, col = divmod(cell, 80)
+        inset = row == rows and oy + (rows + 1) * ch + 2 <= height
         if expected is None:
             expected = native_rows(code, half)[:ch]
         ink, paper = set(), set()
         for y, bits in enumerate(expected):
             for x in range(10):
-                start = ((oy+row*ch+y)*width+ox+col*10+x)*3
+                start = ((oy+row*ch+y+inset)*width+ox+col*10+x)*3
                 (ink if bits & (1 << (9-x)) else paper).add(rgb[start:start+3])
         assert len(ink) == len(paper) == 1 and ink != paper, (row, col, hex(code))
 

@@ -13,6 +13,7 @@ from qa.spec.test_dos_display import guest_build
 from qa.spec.physical_keyboard import PhysicalKeyboard
 from qa.spec.test_memory import Arena, memory_build
 from qa.spec.test_msdos import copy_disk, msdos_image
+from qa.spec.test_application import keyboard_config
 
 pytestmark = pytest.mark.dos
 
@@ -56,13 +57,15 @@ def operate_menu(keyboard, process):
                 time.sleep(.15)
                 press(keyboard, 'Control_L+F5')
                 if step == 0:
-                    press(keyboard, 'Down')
+                    press(keyboard, 'Next')
                     if keyboard.screenshots:
                         keyboard.capture(f'menu-page2-{cycle}')
-                    press(keyboard, 'Up')
+                    press(keyboard, 'Prior')
                     if keyboard.screenshots:
                         keyboard.capture(f'menu-page1-{cycle}')
-                for key in ['Right']*4 + ['Return']:
+                keys = (['End', 'Home', 'Tab', 'Right', 'Right', 'Right', 'Return']
+                        if step == 0 else ['5'])
+                for key in keys:
                     press(keyboard, key)
                 time.sleep(1)
                 if keyboard.screenshots:
@@ -96,11 +99,11 @@ def run_menu_case(dosbox_binary, msdos_image, memory_build, keymenu_build,
     copy_in(keymenu_build, '::KEYMENU.COM')
     # Exercise both the distribution's Scroll Lock binding and the historical
     # left Shift binding. Shift used for N/Y must stay inside the open menu.
-    if low:
-        settings = read('HHBIOS/213L.INI').split(b'\r\n')
-        settings[10] = b'02H'
-        (tmp_path/'213L.INI').write_bytes(b'\r\n'.join(settings))
-        copy_in(tmp_path/'213L.INI', '::HHBIOS/213L.INI')
+    keyboard_config(tmp_path)
+    settings = (tmp_path/'213L.INI').read_bytes().split(b'\r\n')
+    settings[9] = b'02H' if low else b'10H'
+    (tmp_path/'213L.INI').write_bytes(b'\r\n'.join(settings))
+    copy_in(tmp_path/'213L.INI', '::HHBIOS/213L.INI')
     (tmp_path/'SCREEN.KEY').touch()
     copy_in(tmp_path/'SCREEN.KEY', '::SCREEN.KEY')
     startup = read('AUTOEXEC.BAT')

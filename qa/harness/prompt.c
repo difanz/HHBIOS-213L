@@ -28,6 +28,8 @@ static int capture(FILE *out)
     if (fwrite(meta,1,sizeof(meta),out)!=sizeof(meta)) return 0;
     size=meta[2]*meta[4]*meta[7];
     offset=(unsigned long)(meta[6]+meta[3]*meta[4]*meta[7])*meta[2];
+    if (meta[6]+(meta[3]+1)*meta[4]*meta[7]+2<=meta[1])
+        offset+=meta[2]; /* The frame occupies the spare scanlines. */
     for (p=0;p<4;++p) for (n=0;n<size;) {
         unsigned count=size-n>sizeof(buffer) ? sizeof(buffer) : size-n;
         unsigned long at=offset+n;

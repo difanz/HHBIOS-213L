@@ -203,9 +203,10 @@ static u8 prompt_kind[80];
 static u8 prompt_bits[80][16];
 static u8 prompt_bitmap[10];
 static u8 prompt_open;
+static u8 prompt_frame_open = 0xff;
 static u8 prompt_col;
 static u8 prompt_dirty;
-static u8 prompt_attr = 0x1e;
+static u8 prompt_attr = 0x70;
 u8 CALL prompt_notify;
 static void DrawStatusBar(void);
 
@@ -220,6 +221,7 @@ void CALL invalidate_prompt(void) {
   /* Redraw on the next status request; do not erase an application's direct
    * graphics or wide string merely because a timer interrupt occurred. */
   ClearBytes(prompt_kind, sizeof(prompt_kind));
+  prompt_frame_open = 0xff;
 }
 static void CallVideoBios(u16 ax, u16 bx, u16 cx, u16 dx) {
   struct BiosRegisters bios_registers;
@@ -631,6 +633,9 @@ u16 CALL initialize(void) {
   u16 number;
   u16 previous_mode;
   u16 font_missing = 0;
+  if (keyboard_segment) {
+    prompt_attr = *PTR(u8, keyboard_segment, 0x10a);
+  }
   ClearBytes(controller, sizeof(controller));
   ClearBytes(&bios_registers, sizeof(bios_registers));
   bios_registers.ax = 0x4f00;
@@ -1014,9 +1019,20 @@ static void TransferVideoState(void) {
   }
 }
 
+static u16 StatusInset(void) {
+  return banked_text &&
+         viewport_y + (text_rows + 1) * raster_height * pixel_scale + 2 <=
+             screen.height;
+}
+
 static void DrawStatusBar(void) {
   u16 i;
   u16 drawing = 0;
+  u16 origin = viewport_y;
+  u8 previous_large = large_surface;
+  u16 bottom = origin + (text_rows + 1) * raster_height * pixel_scale;
+  /* Use spare scanlines, never crop a glyph or steal an application row. */
+  u16 inset = StatusInset();
   for (i = 0; i < 80; ++i) {
     u16 cell = prompt_open ? prompt[i] : 32;
     u16 character = cell & 255;
@@ -1048,6 +1064,10 @@ static void DrawStatusBar(void) {
           return;
         }
         drawing = 1;
+        viewport_y += inset;
+        if (inset) {
+          large_surface = 1;
+        }
       }
       if (kind == kStatusBitmap) {
         bitmap(resident_segment, (u16)prompt_bits[i], attribute,
@@ -1065,7 +1085,15 @@ static void DrawStatusBar(void) {
     }
   }
   if (drawing) {
+    viewport_y = origin;
+    large_surface = previous_large;
+    if (inset && (prompt_dirty || prompt_frame_open != prompt_open)) {
+      raster_status_edge(origin + text_rows * raster_height * pixel_scale,
+                         prompt_open ? 15 : 0);
+      raster_status_edge(bottom + 1, prompt_open ? 8 : 0);
+    }
     end_draw();
+    prompt_frame_open = prompt_open;
   }
   prompt_dirty = 0;
 }
@@ -1178,6 +1206,8 @@ static void DispatchHhbiosRequest(void) {
   } else if (operation == 15) {
     u16 text_offset = request.si;
     u16 character;
+    u16 origin = viewport_y;
+    u8 previous_large = large_surface;
     if (!begin_draw()) {
       return;
     }
@@ -1185,6 +1215,10 @@ static void DispatchHhbiosRequest(void) {
       /* Wide strings bypass the retained row. Keep them visible until the
        * next status request, which must restore any overwritten cells. */
       invalidate_prompt();
+      if (StatusInset()) {
+        ++viewport_y;
+        large_surface = 1;
+      }
     }
     while (text_offset < 0xfffe && (text_position & 255) < 80) {
       character = *PTR(u8, request.es, text_offset++);
@@ -1202,6 +1236,8 @@ static void DispatchHhbiosRequest(void) {
         text_position += 2;
       }
     }
+    viewport_y = origin;
+    large_surface = previous_large;
     end_draw();
   } else if (operation == 16) {
     boundary(&request);

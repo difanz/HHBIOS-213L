@@ -28,6 +28,7 @@ def test_archived_distribution_stages_without_retired_editor(tmp_path, reused):
         (distribution/'LOCAL.DAT').write_bytes(b'local fixture')
     staging_shell('stage_distribution', dist=str(distribution), cache=str(tmp_path/'cache'))
     assert not (distribution/'LSETUP.COM').exists()
+    assert (distribution/'213L.INI').read_bytes() == (ROOT/'src/setup/213L.INI').read_bytes().replace(b'\n', b'\r\n')
     for name in ('213L.EXE', '213L.INI', 'HZK16', 'HZK16F', 'PR.EXE', 'READ24.COM', 'READSL.COM'):
         assert (distribution/name).stat().st_size > 0
     if reused:

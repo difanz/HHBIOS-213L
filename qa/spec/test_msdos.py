@@ -134,11 +134,17 @@ def test_msdos_console(dosbox_binary, pytestconfig, tmp_path, guest_build, vesa_
         copy_in(guest_build/name,'::HHBIOS/'+name)
     copy_in(vesa_build/'VESATEST.COM','::QA/PROBES/VESATEST.COM')
     copy_in(memory_build/'MEMORY.COM','::QA/PROBES/MEMTEST.COM')
+    # This pixel oracle uses 800x600 and HH20, independent of the interactive
+    # disk's saved resolution/font. Change only this disposable startup copy.
+    startup = read('HHBIOS/HHBIOS.BAT')
+    startup, count = re.subn(rb'(?im)^(?:\.\\)?VESA(?:\.COM)?[^\r\n]*',
+                            b'VESA /M:102 /R:25 /F:HH20.FNT', startup)
+    assert count == 1
     if low:
-        startup = read('HHBIOS/HHBIOS.BAT')
-        startup = re.sub(rb'(?im)^(READ5|CKBD|VESA)([^\r\n]*)', rb'\1 /N\2',startup)
-        (tmp_path/'HHBIOS.BAT').write_bytes(startup)
-        copy_in(tmp_path/'HHBIOS.BAT','::HHBIOS/HHBIOS.BAT')
+        startup = re.sub(rb'(?im)^((?:\.\\)?(?:READ5|CKBD|VESA)(?:\.COM)?)([^\r\n]*)',
+                         rb'\1 /N\2', startup)
+    (tmp_path/'HHBIOS.BAT').write_bytes(startup)
+    copy_in(tmp_path/'HHBIOS.BAT','::HHBIOS/HHBIOS.BAT')
     offset = int(re.search(r'[0-9a-f]{4}:([0-9a-f]{4})[*+ ]+\s+_stack_bottom',
                           (guest_build/'VESA.map').read_text()).group(1),16)
     (tmp_path/'STACK.OFF').write_bytes(struct.pack('<H',offset))

@@ -16,12 +16,12 @@ D_PATH	EQU	82H    ;32 DUP (0)		;2.13安装盘及路径
 START:		JMP	BEGIN
 		DW	0CDEFH			;CKBD标志	[103H]
 
-K_DISP		DB	2,1,5,39H		;显示参数	[105H]
+K_DISP		DB	2,1,5,0		;显示参数	[105H]
 		DB	0
-D_TUX1		DB	1EH			;提示行字符色1	[10AH]
-D_TUX2		DB	1AH			;提示行字符色2
-D_QTS1		DB	4EH			;提示行信息颜色1
-D_QTS2		DB	4AH			;提示行信息颜色2
+D_TUX1		DB	70H			;提示行字符色1	[10AH]
+D_TUX2		DB	71H			;提示行字符色2
+D_QTS1		DB	1FH			;提示行信息颜色1
+D_QTS2		DB	70H			;提示行信息颜色2
 		DB	0
 K_SHIFT 	DB	2			;功能键开关SHIFT
 K_CF7		DB	64H			;中/西文显示开关 [110H]
@@ -1114,7 +1114,7 @@ L_YX:
 		MOV	D_2BB9,40H		;预选标志
 L_YX1:
 		CALL	S_1400			;清提示行
-		MOV	BL,D_TUX1		;颜色:蓝底黄字
+		MOV	BL,D_TUX1		;常规文字
 		MOV	DL,' '
 		CALL	S_1403
 		MOV	SI,D_YX 		;预选字表当前行地址
@@ -1184,8 +1184,8 @@ L_CT1:
 		RET
 
 ;----------------------------------------------------------------------------
-D_XTK1		DB	'转第二页  光标开关  执行特显  简繁切换  '
-		DB	'退出汉字  仿长城键  联想开关  直接写屏',0
+D_XTK1		DB	'1下一页   2光标开关 3执行特显 4简繁切换 '
+		DB	'5退出汉字 6仿长城键 7联想开关 8直接写屏',0
 ;【系统控制-第一页】
 L_XTK1:
 		MOV	SI,OFFSET D_XTK1	;第一页菜单
@@ -1225,7 +1225,7 @@ L_XTK1B1:
 		JZ	L_XTK1B1
 		DEC	DI
 L_XTK1B2:
-		MOV	BL,D_TUX1		;颜色:蓝底黄字
+		MOV	BL,D_TUX1		;常规文字
 		CALL	S_1403A 		;显示退格
 		JMP	SHORT L_XTK1B1
 L_XTK1B3:
@@ -1341,8 +1341,8 @@ L_XTK1H:
 		JMP	SHORT L_XTK2
 
 ;----------------------------------------------------------------------------
-D_XTK2		DB	'转第一页  打印字符  对外显示  重显屏幕  '
-		DB	'拼音词组  字典方式  重码提示  保持提示',0
+D_XTK2		DB	'1上一页   2打印字符 3对外显示 4重显屏幕 '
+		DB	'5拼音词组 6字典方式 7重码提示 8保持提示',0
 D_DK		DB	'打开',0
 D_GB		DB	'关闭',0
 D_DYZF		DB	'打印字符串:',0
@@ -1372,7 +1372,7 @@ L_XTK2A1:
 		JZ	L_XTK2A1
 		DEC	DI
 L_XTK2A2:
-		MOV	BL,D_TUX1		;颜色:蓝底黄字
+		MOV	BL,D_TUX1		;常规文字
 		CALL	S_1403A 		;显示退格
 		JMP	SHORT L_XTK2A1
 L_XTK2A3:
@@ -2430,20 +2430,20 @@ S_QTXS:
 		CALL	S_1400			;清提示行
 		XOR	DL,DL			;定位左端
 		XOR	BH,BH
-		MOV	BL,D_QTS1		;颜色:红底黄字(显示方式>3)
+		MOV	BL,D_QTS1		;选中项颜色(显示方式>3)
 		PUSH	DS
 		XOR	AX,AX
 		MOV	DS,AX
 		CMP	BYTE PTR DS:[449H],4
 		POP	DS
 		JNB	L_QT1
-		MOV	BL,D_QTS2		;颜色:红底绿字(显示方式<4)
+		MOV	BL,D_QTS2		;输入方式颜色(显示方式<4)
 L_QT1:
 		CALL	S_A249			;定位显示
 L_QT2:
 		MOV	BP,CS
 		MOV	SI,OFFSET D_QT
-		MOV	BL,4EH
+		MOV	BL,D_TUX1
 		MOV	DL,4CH
 		MOV	AX,140AH
 		INT	10H
@@ -2478,13 +2478,14 @@ D_QT	DB	255,128,128,159,177,129,131,134,140,152,176,177,191,128,128,255
 S_CDKZ:
 		MOV	DI,SI
 		CALL	S_1400			;清提示行
-		MOV	BL,D_TUX1		;颜色:蓝底黄字
+		MOV	BL,D_TUX1		;常规文字
 		XOR	DL,DL			;定位
 		CALL	S_A249			;显示
 		MOV	DH,1			;默认号
 L_CD00:
 		CALL	S_A251
-		CALL	S_INT16 		;键入
+		CALL	S_INT16
+                CALL    S_MENU_KEY 		;键入
 		CMP	AL,1BH			;ESC
 		JZ	L_CD08
 		CMP	AL,0DH			;回车
@@ -2528,11 +2529,12 @@ L_CD33:
 		RET
 
 ;子程序:定位显示字符串SI
+                INCLUDE STATUSKEY.INC
 S_A250:
-		MOV	BL,D_TUX1		;颜色:蓝底黄字
+		MOV	BL,D_TUX1		;常规文字
 		JMP	SHORT L_A252
 S_A251:
-		MOV	BL,D_QTS1		;颜色:红底黄字
+		MOV	BL,D_QTS1		;选中项颜色
 L_A252:
 		PUSH	CX
 		MOV	AL,10
@@ -2545,7 +2547,7 @@ L_A252:
 		MOV	DL,CL
 		ADD	DL,AL
 		CALL	S_1402			;定位
-		MOV	CX,8
+		MOV	CX,9
 L_A253:
 		LODSB				;取一字符
 		CALL	S_1403A 		;显示
@@ -3021,7 +3023,7 @@ L_A1A7A:
 		MOV	DL,':'
 		CALL	S_1403			;显示':'
 L_A1A7:
-		MOV	BL,D_TUX1		;颜色:蓝底黄字
+		MOV	BL,D_TUX1		;常规文字
 		LODSB
 		CALL	S_1403A 		;显示前字节
 		LODSB
@@ -3461,7 +3463,7 @@ L_A6A0:
 		JMP	SHORT L_A6BC
 L_A6B8:
 		PUSH	DX
-		MOV	BL,D_TUX1		;颜色:蓝底黄字
+		MOV	BL,D_TUX1		;常规文字
 		CALL	S_1403			;显示序号
 L_A6BC:
 		MOV	BL,D_2BD2
@@ -4747,8 +4749,12 @@ L_S42:
 		MOV	AH,3EH			;关闭文件
 		INT	21H
 		MOV	DI,OFFSET K_DISP	;参数表
-		MOV	CX,32
+		MOV	CX,31
 L_S44:
+                CMP     DI,OFFSET K_DISP+3
+                JNE     L_INI_VALUE
+                INC     DI              ; reserved resident ABI byte
+L_INI_VALUE:
 		CALL	S_GETB			;取一参数
 		STOSB
 		LOOP	L_S44

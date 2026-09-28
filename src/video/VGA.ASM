@@ -12,7 +12,6 @@ IN_INT10	DB	0
 	;[0F4H] 1-安装KZZF,2-保持提示行,4-显示字符调KZZF,8-不显示版本信息
 	;[0F5H] 1-允许直接写屏,2-图形方式打开B8,4-显示中断调BIOS,8-光标下移2线
 	;[0F6H] 1-原显示方式,2-固定光标,4-初始化属性寄存器,8-AH=0BH调BIOS
-	;[0F7H] =0~9提示行光带色,取消屏幕分割
 	;[100H] 中西文显示方式: =0西文,=1汉字
 	;[101H] 光标开关:	位0=0无,=1有光标
 	;[102H] 当前光标状态:	=0无光标,=0FFH有
@@ -36,7 +35,7 @@ D_A000		DW	0A000H			;显示缓冲区段
 D_B800		DW	0B800H			;直接写屏区段
 D_0068		DW	0			;保存光标位置
 D_0069		DB	1			;=0繁体,非0简体
-D_TUXS		DB	1EH			;第一提示行颜色
+D_TUXS		DB	70H			;第一提示行颜色
 D_5D16		DW	18			;16线或18线方式
 D_ZJXP		DB	2			;直接写屏周期
 
@@ -1254,31 +1253,14 @@ L_HKOLD:
 		XOR	DL,DL
 		CALL	S_SPDZ			;计算光标DX在实屏区地址→DI
 
-		CMP	BYTE PTR CS:[0F7H],0	;提示行光带色?
-		JZ	L_1403
 		SUB	DI,80*6
 L_1403:
 		PUSH	DI
 		MOV	SI,DI
-		MOV	DI,9A00H		;提示行保存区
+		MOV	DI,9600H		;提示行保存区
 		CALL	S_MOVE			;保存被提示行复盖内容
 		POP	DI
-		CMP	BYTE PTR CS:[0F7H],0	;提示行光带色=0无光带
-		JZ	L_1405
-		PUSH	DI
-		XOR	AL,AL
-		MOV	CX,30*80
-		REP	STOSB
-		POP	DI
-		MOV	DX,3C4H
-		MOV	AH,CS:[0F7H]
-		MOV	AL,2
-		OUT	DX,AX
-		MOV	AL,-1
-		MOV	CX,30*80
-		REP	STOSB
-		MOV	AX,0F02H
-		OUT	DX,AX
+                CALL    S_STATUS_BAND
 L_1405:
 		MOV	DL,' '                  ;清提示行
 		MOV	CX,80
@@ -1349,18 +1331,15 @@ L_1440:
 		XOR	DL,DL
 		MOV	CS:D_0059,DL		;清提示行
 		CALL	S_SPDZ			;计算光标DX在实屏区地址→DI
-		MOV	SI,9A00H		;提示行保存区
-		CMP	BYTE PTR CS:[0F7H],0	;提示行光带?
-		JZ	L_1442
+		MOV	SI,9600H		;提示行保存区
 		SUB	DI,80*6
 L_1442:
 		CALL	S_MOVE			;恢复被提示行复盖内容
 L_1443:
 		JMP	L_RET
 L_1450:
-		CMP	AL,5			;<设置提示行光带色>
+		CMP	AL,5			; reserved
 		JNZ	L_1460
-		MOV	CS:[0F7H],BL
 		JMP	L_RET
 L_1460:
 		CMP	AL,6			;<取显示参数>
@@ -1590,15 +1569,13 @@ L_TX3:
 S_TXZF		ENDP
 
 ;子程序:VGA提示行图形传送
+                INCLUDE STATUSV.INC
 S_MOVE		PROC	NEAR
 		MOV	DX,3CEH
 		MOV	AX,105H
 		OUT	DX,AX			;置传送方式
 		PUSH	ES
 		POP	DS			;ES→DS
-		MOV	CX,18*80		;行字节数
-		CMP	BYTE PTR CS:[0F7H],0	;提示行光带色
-		JZ	L_MOVE1
 		MOV	CX,30*80		;行字节数
 L_MOVE1:
 		REP	MOVSB			;传送
@@ -1928,14 +1905,9 @@ S_SETB8 	ENDP
 D_SET		DB	18H,65H 		;行比较寄存器
 		DB	7,0EFH			;清行比较寄存器第8位
 		DB	9,0BFH			;清行比较寄存器第9位
-	;行比较寄存器:
-	;计算方法:B000H-AE02H	;扫描开始地址段
-	;	 =1FEH /80=66H
-	;扫描开始地址:
-	;计算方法:提示行保存区地址=9600H时为AE43H
-	;	  改为9A00H,增加400H
-	;	  400H/80=12.8 条扫描线 取13 *80/16=65=41H
-	;	AE43H-41H=AE02H
+        ; Scanout starts at AE020h and wraps at the line comparison.
+        ; Its 480 scanlines end at B7620h. Save the 30-line status strip
+        ; at AE02:9600 (B7620h..B7F7Fh), below direct text at B8000h.
 
 S_SETVGA	PROC	NEAR
 		CMP	CS:D_005A,0		;判直接写屏?
@@ -1969,7 +1941,6 @@ L_SV2:
 		CALL	S_SET1
 		RET
 L_SV3:
-		MOV	CS:[0F7H],BL		;提示行无光带
 		MOV	DL,90H
 		MOV	BX,0AE02H
 		MOV	CS:D_AH0C,OFFSET L_AHC1
@@ -2010,8 +1981,8 @@ L_S10:
 		JZ	L_S21
 		MOV	AX,ES:[0F4H]		;显示参数
 		MOV	DS:[0F4H],AX		;存
-		MOV	AX,ES:[0F6H]
-		MOV	DS:[0F6H],AX
+		MOV	AL,ES:[0F6H]
+		MOV	DS:[0F6H],AL
 		MOV	AL,ES:[10AH]		;清
 		MOV	D_TUXS,AL
 		PUSH	CS
@@ -2021,7 +1992,6 @@ L_S21:
 		MOV	BYTE PTR DS:[0F4H],8	;不显示版本信息
 		MOV	BYTE PTR DS:[0F5H],1	;设置直接写屏
 		MOV	BYTE PTR DS:[0F6H],1	;原有方式
-		MOV	BYTE PTR DS:[0F7H],'9'  ;提示行光带色
 L_S22:
 		MOV	SI,80H			;命令行参数区首
 		LODSB
@@ -2094,7 +2064,6 @@ L_S39:
 		CMP	AL,'Q'                  ;<取消屏幕分割>
 		JNZ	L_S40
 		MOV	BYTE PTR K_SET2,0C3H
-		MOV	ES:[0F7H],AL
 		JMP	L_S30
 L_S40:
 		CMP	AL,'S'                  ;<初始化属性寄存器>
@@ -2124,11 +2093,6 @@ L_S44:
 		AND	BYTE PTR ES:[0F5H],0FEH
 		JMP	L_S30
 L_S45:
-		CMP	AL,'1'                  ;<提示行光带色>
-		JB	L_S50
-		CMP	AL,'9'
-		JA	L_S50
-		MOV	ES:[0F7H],AL
 L_S50:
 		JMP	L_S30
 L_S60:
@@ -2360,7 +2324,7 @@ S_PATH		ENDP
 
 D_NAME		DB	'VGA',0
 MSG		DB	'VGA.COM VGA显示模块(标准VGA) ',DATE,13,10
-		DB	'命令行格式:VGA [/B][/C][/G][/H][/K][/L][/N][/P][/Q][/S][/T][/X][/Y][/Z][/0-9]',13,10
+		DB	'命令行格式:VGA [/B][/C][/G][/H][/K][/L][/N][/P][/Q][/S][/T][/X][/Y][/Z]',13,10
 		DB	'    其中:/B:保持提示行打开',13,10
 		DB	'         /C:AH=0BH调BIOS',13,10
 		DB	'         /G:固定光标',13,10
@@ -2375,7 +2339,7 @@ MSG		DB	'VGA.COM VGA显示模块(标准VGA) ',DATE,13,10
 		DB	'         /X:不显示版本信息',13,10
 		DB	'         /Y:光标下移2线',13,10
 		DB	'         /Z:不使用直接写屏,否则使用直接写屏',13,10
-		DB	'         /0-9:提示行光带色(0-9)',13,10,'$'
+                DB      '$'
 
 F_S	EQU	$
 
