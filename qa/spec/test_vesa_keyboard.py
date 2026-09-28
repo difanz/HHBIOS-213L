@@ -48,8 +48,8 @@ def test_deferred_menu_reenters_after_restoring_the_foreground_stack(vesa_driver
     machine.write('keyboard_segment', struct.pack('<H', 0x2000))
     machine.uc.mem_write(0x20103, b'\xef\xcd')
     machine.write('active', b'\1')
-    machine.write('old8', struct.pack('<HH', 0xf100, 0x1000))
-    machine.uc.mem_write(0x1f100, b'\xcf')
+    machine.write('old8', struct.pack('<HH', 0, 0xe200))
+    machine.uc.mem_write(0xe2000, b'\xcf')
     # Clear/open the real status row, write Y, then deliberately clobber the
     # callback's registers. The interrupted caller's entire context survives.
     call = b'\x9c\x9a' + struct.pack('<HH', machine.symbols['int10_handler'], 0x1000)

@@ -1176,7 +1176,10 @@ S_CXTUX:
 		JNZ	L_CT1
 		MOV	SI,OFFSET D_YWXS	;英文
 L_CT1:
+                PUSH    SI
 		CALL	S_QTXSC 		;清提示行并显示输入方式及纯中文标志
+                POP     SI
+                CALL    S_IDLE_PANEL
 		MOV	SI,OFFSET D_213L	;提示行版权标志
 		MOV	BL,D_TUX1
 		MOV	DL,10
@@ -1184,8 +1187,8 @@ L_CT1:
 		RET
 
 ;----------------------------------------------------------------------------
-D_XTK1		DB	'1下一页   2光标开关 3执行特显 4简繁切换 '
-		DB	'5退出汉字 6仿长城键 7联想开关 8直接写屏',0
+D_XTK1		DB	' 1下一页   2光标     3特显     4简繁    '
+		DB	' 5关中文   6长城键   7联想     8直写屏  ',0
 ;【系统控制-第一页】
 L_XTK1:
 		MOV	SI,OFFSET D_XTK1	;第一页菜单
@@ -1341,8 +1344,8 @@ L_XTK1H:
 		JMP	SHORT L_XTK2
 
 ;----------------------------------------------------------------------------
-D_XTK2		DB	'1上一页   2打印字符 3对外显示 4重显屏幕 '
-		DB	'5拼音词组 6字典方式 7重码提示 8保持提示',0
+D_XTK2		DB	' 1上一页   2打印字   3模式名   4重绘屏  '
+		DB	' 5拼音词   6字典     7重码     8常驻栏  ',0
 D_DK		DB	'打开',0
 D_GB		DB	'关闭',0
 D_DYZF		DB	'打印字符串:',0
@@ -2481,6 +2484,7 @@ S_CDKZ:
 		MOV	BL,D_TUX1		;常规文字
 		XOR	DL,DL			;定位
 		CALL	S_A249			;显示
+                CALL    S_MENU_FRAMES
 		MOV	DH,1			;默认号
 L_CD00:
 		CALL	S_A251
@@ -2531,9 +2535,11 @@ L_CD33:
 ;子程序:定位显示字符串SI
                 INCLUDE STATUSKEY.INC
 S_A250:
+                MOV     BH,1
 		MOV	BL,D_TUX1		;常规文字
 		JMP	SHORT L_A252
 S_A251:
+                MOV     BH,2
 		MOV	BL,D_QTS1		;选中项颜色
 L_A252:
 		PUSH	CX
@@ -2552,6 +2558,7 @@ L_A253:
 		LODSB				;取一字符
 		CALL	S_1403A 		;显示
 		LOOP	L_A253
+                CALL    S_MENU_FRAME
 		CALL	S_A24E			;8.7
 		POP	CX
 		RET

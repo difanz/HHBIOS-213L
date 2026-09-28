@@ -5,10 +5,19 @@
     29
   ],
   "baseline": 23,
-  "records": 9990,
-  "payload_bytes": 912856,
+  "records": 9996,
+  "payload_bytes": 913384,
   "freetype": "2.13.2",
   "inputs": [
+    {
+      "file": "gb24st.pcf.gz",
+      "index": 0,
+      "family": "Song ti",
+      "source": "bitmap",
+      "pixel_size": 24,
+      "copyright": [],
+      "sha256": "97ef730dc0d8f630bb0174157349b1eb0a1f5c9227c8410bee089635fe7a9a5e"
+    },
     {
       "file": "NotoSansCJK-Regular.ttc",
       "index": 2,
@@ -32,7 +41,7 @@
       "sha256": "482219650d82b9db6330626adf085313fd609086fefa77ad3539b3afb508f06a"
     }
   ],
-  "sha256": "019f1db5b04f0b5123fd7c4761b39923a0e9c3b450d9a45b2ead2ee6d1fcf570",
+  "sha256": "2f9f160c884bd3f5062498c38590aeb8eb3241efa5ea3599cfb55dcfd596555c",
   "aspect": "native",
   "layouts": [
     {
@@ -45,5 +54,6 @@
         25
       ]
     }
-  ]
+  ],
+  "pixel_size": 24
 }

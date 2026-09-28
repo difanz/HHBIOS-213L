@@ -85,6 +85,33 @@ the compatible INT 10h/AH=16h bitmap query. It is not the source of HH20.FNT.
 
 ## Variable sizes from Linux fonts
 
+`F0818.FNT` and `F1229.FNT` use the original ISAS Song bitmap strikes:
+`gb16st` (16x16) and `gb24st` (24x24), respectively. Their pixels are copied
+without resizing into 8x18 and 12x29 halfwidth cells. These X11 fonts are
+distributed by [X.Org font-isas-misc](https://www.x.org/releases/individual/font/)
+and included in Debian/Ubuntu's `xfonts-base`. BDF source and compiled PCF
+files are both accepted. See [the ISAS license](large/ISAS.txt).
+
+The exporter translates Unicode characters to the font's declared
+GB2312.1980-0 row/cell codes. It does not treat those codes as Unicode.
+ISAS does not cover every traditional character: these two files explicitly
+use Unifont 16 and Noto Sans CJK SC 24, respectively, for missing characters.
+Terminus supplies the Western characters. Input hashes, font sizes and the
+fallback sources are recorded in each file's JSON metadata.
+
+For example, to rebuild the 24-pixel face:
+
+```sh
+python tools/build-font.py --cjk /path/to/gb24st.pcf.gz \
+    --cjk-fallback /path/to/NotoSansCJK-Regular.ttc --cjk-fallback-index 2 \
+    --terminal /path/to/terminus-normal.otb --size 24 --cell 12x29 \
+    --output F1229.FNT
+```
+
+Use `gb16st`, an uncompressed Unifont BDF fallback, size 16 and cell 8x18
+for `F0818.FNT`. Fonts and licenses are packaged with the distribution;
+DOS does not need an installed Linux font system.
+
 VESA selects a font from `HH20.FNT` and `F????.FNT` in the current DOS
 directory to fit the physical mode and text layout. `VESA /F:file` selects
 one explicit font instead.

@@ -66,7 +66,7 @@ def assert_text_pixels(shot,text,pairs,font):
                                    << (shot.cell_width*shot.scale-1-x)
                                    for x in range(shot.cell_width*shot.scale))
                                for row in glyph for _ in range(shot.scale))
-                assert shot.glyph(shot.rows,index*2+half,plane,y_offset=inset) == scaled
+                assert shot.glyph(shot.rows,1+index*2+half,plane,y_offset=inset) == scaled
 
 
 @pytest.mark.parametrize('width,height,rows',[

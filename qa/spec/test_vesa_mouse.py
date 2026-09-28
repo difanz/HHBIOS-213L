@@ -32,7 +32,7 @@ def mouse(vesa_driver,rows=50,width=10,height=20):
         elif fn==0x17: assert m.uc.mem_read(m.get('ES')*16+m.get('DX'),32)==b'D'*32
         else: pytest.fail(f'unexpected mouse function {fn:04x}')
     m=Driver(vesa_driver,bios)
-    m.write('old33',struct.pack('<HH',0xf000,0x1000))
+    m.write('old33',struct.pack('<HH',0,0xe100))
     for name,value in dict(viewport_x=0 if width==16 else 240,viewport_y=2,text_rows=rows,raster_height=height,
                            font_width=width,
                            page_count=4 if rows>25 else 8).items():
@@ -88,7 +88,7 @@ def test_mouse_callback_swap_and_translation(vesa_driver):
     assert state['callback']==thunk
     packet=struct.pack('<10H',3,1,1039,1021,0x123,0x456,0x789,0x3000,0x4000,0x202)
     m.uc.mem_write(0x75000,packet)
-    m.uc.mem_write(0x1e002,struct.pack('<HH',0x5000,0x7000))
+    m.uc.mem_write(0x1fe02,struct.pack('<HH',0x5000,0x7000))
     m.run('mouse_event')
     assert m.get('AX')==1
     result=struct.unpack('<10H',m.uc.mem_read(0x75000,20))
@@ -125,7 +125,7 @@ def test_mouse_exclusion_and_show_use_logical_cells(vesa_driver):
     m.run('int33_handler',AX=1)
     m.run('mouse_poll')
     def visible():
-        m.uc.mem_write(0x1e002,struct.pack('<H',48*256+78))
+        m.uc.mem_write(0x1fe02,struct.pack('<H',48*256+78))
         m.run('mouse_covers')
         return m.get('AX')
     assert visible()

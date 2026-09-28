@@ -47,7 +47,7 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
     resident=files['RESIDENT.BIN'].read_bytes()
     abi=struct.unpack_from('<10H',resident)
     assert abi[:3]==(0x5356,1,28) and abi[4]==1
-    assert 0 < abi[5] < 56*1024  # bounded cache and font catalog; payloads stay in XMS/EMS
+    assert 0 < abi[5] < 57*1024  # bounded cache and font catalog; payloads stay in XMS/EMS
     assert (abi[8]<0xa000)==bool(residency)
     owner,paragraphs=struct.unpack_from('<HH',resident,49)
     assert owner==abi[8] and paragraphs==(abi[5]+15)//16
@@ -82,12 +82,14 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
                     assert plane_bits(plane,100,col*10,row*23,10,23)==(0,)*23, (row,col)
     # The status frame uses the two spare lines; all 23 glyph rows remain.
     for p, plane in enumerate(planes):
-        for col, code in ((0, 0xd3a2), (2, 0xcec4)):
+        for col, code in ((1, 0xd3a2), (3, 0xcec4)):
             for half in (0, 1):
                 expected=colored_rows(native_rows(code,half),10,23,0x70,p)
                 assert plane_bits(plane,100,(col+half)*10,576,10,23)==expected
         assert plane[57500:57600] == b'\xff' * 100
-        assert plane[59900:60000] == bytes([255 if p == 3 else 0]) * 100
+        for x in range(800):
+            color = 0 if 1 <= x <= 78 else 8  # Raised input-method button.
+            assert bool(plane[59900 + x // 8] & (128 >> (x & 7))) == bool(color & (1 << p))
 
 
 @pytest.mark.parametrize('cpu',['8086','286'])

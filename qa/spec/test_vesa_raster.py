@@ -11,6 +11,45 @@ from qa.spec.planar_memory import PlanarMemory
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize('column', [0, 70])
+@pytest.mark.parametrize('width', [8, 10])
+@pytest.mark.parametrize('style', [1, 2])
+@pytest.mark.parametrize('inset', [0, 1])
+def test_status_panel_edges_preserve_glyph_area_and_neighbors(vesa_driver, column,
+                                                            width, style, inset):
+    initial = bytes((i * 53 + 17) & 255 for i in range(131072))
+    def bios(machine):
+        assert machine.get('AX') == 0x4f05
+        memory.bank = machine.get('DX')
+        machine.put('AX', 0x004f)
+    machine = Driver(vesa_driver, bios)
+    memory = PlanarMemory(machine, [initial] * 4)
+    machine.write('screen', struct.pack('<4H', 1920, 1080, 240, 0xa000))
+    for name, value in dict(viewport_x=0, viewport_y=43, text_rows=10,
+                            raster_height=23, font_width=24, pixel_scale=1,
+                            display_pitch=240, bank_step=1).items():
+        machine.write(name, struct.pack('<H', value))
+    machine.write('active', b'\1')
+    machine.uc.mem_write(0x1fe02, struct.pack('<4H', column, width, style, inset))
+    machine.run('raster_status_panel', limit=1000000)
+    left, right = column * 24 + 1, (column + width) * 24 - 2
+    top, bottom = 273, 295 + 2 * inset
+    light, dark = (8, 15) if style == 2 else (15, 0)
+    pixels = {}
+    if inset:
+        pixels.update({(x, top): light for x in range(left, right + 1)})
+        pixels.update({(x, bottom): dark for x in range(left, right + 1)})
+    for y in range(top + inset, bottom - inset + 1):
+        pixels.update({(left, y): light, (left + 1, y): 0 if style == 2 else 7,
+                       (right - 1, y): 7 if style == 2 else 8, (right, y): dark})
+    for plane in range(4):
+        expected = bytearray(initial)
+        for (x, y), color in pixels.items():
+            offset, mask = y * 240 + x // 8, 128 >> (x & 7)
+            expected[offset] = (expected[offset] & ~mask) | (mask if color & (1 << plane) else 0)
+        assert memory.planes[plane] == expected
+
+
 @pytest.mark.parametrize('shift', [0, 1, 3, 7])
 @pytest.mark.parametrize('color', [0, 7, 8, 15])
 def test_status_frame_preserves_neighbors_across_banks(vesa_driver, shift, color):
@@ -29,7 +68,7 @@ def test_status_frame_preserves_neighbors_across_banks(vesa_driver, shift, color
         machine.write(name, struct.pack('<H', value))
     machine.write('active', b'\1')
     # Scanline 273 crosses the 64 KiB aperture after sixteen bytes.
-    machine.uc.mem_write(0x1e002, struct.pack('<2H', 273, color))
+    machine.uc.mem_write(0x1fe02, struct.pack('<2H', 273, color))
     machine.run('raster_status_edge')
     for plane in range(4):
         expected = bytearray(initial)
@@ -46,7 +85,7 @@ def test_cell_block_move_preserves_overlap_and_registers(vesa_driver, count, des
     machine = Driver(vesa_driver, lambda m: pytest.fail('text moves need no BIOS'))
     original = bytes((i * 53 + 17) & 255 for i in range(8200))
     machine.uc.mem_write(0x30000, original)
-    machine.uc.mem_write(0x1e002, struct.pack('<5H', 2, 0x3000, destination, source, count))
+    machine.uc.mem_write(0x1fe02, struct.pack('<5H', 2, 0x3000, destination, source, count))
     registers = {name: 0xa1234567 + i for i, name in
                  enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP'))}
     machine.run('move_cells', ES=0x4321, EFLAGS=0x602, **registers)
@@ -63,7 +102,7 @@ def test_cell_block_move_preserves_overlap_and_registers(vesa_driver, count, des
 def test_cell_block_fill_preserves_guards(vesa_driver, count):
     machine = Driver(vesa_driver, lambda m: pytest.fail('text fills need no BIOS'))
     machine.uc.mem_write(0x30000, b'\xa5' * 8004)
-    machine.uc.mem_write(0x1e002, struct.pack('<4H', 2, 0x3000, 0x9e20, count))
+    machine.uc.mem_write(0x1fe02, struct.pack('<4H', 2, 0x3000, 0x9e20, count))
     machine.run('fill_cells', EFLAGS=0x602)
     assert machine.uc.mem_read(0x30000, 8004) == b'\xa5' * 2 + b'\x20\x9e' * count + b'\xa5' * (8002 - count * 2)
     assert machine.get('EFLAGS') & 0x400
@@ -110,7 +149,7 @@ def test_cursor_byte_masks_match_pixels_across_banks(vesa_driver, width, scale, 
         state['writes'] += size
     m.uc.hook_add(UC_HOOK_INSN, out, None, 1, 0, reg.UC_X86_INS_OUT)
     m.uc.hook_add(UC_HOOK_MEM_WRITE, write, begin=0xa0000, end=0xaffff)
-    m.uc.mem_write(0x1e002, struct.pack('<2H', 0, lines))
+    m.uc.mem_write(0x1fe02, struct.pack('<2H', 0, lines))
     m.run('raster_cursor', limit=3000000)
     save()
     height = ((min(lines, 16)*64+15)//16)*scale
@@ -135,7 +174,7 @@ def test_word_rows_preserve_neighbors_and_tail(vesa_driver, shift, rows, foregro
     m.uc.mem_write(0xa0000, initial)
     bits = [((i * 137 + 0x255) & 1023) << 6 for i in range(rows)]
     m.uc.mem_write(0x1d000, struct.pack(f'<{rows}H', *bits))
-    m.uc.mem_write(0x1e002, struct.pack('<6H', 0xd000, offset, rows, shift, foreground, background))
+    m.uc.mem_write(0x1fe02, struct.pack('<6H', 0xd000, offset, rows, shift, foreground, background))
     registers = {name: 0xa1234567 + i for i, name in
                  enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP'))}
     m.run('raster_words', ES=0x3000, **registers)
@@ -177,7 +216,7 @@ def test_raster_preparation_across_bank_edges(vesa_driver, width, height, scale,
             for y in range(height)]
     packed = struct.pack(f'<{height}H', *(r >> 16 for r in rows)) if legacy else struct.pack(f'<{height}I', *rows)
     m.uc.mem_write(0x1d000, packed)
-    m.uc.mem_write(0x1e002, struct.pack('<3H', 0xd000, 0xa5, 0))
+    m.uc.mem_write(0x1fe02, struct.pack('<3H', 0xd000, 0xa5, 0))
     m.run('raster_cell' if legacy else 'raster_large_cell', limit=3000000)
     for plane in range(4):
         expected = bytearray(initial)
@@ -217,7 +256,7 @@ def test_native_stencil_colors_and_neighbors(vesa_driver, width, shift, attribut
                 ink[y * source_pitch + (shift + x) // 8] |= 128 >> ((shift + x) % 8)
     m.uc.mem_write(0x1d000, bytes(ink))
     m.uc.mem_write(0x1d400, bytes(masks))
-    m.uc.mem_write(0x1e002, struct.pack('<7H', 0xd000, offset, rows,
+    m.uc.mem_write(0x1fe02, struct.pack('<7H', 0xd000, offset, rows,
                                      byte_count, 0xd400, attribute, source_pitch))
     registers = {name: 0xa1234567 + i for i, name in
                  enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP'))}
@@ -253,7 +292,7 @@ def test_dword_spans_and_byte_tails(vesa_driver, width, repeats, phase, foregrou
     m.uc.mem_write(0xa0000, initial)
     m.uc.mem_write(0x1d000, source)
     m.uc.mem_write(0x1d400, masks)
-    m.uc.mem_write(0x1e002, struct.pack('<9H', 0xd000, offset, rows, width, 0xd400,
+    m.uc.mem_write(0x1fe02, struct.pack('<9H', 0xd000, offset, rows, width, 0xd400,
                                      foreground, background, repeats, phase))
     registers = {name: 0xa1234567 + i for i, name in
                  enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP'))}
@@ -279,7 +318,7 @@ def test_fixed_cells_use_relocated_aperture(vesa_driver, row, column):
     segment = 0xa943
     m.write('framebuffer', struct.pack('<H', segment))
     m.uc.mem_write(0x1d000, struct.pack('<23H', *([0xa540] * 23)))
-    m.uc.mem_write(0x1e002, struct.pack('<3H', 0xd000, 0x1e, row * 256 + column))
+    m.uc.mem_write(0x1fe02, struct.pack('<3H', 0xd000, 0x1e, row * 256 + column))
     written = set()
     m.uc.hook_add(UC_HOOK_MEM_WRITE,
                  lambda uc, access, address, size, value, _: written.update(range(address, address + size)),

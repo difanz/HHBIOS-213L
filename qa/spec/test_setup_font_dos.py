@@ -32,7 +32,7 @@ def assert_font_pixels(shot, text, pairs, font):
     witnesses = dict(pairs)
     witnesses[0, 2] = (ord('A'), 0)
     witnesses[shot.rows - 1, 4] = (ord(' '), 0)
-    for column, code in ((0, 0xd3a2), (2, 0xcec4)):
+    for column, code in ((1, 0xd3a2), (3, 0xcec4)):
         witnesses[shot.rows, column] = (code, 0)
         witnesses[shot.rows, column + 1] = (code, 1)
     for (row, column), (code, half) in witnesses.items():
@@ -48,6 +48,7 @@ def assert_font_pixels(shot, text, pairs, font):
 
 
 @pytest.mark.parametrize('video,width,height,rows,font_name,cell', [
+    ('104', 1024, 768, 25, 'F1229.FNT', (12, 29)),
     ('104', 1024, 768, 43, 'F1217.FNT', (12, 17)),
     ('106', 1280, 1024, 50, 'F1620.FNT', (16, 20)),
     ('1920x1080', 1920, 1080, 50, 'F2421.FNT', (24, 21)),
@@ -103,7 +104,7 @@ def test_msdos_generated_font_pack_layout(dosbox_binary, msdos_image, vesa_build
     modes = [value for key, value in report.items() if key.startswith('VBE_MODE_')]
     assert any(value.startswith(f'{width}x{height};') and f'80x{rows}' in value for value in modes)
     batch = read('FONTCFG/HHBIOS.BAT')
-    assert f'/R:{rows}'.encode() in batch and b'/F:' not in batch
+    assert (f'/R:{rows}'.encode() in batch or rows == 25) and b'/F:' not in batch
     assert b'HHBIOS load failed' not in read('FONTCFG/LOAD.TXT')
     read('FONTCFG/SNAP00.BIN')
     shot = Snapshot.read(tmp_path/'FONTCFG/SNAP00.BIN')

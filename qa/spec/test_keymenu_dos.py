@@ -90,11 +90,21 @@ def test_menu_cancel_unload_and_reload(dosbox_binary, msdos_image, memory_build,
                   tmp_path, pytestconfig, display, low, input_mode)
 
 
+def test_menu_with_native_24_pixel_font(dosbox_binary, msdos_image, memory_build,
+                                      keymenu_build, tmp_path, pytestconfig):
+    run_menu_case(dosbox_binary, msdos_image, memory_build, keymenu_build,
+                  tmp_path, pytestconfig, 'VESA', False, 'dos',
+                  video_options=' /M:104 /F:F1229.FNT')
+
+
 def run_menu_case(dosbox_binary, msdos_image, memory_build, keymenu_build,
-                  tmp_path, pytestconfig, display, low, input_mode, machine='svga_s3'):
+                  tmp_path, pytestconfig, display, low, input_mode, machine='svga_s3',
+                  video_options=''):
     image, copy_in, read = copy_disk(msdos_image, tmp_path)
     for name in ('READ5', 'CKBD', display):
         copy_in(memory_build / (name+'.COM'), '::HHBIOS/'+name+'.COM')
+    if video_options:
+        copy_in(ROOT/'fonts/large/F1229.FNT', '::HHBIOS/F1229.FNT')
     copy_in(memory_build/'MEMORY.COM', '::MEMORY.COM')
     copy_in(keymenu_build, '::KEYMENU.COM')
     # Exercise both the distribution's Scroll Lock binding and the historical
@@ -112,7 +122,7 @@ def run_menu_case(dosbox_binary, msdos_image, memory_build, keymenu_build,
     suffix = ' /N' if low else ''
     commands = ['@ECHO OFF', 'CD \\', 'MEMORY BEFORE.TXT']
     for cycle in range(2):
-        commands += ['CD \\HHBIOS', 'READ5'+suffix, 'CKBD /E'+suffix, display+suffix,
+        commands += ['CD \\HHBIOS', 'READ5'+suffix, 'CKBD /E'+suffix, display+suffix+video_options,
                      'CD \\', f'MEMORY LIVE{cycle}.TXT', 'KEYMENU '+input_mode,
                      'IF ERRORLEVEL 1 GOTO FAILED', f'MEMORY FREE{cycle}.TXT']
     commands += ['ECHO complete>DONE.TXT', ':FAILED', 'C:\\DOS\\SHUTDOWN /S']

@@ -120,6 +120,7 @@ class KeyboardModule:
 def test_control_menu_navigation(menu_binary, keys, selected):
     machine = KeyboardModule(menu_binary)
     queue = list(keys)
+    panels = []
     machine.write('D_INT16', struct.pack('<HH', 0xf000, BASE//16))
     machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
     machine.uc.mem_write(BASE+0xe000, b''.join(
@@ -128,6 +129,8 @@ def test_control_menu_navigation(menu_binary, keys, selected):
     def bios(uc, number, _):
         if number == 0x10:
             assert machine.get('AX') >> 8 == 0x14
+            if machine.get('AX') == 0x1417:
+                panels.append((machine.get('BX') & 255, machine.get('DX')))
         else:
             assert number == 0x60 and queue, 'menu did not accept its key'
             machine.set('AX', queue.pop(0))
@@ -139,6 +142,8 @@ def test_control_menu_navigation(menu_binary, keys, selected):
     machine.call('S_CDKZ')
     assert not queue
     assert machine.get('AX') & 255 == selected
+    assert panels[:8] == [(1, 0x0a00 | slot) for slot in range(8)]
+    assert panels[8] == (2, 0x0a00)
 
 
 @pytest.mark.parametrize('toggle', [1, 2, 0x10])

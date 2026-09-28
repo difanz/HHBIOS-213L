@@ -5,6 +5,7 @@ Inputs are explicit font files, including a face index for TTC collections.
 FreeType uses native strikes when present, otherwise monochrome outlines.
 """
 import argparse
+import ctypes
 from functools import lru_cache
 import hashlib
 import json
@@ -18,12 +19,38 @@ SLOTS = 256 + 87 * 94
 CONTROLS = '\0☺☻♥♦♣♠•◘○◙♂♀♪♫☼►◄↕‼¶§▬↨↑↓→←∟↔▲▼'
 
 
-def open_face(path, index, size, width=None):
-    face = freetype.Face(str(path), index=index)
+class SourceFace(freetype.Face):
+    """Translate Unicode requests to a font's declared native character set."""
+    gb2312 = False
+
+    def get_char_index(self, char):
+        if self.gb2312:
+            try:
+                encoded = (chr(char) if isinstance(char, int) else char).encode('gb2312')
+            except UnicodeEncodeError:
+                return 0
+            if len(encoded) != 2:
+                return 0
+            char = ((encoded[0] & 0x7f) << 8) | (encoded[1] & 0x7f)
+        return super().get_char_index(char)
+
+    def load_char(self, char, flags=freetype.FT_LOAD_RENDER):
+        self.load_glyph(self.get_char_index(char), flags)
+
+
+def open_face(path, index, size, width=None, fallback=None):
+    face = SourceFace(str(path), index=index)
     try:
         face.select_charmap(freetype.FT_ENCODING_UNICODE)
     except freetype.FT_Exception:
-        raise ValueError(f'{path.name} needs a Unicode character map') from None
+        encoding, registry = ctypes.c_char_p(), ctypes.c_char_p()
+        error = freetype.FT_Get_BDF_Charset_ID(
+            face._FT_Face, ctypes.byref(encoding), ctypes.byref(registry))
+        if (error or registry.value != b'GB2312.1980' or encoding.value != b'0'
+                or len(face.charmaps) != 1):
+            raise ValueError(f'{path.name} needs a Unicode character map or GB2312.1980-0') from None
+        face.set_charmap(face.charmaps[0])
+        face.gb2312 = True
     strikes = [i for i, strike in enumerate(face.available_sizes)
                if strike.y_ppem == size * 64]
     if strikes:
@@ -45,10 +72,19 @@ def open_face(path, index, size, width=None):
         face.hh_source = 'outline'
         face.hh_flags = (freetype.FT_LOAD_RENDER | freetype.FT_LOAD_TARGET_MONO |
                          freetype.FT_LOAD_NO_BITMAP)
+    face.hh_path, face.hh_index = path, index
+    face.hh_fallback = open_face(*fallback, size) if fallback else None
+    return face
+
+
+def source_face(face, char):
+    if not face.get_char_index(char) and face.hh_fallback:
+        return face.hh_fallback
     return face
 
 
 def raster(face, char, width, height, baseline, frame=False):
+    face = source_face(face, char)
     if not face.get_char_index(char):
         raise ValueError(f'{face.family_name!r} lacks U+{ord(char):04X} {char}')
     face.load_char(char, face.hh_flags)
@@ -122,7 +158,7 @@ def build(cjk, terminal, width, height, baseline=None):
         for char, fullwidth in sorted(set(charset)):
             if not char or char == '\0' or 0x2500 <= ord(char) <= 0x259f:
                 continue
-            face = cjk if fullwidth else terminal
+            face = source_face(cjk if fullwidth else terminal, char)
             face.load_char(char, face.hh_flags)
             ascent = max(ascent, face.glyph.bitmap_top)
             descent = max(descent, face.glyph.bitmap.rows - face.glyph.bitmap_top)
@@ -178,6 +214,12 @@ def font_copyright(face):
 
 
 def font_metadata(data, records, baseline, width, height, sources):
+    inputs = []
+    for path, index, face in sources:
+        inputs.append((path, index, face))
+        if face.hh_fallback:
+            fallback = face.hh_fallback
+            inputs.append((fallback.hh_path, fallback.hh_index, fallback))
     return dict(format=2, cell=[width, height], baseline=baseline,
                 records=records, payload_bytes=len(data) - 32,
                 freetype='.'.join(map(str, freetype.version())),
@@ -186,7 +228,7 @@ def font_metadata(data, records, baseline, width, height, sources):
                              source=face.hh_source, pixel_size=face.hh_size,
                              copyright=font_copyright(face),
                              sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-                        for path, index, face in sources],
+                        for path, index, face in inputs],
                 sha256=hashlib.sha256(data).hexdigest())
 
 
@@ -216,9 +258,10 @@ def pack_cells(modes, rows):
 
 class FontFitter:
     """Measure real glyphs, preserving aspect ratio and native bitmap pixels."""
-    def __init__(self, path, index, fullwidth):
+    def __init__(self, path, index, fullwidth, fallback=None):
         self.path, self.index = path, index
         self.fullwidth = fullwidth
+        self.fallback = fallback
         self.face = freetype.Face(str(path), index=index)
         self.characters = sorted({char for char, full in mapped_characters()
                                   if char and char != '\0' and full == fullwidth
@@ -233,9 +276,10 @@ class FontFitter:
 
     def measure(self, size, width):
         if size not in self.metrics:
-            face = open_face(self.path, self.index, size)
+            primary = open_face(self.path, self.index, size, fallback=self.fallback)
             ascent, descent, bounds = 0, 0, []
             for char in self.characters:
+                face = source_face(primary, char)
                 if not face.get_char_index(char):
                     raise ValueError(f'{face.family_name!r} lacks U+{ord(char):04X} {char}')
                 face.load_char(char, face.hh_flags)
@@ -285,12 +329,13 @@ def build_pack(args):
         licenses[path.name] = path.read_bytes()
     cells, unavailable = pack_cells(modes, rows)
     printers = {(size // 2, size): size for size in (24, 32, 40)}
-    cjk = FontFitter(args.cjk, args.cjk_index, True)
+    fallback = (args.cjk_fallback, args.cjk_fallback_index) if args.cjk_fallback else None
+    cjk = FontFitter(args.cjk, args.cjk_index, True, fallback)
     terminal = FontFitter(args.terminal, args.terminal_index, False)
     entries = []
     for width, height in sorted(set(cells) | set(printers)):
         cjk_size, terminal_size, baseline = fit_cell(cjk, terminal, width, height)
-        faces = (open_face(args.cjk, args.cjk_index, cjk_size),
+        faces = (open_face(args.cjk, args.cjk_index, cjk_size, fallback=fallback),
                  open_face(args.terminal, args.terminal_index, terminal_size))
         data, records, baseline = build(*faces, width, height, baseline)
         metadata = font_metadata(data, records, baseline, width, height,
@@ -336,6 +381,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cjk', type=Path, required=True)
     parser.add_argument('--cjk-index', type=int, default=0)
+    parser.add_argument('--cjk-fallback', type=Path,
+                        help='Explicit source for glyphs absent from the primary CJK font')
+    parser.add_argument('--cjk-fallback-index', type=int, default=0)
     parser.add_argument('--terminal', type=Path, required=True)
     parser.add_argument('--terminal-index', type=int, default=0)
     parser.add_argument('--size', type=int, help='Font pixel size, 16..48')
@@ -361,7 +409,8 @@ def main():
             raise ValueError('Cell must be 8..24 by 16..64; font size must be 16..48')
         if args.baseline is not None and not 0 < args.baseline <= height:
             raise ValueError('Baseline must be inside the cell')
-        cjk = open_face(args.cjk, args.cjk_index, args.size)
+        fallback = (args.cjk_fallback, args.cjk_fallback_index) if args.cjk_fallback else None
+        cjk = open_face(args.cjk, args.cjk_index, args.size, fallback=fallback)
         terminal = open_face(args.terminal, args.terminal_index, args.size, width)
         data, records, baseline = build(cjk, terminal, width, height, args.baseline)
     except (OSError, ValueError, freetype.FT_Exception) as error:

@@ -21,7 +21,7 @@ static void Video(unsigned function, unsigned value) {
     registers.w.bx = 0x0700;
     registers.w.dx = 0x184f;
   }
-  intr(0x10, &registers);
+  intr(function == 0x2900 ? 0x16 : 0x10, &registers);
 }
 
 static int Capture(FILE* output) {
@@ -73,7 +73,7 @@ static void SeedStatus(unsigned start) {
   _enable();
 }
 
-int main(void) {
+int main(int argc, char** argv) {
   FILE* output = fopen("STATUSV.BIN", "wb");
   unsigned start;
   unsigned char index;
@@ -89,8 +89,25 @@ int main(void) {
   SeedStatus(start + 450U * 80U);
   if (!Capture(output)) return 3;
   Video(0x1400, 0);
+  if (argc > 1 && strcmp(argv[1], "panels") == 0) {
+    unsigned slot;
+    for (slot = 0; slot < 8; ++slot) {
+      union REGPACK registers;
+      memset(&registers, 0, sizeof(registers));
+      registers.w.ax = 0x1417;
+      registers.w.dx = 0x0a00 | slot;
+      registers.w.bx = 1 + (slot & 1);
+      intr(0x10, &registers);
+    }
+  }
   if (!Capture(output)) return 4;
-  Video(0x1404, 0);
+  Video(0x1400, 0);
   if (!Capture(output)) return 5;
+  Video(0x1404, 0);
+  if (!Capture(output)) return 6;
+  Video(0x2900, 0);
+  if (!Capture(output)) return 7;
+  Video(0x2900, 0);
+  if (!Capture(output)) return 8;
   return fclose(output) != 0;
 }

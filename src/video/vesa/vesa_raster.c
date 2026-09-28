@@ -49,9 +49,7 @@ static void SelectPlane(u16 plane_index) {
 
 /* One scanline, clipped to the text viewport. Set/reset broadcasts the
  * solid color to all four planes; only partial edge bytes need a latch read. */
-void CALL raster_status_edge(u16 y, u16 color) {
-  u16 x = viewport_x;
-  u16 remaining = TEXT_COLS * font_width * pixel_scale;
+static void StatusLine(u16 x, u16 y, u16 remaining, u16 color) {
   u32 offset = MultiplyWide(y, display_pitch) + x / 8;
   if (y >= screen.height) {
     return;
@@ -95,6 +93,32 @@ void CALL raster_status_edge(u16 y, u16 color) {
   }
   WritePortWord(0x3ce, 1);
   WritePortWord(0x3ce, 0xff08);
+}
+
+void CALL raster_status_edge(u16 y, u16 color) {
+  StatusLine(viewport_x, y, TEXT_COLS * font_width * pixel_scale, color);
+}
+
+/* The side strokes live in the caller's blank padding cells. Horizontal
+ * strokes use spare scanlines outside the glyph; even full-height fonts fit. */
+void CALL raster_status_panel(u16 column, u16 width, u16 style, u16 inset) {
+  u16 left = viewport_x + column * font_width * pixel_scale + 1;
+  u16 right = left + width * font_width * pixel_scale - 3;
+  u16 top = viewport_y + text_rows * raster_height * pixel_scale;
+  u16 bottom = top + raster_height * pixel_scale + 2 * inset - 1;
+  u16 light = style == 2 ? 8 : 15;
+  u16 dark = style == 2 ? 15 : 0;
+  u16 y;
+  if (inset) {
+    StatusLine(left, top, right - left + 1, light);
+    StatusLine(left, bottom, right - left + 1, dark);
+  }
+  for (y = top + inset; y <= bottom - inset; ++y) {
+    StatusLine(left, y, 1, light);
+    StatusLine(left + 1, y, 1, style == 2 ? 0 : 7);
+    StatusLine(right - 1, y, 1, style == 2 ? 7 : 8);
+    StatusLine(right, y, 1, dark);
+  }
 }
 
 /* Whole-byte stores can broadcast identical ink/background bits to several

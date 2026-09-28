@@ -170,6 +170,7 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position);
 u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down);
 void CALL raster_cursor(u16 position, u16 lines);
 void CALL raster_status_edge(u16 y, u16 color);
+void CALL raster_status_panel(u16 column, u16 width, u16 style, u16 inset);
 u16 CALL raster_pixel(u16 x, u16 y, u16 color, u16 writing);
 void CALL raster_read(u16 plane, u32 offset, u16 segment, u16 destination,
                       u16 count);

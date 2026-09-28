@@ -36,10 +36,10 @@ def test_vesa_interrupt_context_and_failed_modes(vesa_driver,status,active):
     uc.mem_write(base+s['resident_segment'],struct.pack('<H',base//16))
     uc.mem_write(base+s['keyboard_segment'],struct.pack('<H',0x2000))
     uc.mem_write(base+s['active'],bytes([active]))
-    uc.mem_write(base+s['old10'],struct.pack('<HH',0xf000,base//16))
+    uc.mem_write(base+s['old10'],struct.pack('<HH',0,0xe100))
     # The original BIOS makes a nested query through the real driver entry.
     nested=b'\x3d\x02\x4f\x75\x0b\x50\xb8\x01\x4f\x9c\x9a'+struct.pack('<HH',s['int10_handler'],base//16)+b'\x58\xcd\xf1\xcf'
-    uc.mem_write(base+0xf000,nested)
+    uc.mem_write(0xe1000,nested)
     initial=dict(AX=0x4f02,BX=0x8101,CX=0x4567,DX=0x6789,SI=0x789a,DI=0x9abc,BP=0xabcd,DS=0x3000,ES=0x4000)
     calls=[]
     def get(n): return uc.reg_read(getattr(reg,'UC_X86_REG_'+n))
@@ -179,8 +179,8 @@ class Driver:
         self.uc=Uc(UC_ARCH_X86,UC_MODE_16); self.uc.mem_map(0,0x100000)
         self.uc.mem_write(0x10100,raw)
         self.write('resident_segment',struct.pack('<H',0x1000))
-        self.write('old10',struct.pack('<HH',0xf000,0x1000))
-        self.uc.mem_write(0x1f000,b'\xcd\xf1\xcf')
+        self.write('old10',struct.pack('<HH',0,0xe100))
+        self.uc.mem_write(0xe1000,b'\xcd\xf1\xcf')
         def interrupt(uc,number,_):
             if number == 0x16 and keyboard is not None:
                 keyboard(self)
@@ -199,10 +199,10 @@ class Driver:
 
     def run(self,entry='int10_handler',limit=300000,**registers):
         near=entry not in ('int10_handler','int33_handler','int8_handler')
-        # Installation code extends past E000h; keep its C stack above the
-        # complete COM image. Resident-call fixtures place arguments at E002h.
+        # Small-model near calls require SS=DS. Leave room above the loaded
+        # image for their stack; BIOS callbacks live in a separate segment.
         context=dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
-                     SP=0xfe00 if entry == 'initialize' else 0xe000,EFLAGS=0x202)
+                     SP=0xfe00,EFLAGS=0x202)
         context.update(registers)
         for name,value in context.items(): self.put(name,value)
         address=(self.get('SS')<<4)+self.get('SP')
@@ -229,8 +229,8 @@ def initialize_with_font(image, bios):
 
 def test_timer_preserves_full_registers_on_foreign_stack(vesa_driver):
     m=Driver(vesa_driver,lambda m: pytest.fail('inactive timer must not call BIOS'))
-    m.write('old8',struct.pack('<HH',0xf100,0x1000))
-    m.uc.mem_write(0x1f100,b'\xcf')
+    m.write('old8',struct.pack('<HH',0,0xe200))
+    m.uc.mem_write(0xe2000,b'\xcf')
     initial={name: 0xa1234567+i*0x1111 for i,name in
              enumerate(('EAX','EBX','ECX','EDX','ESI','EDI','EBP'))}
     m.run('int8_handler',DS=0x3000,ES=0x4000,**initial)
@@ -648,6 +648,31 @@ def test_status_pair_reclassification_and_attributes(status_renderer):
     assert put(79, 0xd6) == [(0xd6, 0x1e, 79)]
     assert put(78, 0xd0) == [(0xd0d6, 0x1e1e, 78)]
     assert put(79, ord('B')) == [(0xd0, 0x1e, 78), (ord('B'), 0x1e, 79)]
+
+
+def test_status_panels_retain_state_and_clear_with_the_bar(status_renderer):
+    machine, glyphs, banks = status_renderer
+    writes = []
+    machine.uc.hook_add(UC_HOOK_MEM_WRITE,
+                       lambda uc, access, address, size, value, data: writes.append(address),
+                       begin=0xa0000, end=0xaffff)
+    machine.run(AX=0x1417, DX=0x0a07, BX=1, limit=1000000)
+    assert writes and not glyphs
+    assert all(0xa0000 + 57500 <= address < 0xa0000 + 60000 for address in writes)
+    writes.clear(); banks.clear()
+    machine.run(AX=0x1417, DX=0x0a07, BX=1)
+    assert not writes and not banks
+    machine.run(AX=0x1417, DX=0x0a07, BX=2, limit=1000000)
+    assert writes and not glyphs
+    writes.clear()
+    for span, style in [(0x0a08, 1), (0x0b07, 1), (0x0200, 1), (0x0a00, 3)]:
+        machine.run(AX=0x1417, DX=span, BX=style)
+    assert not writes
+    machine.run(AX=0x1400, limit=1000000)
+    assert len(glyphs) == 80  # Erase edges even where the retained spaces matched.
+    writes.clear()
+    machine.run(AX=0x1417, DX=0x0a07, BX=2, limit=1000000)
+    assert writes  # The same panel must be recreated after clear, not retained.
 
 
 def test_status_bitmap_replacement_and_noop_updates(status_renderer):

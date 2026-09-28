@@ -1233,6 +1233,8 @@ K_AH11	EQU	$-1
 ;	AL=14 取西文制表符转换表地址 BX:AX
 ;	AL=15 在指定位置DX显示加宽字符串DS:SI(属性BL)
 L_AH14:
+                CMP     AL,17H
+                JE      S_STATUS_PANEL
 		CMP	AL,10H
 		JNE	L_HKOLD
 		CALL	S_HZPOS
@@ -1260,8 +1262,12 @@ L_1403:
 		MOV	DI,9600H		;提示行保存区
 		CALL	S_MOVE			;保存被提示行复盖内容
 		POP	DI
-                CALL    S_STATUS_BAND
 L_1405:
+                MOV     DH,CS:D_0059
+                XOR     DL,DL
+                CALL    S_SPDZ
+                SUB     DI,6*80
+                CALL    S_STATUS_BAND
 		MOV	DL,' '                  ;清提示行
 		MOV	CX,80
 		MOV	BL,CS:D_TUXS
@@ -1275,17 +1281,20 @@ L_1410:
 		OR	CX,CX
 		JZ	L_1408
 		CALL	S_DKTX
-		JMP	SHORT L_1407
+                CALL    S_STATUS_HIDE
+                CALL    S_TXZF
+                CALL    S_STATUS_SHOW
+                JMP     L_RET
 L_1420:
 		CMP	AL,2			;<光标定位>
 		JNZ	L_1430
 		CALL	S_DKTX
-		CALL	S_TXGB
+		CALL	S_STATUS_HIDE
 		CMP	DL,79
 		JA	L_1423
 		MOV	CS:D_0058,DL
 L_1422:
-		CALL	S_TXGB
+		CALL	S_STATUS_SHOW
 L_1423:
 		JMP	L_RET
 L_1430:
@@ -1300,7 +1309,7 @@ L_1431:
 		CALL	S_DKTX
 		CMP	DL,8			;退格?
 		JNZ	L_1433
-		CALL	S_TXGB
+		CALL	S_STATUS_HIDE
 		MOV	AL,CS:D_0058		;取提示行光标位置
 		OR	AL,AL			;=0? (行首)
 		JZ	L_1432
@@ -1313,7 +1322,7 @@ L_1432:
 		CALL	S_TXZF
 		JMP	SHORT L_1422
 L_1433:
-		CALL	S_TXGB
+		CALL	S_STATUS_HIDE
 		MOV	CX,1
 		CALL	S_TXZF			;显示字符
 		MOV	AL,CS:D_0058		;取提示行光标位置
@@ -1330,6 +1339,7 @@ L_1440:
 		JZ	L_1443
 		XOR	DL,DL
 		MOV	CS:D_0059,DL		;清提示行
+                MOV     CS:D_STATUS_CURSOR,0
 		CALL	S_SPDZ			;计算光标DX在实屏区地址→DI
 		MOV	SI,9600H		;提示行保存区
 		SUB	DI,80*6

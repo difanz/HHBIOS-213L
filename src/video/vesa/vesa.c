@@ -207,6 +207,10 @@ static u8 prompt_frame_open = 0xff;
 static u8 prompt_col;
 static u8 prompt_dirty;
 static u8 prompt_attr = 0x70;
+/* Eight ten-column controls. A zero width means ordinary status text. */
+static u8 prompt_panel_width[8];
+static u8 prompt_panel_style[8];
+static u8 prompt_panel_dirty;
 u8 CALL prompt_notify;
 static void DrawStatusBar(void);
 
@@ -1033,6 +1037,7 @@ static void DrawStatusBar(void) {
   u16 bottom = origin + (text_rows + 1) * raster_height * pixel_scale;
   /* Use spare scanlines, never crop a glyph or steal an application row. */
   u16 inset = StatusInset();
+  u16 panels = prompt_panel_dirty;
   for (i = 0; i < 80; ++i) {
     u16 cell = prompt_open ? prompt[i] : 32;
     u16 character = cell & 255;
@@ -1058,6 +1063,10 @@ static void DrawStatusBar(void) {
       changed = 1;
     }
     if (changed) {
+      panels |= 1 << (i / 10);
+      if (kind == kStatusLead) {
+        panels |= 1 << ((i + 1) / 10);
+      }
       if (!drawing) {
         if (!begin_draw()) {
           prompt_dirty = 1;
@@ -1084,6 +1093,12 @@ static void DrawStatusBar(void) {
       prompt_kind[i] = kStatusTrail;
     }
   }
+  if (!drawing && panels) {
+    if (!begin_draw()) {
+      return;
+    }
+    drawing = 1;
+  }
   if (drawing) {
     viewport_y = origin;
     large_surface = previous_large;
@@ -1092,15 +1107,30 @@ static void DrawStatusBar(void) {
                          prompt_open ? 15 : 0);
       raster_status_edge(bottom + 1, prompt_open ? 8 : 0);
     }
+    if (prompt_open) {
+      for (i = 0; i < 8; ++i) {
+        if ((panels & (1 << i)) && prompt_panel_width[i]) {
+          raster_status_panel(i * 10, prompt_panel_width[i],
+                              prompt_panel_style[i], inset);
+        }
+      }
+    }
     end_draw();
     prompt_frame_open = prompt_open;
   }
   prompt_dirty = 0;
+  prompt_panel_dirty = 0;
 }
 static void ClearStatusBar(void) {
   u16 i;
   for (i = 0; i < 80; ++i) {
     prompt[i] = ((u16)prompt_attr << 8) | 32;
+  }
+  for (i = 0; i < 8; ++i) {
+    if (prompt_panel_width[i]) {
+      prompt_dirty = 1;
+      prompt_panel_width[i] = 0;
+    }
   }
   ClearBytes(prompt_bitmap, sizeof(prompt_bitmap));
   prompt_col = 0;
@@ -1241,6 +1271,25 @@ static void DispatchHhbiosRequest(void) {
     end_draw();
   } else if (operation == 16) {
     boundary(&request);
+  } else if (operation == 23) {
+    /* AX=1417h: DL=slot, DH=width, BL=1 raised / 2 pressed.
+     * The caller leaves the first and last character cells blank. */
+    u16 slot = request.dx & 255;
+    u16 width = request.dx >> 8;
+    u16 style = request.bx & 255;
+    if (prompt_open && slot < 8 && width >= 3 && width <= 10 &&
+        style >= 1 && style <= 2) {
+      if (prompt_panel_width[slot] != width ||
+          prompt_panel_style[slot] != style) {
+        if (prompt_panel_width[slot] && prompt_panel_width[slot] != width) {
+          prompt_dirty = 1;
+        }
+        prompt_panel_width[slot] = (u8)width;
+        prompt_panel_style[slot] = (u8)style;
+        prompt_panel_dirty |= 1 << slot;
+      }
+      DrawStatusBar();
+    }
   }
 }
 

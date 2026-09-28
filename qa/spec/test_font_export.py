@@ -99,6 +99,30 @@ def test_non_unicode_source_cannot_silently_map_wrong_characters(exporter, bitma
         exporter.open_face(path, 0, 16)
 
 
+def test_gb2312_bdf_uses_native_codes_and_unchanged_pixels(exporter, bitmap_font):
+    path, glyphs = bitmap_font
+    data = path.read_text().replace('ISO10646', 'GB2312.1980')
+    data = data.replace('CHARSET_ENCODING "1"', 'CHARSET_ENCODING "0"')
+    data = data.replace(f'ENCODING {ord("中")}', 'ENCODING 22096')  # 5650h, not D6D0h.
+    path.write_text(data)
+    face = exporter.open_face(path, 0, 16)
+    assert face.gb2312 and face.hh_source == 'bitmap'
+    assert exporter.raster(face, '中', 16, 16, 12) == glyphs['中'][1]
+    assert face.get_char_index('國') == 0
+    with pytest.raises(ValueError, match=r'lacks U\+570B'):
+        exporter.raster(face, '國', 16, 16, 12)
+
+
+def test_explicit_font_fallback_preserves_source_pixels(exporter, bitmap_font, tmp_path):
+    path, glyphs = bitmap_font
+    fallback = tmp_path / 'fallback.bdf'
+    fallback.write_text(path.read_text().replace('ENCODING 65', 'ENCODING 66'))
+    face = exporter.open_face(path, 0, 16, fallback=(fallback, 0))
+    assert exporter.raster(face, 'B', 12, 20, 14) == [0, 0] + [
+        row << 2 for row in glyphs['A'][1]] + [0, 0]
+    assert exporter.raster(face, '中', 16, 16, 12) == glyphs['中'][1]
+
+
 def test_pack_grid_reserves_ime_row_and_rejects_short_cells(exporter):
     cells, unavailable = exporter.pack_cells(
         [(640, 480), (800, 600), (1366, 768), (1920, 1080)], [25, 43, 50])

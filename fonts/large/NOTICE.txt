@@ -1,5 +1,11 @@
 HH Console Pack
 
+ISAS Song 16 and 24: Copyright (C) 1988 The Institute of Software,
+Academia Sinica. See ISAS.txt for its permission notice.
+
+GNU Unifont 18.0.01 supplies missing 16-pixel characters under the SIL OFL
+1.1 option. Its copyright notices and license are included in OFL.txt.
+
 Copyright (C) 2019 Dimitar Toshkov Zhekov
 
 © 2014-2021 Adobe (http://www.adobe.com/).

@@ -118,7 +118,7 @@ for font in "$root"/fonts/large/*.FNT; do
     modules+=("$run/$(basename "$font")")
 done
 cp "$root"/fonts/large/*.json "$root/fonts/large/OFL.txt" \
-    "$root/fonts/large/NOTICE.txt" "$run/FONTINFO/"
+    "$root/fonts/large/NOTICE.txt" "$root/fonts/large/ISAS.txt" "$run/FONTINFO/"
 cp "$root/fonts/OpenCC-LICENSE.txt" "$run/FONTINFO/OPENCC.TXT"
 cp "$root/build/SETUP.EXE" "$root/build/SETUP.LIC" "$run/"
 rm -f "$run/LSETUP.COM"
