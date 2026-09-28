@@ -1,6 +1,7 @@
 """Setup decisions and real generated DOS startup paths."""
 import ctypes as C
 import shutil
+import struct
 import subprocess
 
 import pytest
@@ -9,7 +10,7 @@ from qa.spec.dos import ROOT, run_dos
 
 
 class DisplayMode(C.Structure):
-    _fields_=[(s,C.c_uint) for s in 'number width height rows'.split()]
+    _fields_=[(s,C.c_uint) for s in 'number width height rows banked'.split()]
 
 
 class Machine(C.Structure):
@@ -20,15 +21,24 @@ class Machine(C.Structure):
         ('display_modes',DisplayMode*64)]
 
 
+class FontInfo(C.Structure):
+    _fields_=[(name,C.c_ushort) for name in
+        ('format','width','height','record_bytes','records')]+[('payload_bytes',C.c_uint)]
+
+
+class DisplayFont(C.Structure):
+    _fields_=[('name',C.c_char*13),('info',FontInfo)]
+
+
 class Files(C.Structure):
-    _fields_=[('size',C.c_ulong*43)]
+    _fields_=[('size',C.c_ulong*31),('display_font_count',C.c_uint),
+        ('display_font_truncated',C.c_uint),('display_fonts',DisplayFont*257)]
 
 
 class Choices(C.Structure):
     _fields_=[(s,C.c_uint) for s in ('font low video ime paired mode rows '
-        'special_display printer print_fonts print_access').split()] + [
-        ('print_styles', (C.c_char*5)*3), ('printer_flags', C.c_uint),
-        ('vector_access', C.c_uint)]
+        'special_display printer print_fonts print_memory printer_flags vector_access').split()] + [
+        ('print_files', ((C.c_char*128)*4)*3)]
 
 
 class Ini(C.Structure):
@@ -41,6 +51,8 @@ def setup_policy(tmp_path_factory,source_dir):
     result=subprocess.run(['c++','-std=c++98','-shared','-fPIC','-Wall','-Wextra','-Werror','-DVESA_HOST',
         '-I'+str(source_dir/'setup'), '-I'+str(source_dir/'video/vesa'), str(source_dir/'setup/config.c'),
         str(source_dir/'setup/modules.c'),
+        str(source_dir/'setup/font.c'), str(source_dir/'common/font_file.c'),
+        str(source_dir/'common/font_layout.c'),
         str(source_dir/'setup/display.c'), str(source_dir/'video/vesa/vesa.c'),
         str(ROOT/'qa/harness/setup_host.cpp'),'-o',str(out)],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
@@ -68,9 +80,27 @@ def capable():
     m=Machine(dos_major=6,dos_minor=22,conventional_kb=640,free_kb=580,umb_kb=64,
               cpu=386,xms_version=0x300,xms_largest=8192,xms_total=8192,
               ems_version=0x40,ems_pages=128,ems_frame=0xe000,adapter=4,vbe_version=0x200,modes=7)
-    f=Files((C.c_ulong*43)(*[10000]*43))
+    f=Files((C.c_ulong*31)(*[10000]*31))
     f.size[9]=261696;f.size[10]=733208
+    _,width,height,slots,records,payload=struct.unpack('<8s4HI12x',
+        (ROOT/'fonts/HH20.FNT').read_bytes()[:32])
+    assert slots==8434
+    f.display_font_count=1
+    f.display_fonts[0]=DisplayFont(b'HH20.FNT',FontInfo(1,width,height,
+        (((width*2+7)//8)*height+1)&~1,records,payload))
     return m,f
+
+
+@pytest.fixture
+def printing_files(tmp_path,monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for size in (24,32,40):
+        record_bytes=size*size//8
+        data=struct.pack('<8s4HI12x',b'HHFONT2\n',size//2,size,8434,1,
+                         33736+record_bytes)+bytes(33736+record_bytes)
+        (tmp_path/f'HH{size}.FNT').write_bytes(data)
+        (tmp_path/f'HH{size}F.FNT').write_bytes(data)
+    return tmp_path
 
 
 @pytest.mark.unit
@@ -171,8 +201,10 @@ def test_missing_assets_and_unavailable_managers_block_save(setup_policy):
     m,f=capable();c=Choices(0,0,1,0,1)
     for asset in (0,3,5,9,10):
         old=f.size[asset];f.size[asset]=0
+        if asset==10: f.display_font_count=0
         assert setup_policy.hh_validate(m,f,c)
         f.size[asset]=old
+        if asset==10: f.display_font_count=1
     c.font=1;m.ems_frame=0
     assert b'page frame' in setup_policy.hh_validate(m,f,c)
     m.ems_frame=0xe000;m.loaded=1
@@ -298,10 +330,10 @@ def test_reopening_generated_batch_restores_startup_choices(setup_policy,font,vi
     original.special_display=2
     original.printer=12  # PR 11 precedes PRTH
     original.print_fonts=31
-    original.print_access=3
-    original.print_styles[0].value=b'SFHK'
-    original.print_styles[1].value=b'S'
-    original.print_styles[2].value=b'FH'
+    original.print_memory=2
+    original.print_files[0][1].value=b'HH24F.FNT'
+    original.print_files[1][2].value=b'HH32H.FNT'
+    original.print_files[2][3].value=b'HH40K.FNT'
     first=C.create_string_buffer(4096); second=C.create_string_buffer(4096)
     assert setup_policy.hh_batch(br'C:\HHBIOS',original,first)
     restored=Choices(ime=7)
@@ -311,7 +343,7 @@ def test_reopening_generated_batch_restores_startup_choices(setup_policy,font,vi
     assert restored.ime==15 and restored.paired==1
     assert restored.special_display==2 and restored.printer==12
     assert first.value.index(b'.\\PR.EXE 11') < first.value.index(b'.\\PRTH.COM')
-    assert b'.\\READ24.COM 3SFHK' in first.value
+    assert b'.\\READ24.COM /F1:HH24F.FNT /E' in first.value
     assert setup_policy.hh_batch(br'C:\HHBIOS',restored,second)
     assert first.value==second.value
 
@@ -320,22 +352,22 @@ def test_reopening_generated_batch_restores_startup_choices(setup_policy,font,vi
 def test_legacy_batch_paths_font_styles_and_printer_flags(setup_policy):
     source=(b'@echo off\r\nREM PRNT 9\r\nLH C:\\213L\\READ4.COM /N\r\n'
             b'  ckbd /b\r\nC:\\213L\\VGA\r\nINT10K\r\n'
-            b'READ24 1SFHK\r\nREADSL\r\nPRNT 5 /1 /4 /N\r\n\x1aPRNT 9\r\n')
+            b'READ24 /F1:HH24F.FNT /X\r\nREADSL\r\nPRNT 5 /1 /4 /N\r\n\x1aPRNT 9\r\n')
     choices=Choices(ime=5); output=C.create_string_buffer(4096)
     assert setup_policy.hh_import(source,choices)
     assert (choices.font,choices.low,choices.video,choices.paired)==(1,1,0,0)
-    assert choices.print_fonts==18 and choices.print_access==1
+    assert choices.print_fonts==18 and choices.print_memory==1
     assert choices.vector_access==2 and choices.printer_flags==9
     assert choices.ime==5
     assert setup_policy.hh_batch(br'C:\213L',choices,output)
-    assert b'.\\READ24.COM 1SFHK /N\r\n' in output.value
+    assert b'.\\READ24.COM /F1:HH24F.FNT /X /N\r\n' in output.value
     assert b'.\\READSL.COM /N\r\n' in output.value
     assert b'.\\PRNT.COM 5 /1 /4 /N\r\n' in output.value
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize('bitmap,vector,expected', [
-    (b'WS', b'', 2), (b'1S', b'W', 1)])
+    (b'/X', b'', 2), (b'/E', b'W', 1)])
 def test_vector_and_bitmap_readers_keep_independent_access(setup_policy,bitmap,vector,expected):
     source=b'READ24 '+bitmap+b'\r\nREADSL '+vector+b'\r\n'
     choices=Choices(); output=C.create_string_buffer(4096)
@@ -362,15 +394,19 @@ def test_malformed_loader_arguments_never_partially_replace_choices(setup_policy
 
 
 @pytest.mark.unit
-def test_selected_printing_fonts_and_models_require_real_assets(setup_policy):
+def test_selected_printing_fonts_and_models_require_real_assets(setup_policy,printing_files):
     machine,files=capable(); choices=Choices(0,0,0,0,1)
-    choices.print_fonts=2; choices.print_styles[0].value=b'SFHK'
-    for missing in (21,25,26,27,28,29):
-        original=files.size[missing]; files.size[missing]=0
+    choices.print_fonts=2; choices.print_files[0][1].value=b'HH24F.FNT'
+    files.size[21]=0
+    assert setup_policy.hh_validate(machine,files,choices)
+    files.size[21]=10000
+    for name in ('HH24.FNT','HH24F.FNT'):
+        path=printing_files/name
+        original=path.read_bytes(); path.unlink()
         assert setup_policy.hh_validate(machine,files,choices)
-        files.size[missing]=original
+        path.write_bytes(original)
     choices.print_fonts=16
-    for missing in (24,40,41):
+    for missing in (24,28,29):
         original=files.size[missing]; files.size[missing]=0
         assert setup_policy.hh_validate(machine,files,choices)
         files.size[missing]=original
@@ -378,25 +414,80 @@ def test_selected_printing_fonts_and_models_require_real_assets(setup_policy):
     files.size[19]=0  # PR.EXE
     assert b'PR.EXE' in setup_policy.hh_validate(machine,files,choices)
     files.size[19]=10000
-    files.size[42]=0  # PRTA.TAB
+    files.size[30]=0  # PRTA.TAB
     assert b'PRTA.TAB' in setup_policy.hh_validate(machine,files,choices)
 
 
 @pytest.mark.unit
-def test_optional_modules_count_toward_conventional_load_estimate(setup_policy):
+def test_optional_modules_count_toward_conventional_load_estimate(setup_policy,printing_files):
     machine,files=capable(); choices=Choices(0,0,0,0,1)
     machine.free_kb=70
     assert setup_policy.hh_validate(machine,files,choices) is None
-    choices.print_fonts=2; choices.print_access=9
+    choices.print_fonts=2
     assert b'conventional' in setup_policy.hh_validate(machine,files,choices)
     machine.loaded=1; machine.free_kb=0
     assert setup_policy.hh_validate(machine,files,choices) is None
 
 
 @pytest.mark.unit
-def test_batch_rejects_unterminated_or_injected_font_style(setup_policy):
+def test_batch_rejects_unterminated_or_injected_font_path(setup_policy):
     choices=Choices(); choices.print_fonts=2
-    choices.print_styles[0].value=b'S&X'
+    choices.print_files[0][0].value=b'HH24.FNT&X'
+    assert not setup_policy.hh_batch(br'C:\HHBIOS',choices,C.create_string_buffer(4096))
+
+
+@pytest.mark.unit
+def test_printing_memory_reserves_core_and_distinct_faces(setup_policy,printing_files):
+    machine,files=capable(); choices=Choices(0,0,0,0,1)
+    choices.print_fonts=2
+    machine.xms_largest=machine.xms_total=290  # READ5 256 + font 34 KiB
+    machine.ems_pages=0
+    assert setup_policy.hh_validate(machine,files,choices) is None
+    choices.print_files[0][1].value=b'HH24.FNT'  # aliases share one allocation
+    assert setup_policy.hh_validate(machine,files,choices) is None
+    choices.print_files[0][1].value=b'HH24F.FNT'
+    assert b'printing fonts' in setup_policy.hh_validate(machine,files,choices)
+    machine.ems_pages=3  # second font fits a 48 KiB EMS allocation
+    assert setup_policy.hh_validate(machine,files,choices) is None
+    choices.print_memory=1
+    assert b'printing fonts' in setup_policy.hh_validate(machine,files,choices)
+    choices.print_memory=2; machine.ems_pages=6
+    assert setup_policy.hh_validate(machine,files,choices) is None
+    machine.loaded=1; machine.ems_pages=0; machine.xms_largest=machine.xms_total=0
+    assert setup_policy.hh_validate(machine,files,choices) is None
+    machine.ems_version=0
+    assert b'printing fonts' in setup_policy.hh_validate(machine,files,choices)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('corruption',['truncated','wrong-cell','reserved','extra-byte'])
+def test_printing_font_is_validated_before_batch_replacement(setup_policy,printing_files,corruption):
+    machine,files=capable(); choices=Choices(0,0,0,0,1)
+    choices.print_fonts=2
+    path=printing_files/'HH24.FNT'
+    data=bytearray(path.read_bytes())
+    if corruption=='truncated': del data[-1:]
+    elif corruption=='wrong-cell': data[8]=16
+    elif corruption=='reserved': data[31]=1
+    else: data.append(0)
+    path.write_bytes(data)
+    assert b'HHFONT2' in setup_policy.hh_validate(machine,files,choices)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('source',[b'READ24 /F:',b'READ24 /F4:X.FNT',
+    b'READ24 /F0:X.FNT&OTHER',b'READ24 /X /E',b'READ24 /X\nREAD32 /E',
+    b'READ24 WSFHK',b'READ40 9S'])
+def test_unrepresentable_printing_options_are_rejected_transactionally(setup_policy,source):
+    choices=Choices(); before=bytes(choices)
+    assert not setup_policy.hh_import(source,choices)
+    assert bytes(choices)==before
+
+
+@pytest.mark.unit
+def test_printing_command_respects_dos_tail_limit(setup_policy):
+    choices=Choices(); choices.print_fonts=2
+    for face in range(4): choices.print_files[0][face].value=b'C:\\'+b'A'*32+b'.FNT'
     assert not setup_policy.hh_batch(br'C:\HHBIOS',choices,C.create_string_buffer(4096))
 
 

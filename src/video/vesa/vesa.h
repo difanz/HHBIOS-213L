@@ -120,6 +120,7 @@ extern u16 CALL frame_alias_offset;
 void CALL font_get(u16 code, u16* out);
 void CALL font_seed(void);
 u16 CALL font_open(void);
+u16 CALL font_choose(u16 width, u16 height, u16 rows, u16 apply);
 void CALL font_close(void);
 u16 CALL font_text(u16 saving);
 extern u16 CALL font_kind;

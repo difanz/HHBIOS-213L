@@ -179,12 +179,27 @@ def test_setup_legacy_dialog_cancel_preserves_existing_settings(dosbox_binary, s
         'Alt-k', 'Alt-f', 'Alt-e', *(['Down'] * 4), 'Alt-o', 'capture',
         'Return', 'Escape', 'Escape',
         'Alt-d', 'space', 'capture', 'Escape',
-        'Alt-a', 'Down', 'Alt-f', 'capture', 'Escape',
+        'Alt-a', 'Down', 'Alt-d', 'capture', 'Escape',
         'F3', 'Alt-s', 'Return', 'Alt-x',
     ], cpu='8086')
     assert (setup_guest/'213L.INI').read_bytes() == original
     assert (setup_guest/'213L.BAK').read_bytes() == original
     assert ini_values((setup_guest/'213L.INI').read_bytes()) == LEGACY_VALUES
+
+
+@pytest.mark.dos
+@pytest.mark.parametrize('language', ['EN', 'ZH'])
+def test_setup_print_font_files_save_named_faces(dosbox_binary, setup_guest, language):
+    shutil.copy2(ROOT/'build/READ24.COM', setup_guest)
+    shutil.copy2(ROOT/'fonts/large/HH24.FNT', setup_guest)
+    filename = [*'hh24', 'period', *'fnt']
+    run_setup_ui(dosbox_binary, setup_guest, f'/{language} /VIDEO:VGA', [
+        'Alt-a', 'Tab', 'Tab', 'Tab', 'space', 'Alt-f',
+        *filename, 'Tab', *filename, 'capture', 'Alt-o', 'Alt-o',
+        'F3', 'capture', 'Alt-s', 'Return', 'Alt-x',
+    ])
+    batch = (setup_guest/'HHBIOS.BAT').read_text().upper().splitlines()
+    assert '.\\READ24.COM /F0:HH24.FNT /F1:HH24.FNT' in batch
 
 
 @pytest.mark.dos

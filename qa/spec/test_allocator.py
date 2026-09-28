@@ -11,26 +11,34 @@ from unicorn import x86_const as reg
 
 pytestmark = pytest.mark.unit
 MODULES = ('CGA', 'CKBD', 'EGA', 'HGA', 'INT10K', 'INT10V', 'PRNT', 'PRTH',
-           'READ16', 'READ24', 'READ3', 'READ4', 'READ5', 'READSL', 'VGA')
+           'READ16', 'READ24', 'READ32', 'READ40', 'READ3', 'READ4', 'READ5', 'READSL', 'VGA')
 
 
 @pytest.fixture(scope='session', params=MODULES)
 def allocator(request, source_dir, assembler, tmp_path_factory):
     name = request.param
-    source = source_file(source_dir, f'{name}.ASM').read_bytes()
+    print_reader = name in ('READ24', 'READ32', 'READ40')
+    source = (source_dir / 'font/print_font.asm' if print_reader else
+              source_file(source_dir, f'{name}.ASM')).read_bytes()
     routines = []
-    for symbol in ('S_GETUMB', 'S_UMB', 'S_GETXMS'):
+    symbols = ('AllocateUmb',) if print_reader else ('S_GETUMB', 'S_UMB', 'S_GETXMS')
+    for symbol in symbols:
         match = re.search(rb'^'+symbol.encode()+rb'\s+PROC\b.*?^'+symbol.encode()+rb'\s+ENDP',
-                          source, re.M | re.S)
+                          source, re.M | re.S | re.I)
         if match:
             routines.append(match[0])
+    assert routines, f'No production allocator found for {name}'
     # Assemble the actual procedures, retaining their branches and API calls.
     # Only their load-time variables and caller-provided size are supplied here.
     out = tmp_path_factory.mktemp('allocator-'+name)
     harness = out / 'allocator.asm'
-    harness.write_bytes(b'SEG_A SEGMENT\nASSUME CS:SEG_A, DS:SEG_A\nORG 100H\n'
-                        b'DW S_GETUMB, D_UMB, D_LEN\nBEGIN EQU 1234H\n'
-                        b'D_UMB DW 0\nD_LEN DW 123H\nD_NCFP DW 0\nD_UMB0 DW 0\nD_XMS DD 0\n'
+    variables = (f'DW AllocateUmb, umb_segment, resident_paragraphs\n'
+                 f'PRINT_SIZE EQU {name[4:]}\n'
+                 'umb_segment DW 0\nresident_paragraphs DW 123H\n'
+                 'old_strategy DW 0\nold_link DW 0\n').encode() if print_reader else (
+                 b'DW S_GETUMB, D_UMB, D_LEN\nBEGIN EQU 1234H\n'
+                 b'D_UMB DW 0\nD_LEN DW 123H\nD_NCFP DW 0\nD_UMB0 DW 0\nD_XMS DD 0\n')
+    harness.write_bytes(b'SEG_A SEGMENT\nASSUME CS:SEG_A, DS:SEG_A\nORG 100H\n' + variables
                         + b'\n'.join(routines) + b'\nSEG_A ENDS\nEND\n')
     binary = out / 'allocator.com'
     p = subprocess.run([assembler, '-q', '-Zm', '-bin', f'-Fo{binary}', str(harness)],

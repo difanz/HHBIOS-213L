@@ -133,6 +133,7 @@ prepare_image() {
         copy_missing "$path" ::QA
     done
     mcopy -o -i "$volume" "${modules[@]}" "$run/HH20.FNT" ::HHBIOS/
+    mcopy -s -o -i "$volume" "$run/FONTINFO" ::HHBIOS/
     for path in "$run/SETUP.EXE" "$run/SETUP.LIC"; do
         [[ ! -f $path ]] || mcopy -o -i "$volume" "$path" ::HHBIOS/
     done

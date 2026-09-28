@@ -49,6 +49,46 @@ class KeyboardModule:
                             EFLAGS=0x603)
         for name, value in self.initial.items():
             self.set(name, value)
+        self.console = b''.join(bytes((32 + cell % 90, 7)) for cell in range(2000))
+        self.uc.mem_write(0xb8000, self.console)
+        self.uc.mem_write(0x50000, b'\0' * 4000)
+        self.uc.mem_write(0x449, b'\3\x50\0')
+        self.uc.mem_write(0x450, struct.pack('<H', 0x040d))
+        self.uc.mem_write(0x460, struct.pack('<H', 0x0d0e))
+        self.uc.mem_write(0x484, b'\x18\x10\0')
+
+    def video(self):
+        function = self.get('AX')
+        if function == 0x1416:
+            assert self.get('BX') == 0
+            self.set('AX', 0)
+            self.set('BX', 0x4b48)
+        elif function == 0x140c:
+            self.set('AX', 0)
+            self.set('BX', 0x5000)
+        elif function == 0x1406:
+            self.set('DX', 0x80)  # Direct B800 text is authoritative.
+        elif function >> 8 == 3:
+            self.set('CX', int.from_bytes(self.uc.mem_read(0x460, 2), 'little'))
+            self.set('DX', int.from_bytes(self.uc.mem_read(0x450, 2), 'little'))
+        elif function >> 8 == 2:
+            assert self.get('BX') >> 8 == 0
+            self.uc.mem_write(0x450, struct.pack('<H', self.get('DX')))
+        else:
+            assert function >> 8 == 1, hex(function)
+            self.uc.mem_write(0x460, struct.pack('<H', self.get('CX')))
+
+    def mode_reset(self):
+        # Model the reader's final hardware mode set, after virtual B800 is
+        # no longer mapped. The driver's freed RAM shadow remains intact.
+        self.uc.mem_write(0xb8000, b'\0' * 4000)
+        self.uc.mem_write(0x450, b'\0\0')
+        self.uc.mem_write(0x460, b'\0\0')
+
+    def check_console(self):
+        assert self.uc.mem_read(0xb8000, 4000) == self.console
+        assert self.uc.mem_read(0x450, 2) == struct.pack('<H', 0x040d)
+        assert self.uc.mem_read(0x460, 2) == struct.pack('<H', 0x0d0e)
 
     def get(self, name):
         return self.uc.reg_read(getattr(reg, 'UC_X86_REG_'+name))
@@ -194,10 +234,7 @@ def test_idle_unload_preserves_caller_and_retries_when_busy(
 
     def services(uc, number, _):
         if number == 0x10:
-            assert machine.get('AX') == 0x1416
-            assert machine.get('BX') == 0
-            machine.set('AX', 0)
-            machine.set('BX', 0x4b48)
+            machine.video()
             return
         if number == 0x61:
             for name, value in machine.initial.items():
@@ -212,6 +249,8 @@ def test_idle_unload_preserves_caller_and_retries_when_busy(
         assert machine.byte('D_EXIT') == 0, 'unload must not reenter itself'
         calls.append(machine.get('SI'))
         if machine.get('SI') == 0:
+            if not busy:
+                machine.mode_reset()
             for name in ('AX', 'BX', 'CX', 'DX', 'SI', 'DI', 'BP', 'DS', 'ES'):
                 machine.set(name, 0x9876)
         else:
@@ -223,12 +262,41 @@ def test_idle_unload_preserves_caller_and_retries_when_busy(
     eligible = pending and indos <= 1 and not error and not in_key
     assert calls == ([0, 3] if eligible else [])
     assert machine.byte('D_EXIT') == (2 if eligible and busy else 0 if eligible else pending)
+    machine.check_console()
 
 
 def dos_flags(machine, indos=0):
     machine.write('D_INDOS', struct.pack('<HH', 0x321, 0x8000))
     machine.write('D_CRITERR', struct.pack('<HH', 0x320, 0x8000))
     machine.uc.mem_write(0x80320, bytes([0, indos]))
+
+
+@pytest.mark.parametrize('columns,rows', [(132, 25), (132, 50), (80, 60)])
+def test_unload_leaves_unsupported_native_geometry_intact(menu_binary, columns, rows):
+    machine = KeyboardModule(menu_binary)
+    dos_flags(machine)
+    machine.write('D_EXIT', b'\2')
+    machine.uc.mem_write(0x44a, struct.pack('<H', columns))
+    machine.uc.mem_write(0x484, bytes([rows - 1]))
+    calls = []
+
+    def services(uc, number, _):
+        if number == 0x10:
+            assert machine.get('AX') == 0x1416
+            machine.video()
+        else:
+            assert number == 0x2f
+            calls.append(machine.get('SI'))
+            if machine.get('SI') == 3:
+                machine.set('BX', 0)
+
+    machine.uc.hook_add(UC_HOOK_INTR, services)
+    machine.call('S_FOREGROUND_EXIT')
+    assert calls == [0, 3] and machine.byte('D_EXIT') == 0
+    assert machine.get('EFLAGS') & 1
+    assert machine.uc.mem_read(0x44a, 2) == struct.pack('<H', columns)
+    assert machine.uc.mem_read(0x484, 1) == bytes([rows - 1])
+    machine.check_console()
 
 
 @pytest.mark.parametrize('function', [0, 1, 0x10, 0x11])
@@ -245,13 +313,12 @@ def test_bios_only_foreground_completes_unload(menu_binary, function, initially_
 
     def services(uc, number, _):
         if number == 0x10:
-            assert machine.get('AX') == 0x1416 and machine.get('BX') == 0
-            machine.set('AX', 0)
-            machine.set('BX', 0x4b48)
+            machine.video()
         elif number == 0x2f:
             if machine.get('SI') == 0:
                 assert machine.get('SS') == BASE//16
                 unloaded.append(True)
+                machine.mode_reset()
             else:
                 assert machine.get('SI') == 3
                 machine.set('BX', 0)
@@ -290,6 +357,7 @@ def test_bios_only_foreground_completes_unload(menu_binary, function, initially_
     assert machine.get('AX') == 0x342e
     assert calls[-1] == function
     assert machine.get('EFLAGS') & 0x600 == 0x600
+    machine.check_console()
 
 
 @pytest.mark.parametrize('guard', ['D_INKEY', 'D_PUMP', 'D_IRQ', 'indos', 'video'])
@@ -398,11 +466,11 @@ def test_unload_preserves_32bit_registers(menu_binary, request):
 
     def services(uc, number, _):
         if number == 0x10:
-            machine.set('AX', 0)
-            machine.set('BX', 0x4b48)
+            machine.video()
         else:
             assert number == 0x2f
             if machine.get('SI') == 0:
+                machine.mode_reset()
                 for name in saved:
                     machine.set(name, 0xbaad9876)
             else:
@@ -413,6 +481,7 @@ def test_unload_preserves_32bit_registers(menu_binary, request):
     machine.call('S_FOREGROUND_EXIT')
     assert machine.get('EFLAGS') & 1
     assert {name: machine.get(name) for name in saved} == saved
+    machine.check_console()
 
 
 @pytest.mark.parametrize('function', [0, 0x10])

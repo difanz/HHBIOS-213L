@@ -101,8 +101,9 @@ void AddDisplayMode(MachineCapabilities* machine, unsigned number,
   mode.number = number;
   mode.width = width;
   mode.height = height;
-  mode.rows = 1 | (banked && height >= 20 * 44 ? 2 : 0) |
-              (banked && height >= 20 * 51 ? 4 : 0);
+  mode.banked = banked != 0;
+  mode.rows = 1 | (banked && height >= 16 * 44 ? 2 : 0) |
+              (banked && height >= 16 * 51 ? 4 : 0);
   position = machine->display_count++;
   while (position && (machine->display_modes[position - 1].width > width ||
                       (machine->display_modes[position - 1].width == width &&

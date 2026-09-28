@@ -82,7 +82,7 @@ def test_catalog_separates_panel_bios_and_console_support(setup_policy):
     add_mode(setup_policy,m,0x222,mode_info(1280,800))
     add_mode(setup_policy,m,0x221,mode_info(1366,768))
     assert [(x.number,x.width,x.height,x.rows) for x in m.display_modes[:m.display_count]] == [
-        (0x222,1280,800,1),(0x221,1366,768,1),(0x220,1920,1080,7)]
+        (0x222,1280,800,3),(0x221,1366,768,3),(0x220,1920,1080,7)]
     c = Choices(); setup_policy.hh_recommend(m,f,c)
     assert (c.video,c.mode) == (7,0x221)
     assert setup_policy.hh_validate(m,f,c) is None

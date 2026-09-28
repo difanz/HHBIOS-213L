@@ -208,8 +208,21 @@ class Driver:
         self.uc.mem_write(address,frame)
         self.uc.emu_start(0x10000+self.symbols[entry],0x1ff00,count=limit)
         assert self.get('IP')==0xff00
-        assert self.get('SP')==0xe000+len(frame)
+        assert self.get('SP')==context['SP']+len(frame)
         assert self.read('stack_bottom',2)==b'\x5a\xa5'
+
+
+def initialize_with_font(image, bios):
+    """Run installation with real font code and observable DOS/XMS services."""
+    from qa.spec.test_font20 import FontMachine
+    font = FontMachine(image)
+    machine = Driver(image, bios, software_interrupt=lambda target, number:
+                     font.interrupt(target.uc, number, None))
+    font.uc = machine.uc
+    machine.write('font_selected', b'\1')
+    machine.uc.mem_write(0xf0000, b'\xcd\xf2\xcb')
+    machine.run('initialize', limit=3000000, SP=0xfe00)
+    return machine
 
 
 def test_timer_preserves_full_registers_on_foreign_stack(vesa_driver):
@@ -498,8 +511,7 @@ def test_initialization_bank_failure_restores_previous_mode(vesa_driver,previous
         elif ax==3: modes.append(3)
         elif ax==0x4f05: m.put('AX',0x014f)
         else: pytest.fail(f'unexpected BIOS call {ax:04x}')
-    m=Driver(vesa_driver,bios)
-    m.run('initialize')
+    m = initialize_with_font(vesa_driver, bios)
     assert m.get('AX')==3 and modes==[0x102,previous]
     assert m.read('active')==b'\0'
 

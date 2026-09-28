@@ -1,5 +1,6 @@
 /* Persistent keyboard, display and module choices from the 2.13L format. */
 #include <string.h>
+#include <stdlib.h>
 
 #include "forms.h"
 
@@ -286,62 +287,129 @@ void ShowDisplayOptions(IniSettings* settings) {
   }
 }
 
-void ShowModuleOptions(SetupChoices* choices) {
+static void EditPrintFiles(SetupChoices* choices) {
   Form form = {0};
-  a_list special = {0};
-  a_list printer = {0};
-  a_list access = {0};
-  const char* special_items[] = {NULL, "INT10K.COM", "INT10V.COM", NULL};
-  const char* printer_items[kPrinterCount + 1];
-  const char* access_items[] = {
-      "W - DOS file access", "1", "2", "3", "4", "5", "6", "7", "8", "9", NULL};
-  special_items[0] = LocalizedText("None", "不安装");
-  for (unsigned i = 0; i < kPrinterCount; ++i) {
-    printer_items[i] = i ? kPrinters[i].name : LocalizedText("None", "不安装");
+  an_edit_control edits[12] = {0};
+  unsigned count;
+  for (count = 0; count < 12; ++count) {
+    const char* path = choices->print_files[count / 4][count % 4];
+    edits[count].length = strlen(path);
+    edits[count].buffer = malloc(edits[count].length + 1);
+    if (!edits[count].buffer) {
+      break;
+    }
+    strcpy(edits[count].buffer, path);
   }
-  printer_items[kPrinterCount] = NULL;
-  access_items[0] = LocalizedText("W - DOS file access", "W - DOS 文件读取");
-  special.data = special_items;
-  special.choice = choices->special_display;
-  printer.data = printer_items;
-  printer.choice = choices->printer;
-  access.data = access_items;
-  access.choice = choices->print_access;
-  AddParagraph(&form, 1, 2, 30, LocalizedText("Special display:", "特殊显示模块："));
-  AddField(&form, 3, 2, 3, 26, FLD_LISTBOX, &special);
-  AddParagraph(&form, 1, 32, 36, LocalizedText("Printer:", "打印驱动："));
-  AddField(&form, 3, 32, 5, 36, FLD_LISTBOX, &printer);
-  AddParagraph(&form, 9, 2, 30, LocalizedText("Printing fonts:", "打印字库："));
-  static const char* const fonts[] = {
-      "READ16", "READ24", "READ32", "READ40", "READSL"};
-  for (unsigned i = 0; i < 5; ++i) {
-    a_check* check = &form.checks[form.check_count++];
-    check->str = (char*)fonts[i];
-    check->val = (choices->print_fonts & (1U << i)) != 0;
-    AddField(&form, 10 + i, 2, 1, 26, FLD_CHECK, check);
-  }
-  a_check* vector_file = &form.checks[form.check_count++];
-  vector_file->str = (char*)LocalizedText("READSL &file access", "READSL 文件读取 (&F)");
-  vector_file->val = choices->vector_access == 1 ||
-                     (!choices->vector_access && !choices->print_access);
-  AddField(&form, 16, 2, 1, 26, FLD_CHECK, vector_file);
-  AddParagraph(&form, 9, 32, 36,
-               LocalizedText("Bitmap font access / cache:", "点阵字库读取方式／缓存："));
-  AddField(&form, 11, 32, 4, 36, FLD_LISTBOX, &access);
-  AddParagraph(&form, 16, 32, 36,
-               LocalizedText("1-9: sector cache size", "1-9：扇区缓存大小"));
-  AddDialogButtons(&form, 18);
-  if (RunForm(&form, LocalizedText("Optional modules", "可选模块"), 20, 72, 0) ==
-      kCmdAccept) {
-    choices->special_display = special.choice;
-    choices->printer = printer.choice;
-    choices->print_access = access.choice;
-    choices->vector_access = vector_file->val ? 1 : 2;
-    choices->print_fonts = 0;
-    for (unsigned i = 0; i < 5; ++i) {
-      if (form.checks[i].val) {
-        choices->print_fonts |= 1U << i;
+  if (count == 12) {
+    AddParagraph(&form, 1, 2, 66,
+                 LocalizedText("Blank F0: default file. Blank F1-F3: use F0.",
+                               "F0 留空使用默认字库；F1-F3 留空使用 F0。"));
+    for (unsigned i = 0; i < 12; ++i) {
+      char label[24];
+      sprintf(label, "READ%u /F%u:", 24 + (i / 4) * 8, i % 4);
+      AddParagraph(&form, 3 + i, 2, 18, label);
+      AddField(&form, 3 + i, 20, 1, 46, FLD_EDIT, &edits[i]);
+    }
+    AddDialogButtons(&form, 17);
+    if (RunForm(&form, LocalizedText("Printing font files", "打印字库文件"), 19,
+                70, 0) == kCmdAccept) {
+      SetupChoices trial = *choices;
+      int valid = 1;
+      for (unsigned i = 0; i < 12; ++i) {
+        if (edits[i].length >= 128) {
+          valid = 0;
+          break;
+        }
+        memcpy(trial.print_files[i / 4][i % 4], edits[i].buffer,
+               edits[i].length);
+        trial.print_files[i / 4][i % 4][edits[i].length] = 0;
+      }
+      if (valid && ValidModuleChoices(&trial)) {
+        *choices = trial;
+      } else {
+        ShowMessage(LocalizedText(
+            "Use DOS paths; each loader command must fit 126 characters.",
+            "请使用 DOS 路径；每条装载命令不能超过 126 字符。"));
       }
     }
+  } else {
+    ShowMessage(LocalizedText("Not enough memory.", "内存不足。"));
+  }
+  for (unsigned i = 0; i < count; ++i) {
+    free(edits[i].buffer);
+  }
+}
+
+void ShowModuleOptions(SetupChoices* choices) {
+  SetupChoices trial = *choices;
+  for (;;) {
+    Form form = {0};
+    a_list special = {0};
+    a_list printer = {0};
+    a_list access = {0};
+    const char* special_items[] = {NULL, "INT10K.COM", "INT10V.COM", NULL};
+    const char* printer_items[kPrinterCount + 1];
+    const char* access_items[] = {NULL, "XMS", "EMS 4.0", NULL};
+    special_items[0] = LocalizedText("None", "不安装");
+    for (unsigned i = 0; i < kPrinterCount; ++i) {
+      printer_items[i] =
+          i ? kPrinters[i].name : LocalizedText("None", "不安装");
+    }
+    printer_items[kPrinterCount] = NULL;
+    access_items[0] = LocalizedText("Automatic", "自动选择");
+    special.data = special_items;
+    special.choice = trial.special_display;
+    printer.data = printer_items;
+    printer.choice = trial.printer;
+    access.data = access_items;
+    access.choice = trial.print_memory;
+    AddParagraph(&form, 1, 2, 30,
+                 LocalizedText("Special display:", "特殊显示模块："));
+    AddField(&form, 3, 2, 3, 26, FLD_LISTBOX, &special);
+    AddParagraph(&form, 1, 32, 36, LocalizedText("Printer:", "打印驱动："));
+    AddField(&form, 3, 32, 5, 36, FLD_LISTBOX, &printer);
+    AddParagraph(&form, 9, 2, 30,
+                 LocalizedText("Printing fonts:", "打印字库："));
+    static const char* const fonts[] = {"READ16", "READ24", "READ32", "READ40",
+                                        "READSL"};
+    for (unsigned i = 0; i < 5; ++i) {
+      a_check* check = &form.checks[form.check_count++];
+      check->str = (char*)fonts[i];
+      check->val = (trial.print_fonts & (1U << i)) != 0;
+      AddField(&form, 10 + i, 2, 1, 26, FLD_CHECK, check);
+    }
+    a_check* vector_file = &form.checks[form.check_count++];
+    vector_file->str =
+        (char*)LocalizedText("READSL &DOS file access", "READSL DOS 文件读取 (&D)");
+    vector_file->val = trial.vector_access != 2;
+    AddField(&form, 16, 2, 1, 26, FLD_CHECK, vector_file);
+    AddParagraph(&form, 9, 32, 36,
+                 LocalizedText("Bitmap font storage:", "点阵字库内存："));
+    AddField(&form, 11, 32, 4, 36, FLD_LISTBOX, &access);
+    AddButton(&form, 16, 32, 32, LocalizedText("Font &files", "字库文件 (&F)"),
+              kCmdChange, 0);
+    AddDialogButtons(&form, 18);
+    ui_event event = RunForm(
+        &form, LocalizedText("Optional modules", "可选模块"), 20, 72, 0);
+    if (event == kCmdAccept || event == kCmdChange) {
+      trial.special_display = special.choice;
+      trial.printer = printer.choice;
+      trial.print_memory = access.choice;
+      trial.vector_access = vector_file->val ? 1 : 2;
+      trial.print_fonts = 0;
+      for (unsigned i = 0; i < 5; ++i) {
+        if (form.checks[i].val) {
+          trial.print_fonts |= 1U << i;
+        }
+      }
+    }
+    if (event == kCmdAccept) {
+      *choices = trial;
+      return;
+    }
+    if (event != kCmdChange) {
+      return;
+    }
+    EditPrintFiles(&trial);
   }
 }

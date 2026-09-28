@@ -117,6 +117,8 @@ ENDIF
         STI
         CMP AL,1
         JE KX_EMERGENCY
+        CALL S_SAVE_CONSOLE
+        JC KX_RETRY
         XOR SI,SI
         MOV AX,4A06H
         INT 2FH
@@ -125,7 +127,10 @@ ENDIF
         XOR BX,BX
         INT 2FH
         CMP BX,4A06H
-        JNE KX_RESTORE
+        JE KX_RETRY
+        CALL S_RESTORE_CONSOLE
+        JMP SHORT KX_RESTORE
+KX_RETRY:
         MOV CS:D_EXIT,2
 KX_RESTORE:
         CLI
@@ -140,3 +145,5 @@ KX_EMERGENCY:
         MOV AX,4CFFH
         INT 21H
 S_EXIT_REQUEST ENDP
+
+        INCLUDE CONSOLE.INC

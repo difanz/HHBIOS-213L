@@ -281,14 +281,19 @@ static void RefreshConsole(u16 show_cursor) {
   }
   mouse_poll();
   changed = text_changed();
+  /* Mouse erasure reads the text aperture. Finish those reads before a
+   * changed frame keeps the graphics window mapped for cursor and text. */
+  if (mouse_prepare(changed)) {
+    changed = 1;
+  }
+  if (changed && !begin_draw()) {
+    return;
+  }
   if (cursor_visible &&
       (changed || !show_cursor || !cursor_on || (cursor_shape & 0x2000) ||
        cursor_position != CursorPosition(active_page) ||
        mouse_covers(cursor_position))) {
     HideCursor();
-  }
-  if (mouse_prepare(changed)) {
-    changed = 1;
   }
   if (changed) {
     /* Mouse erasure can dirty the text row beneath a retained caret. */
@@ -300,6 +305,9 @@ static void RefreshConsole(u16 show_cursor) {
   }
   if (show_cursor) {
     ShowCursor();
+  }
+  if (changed) {
+    end_draw();
   }
   mouse_paint();
 }
@@ -390,7 +398,7 @@ static int ActivateConsole(u16 preserve) {
 }
 
 static void SetTextGeometry(u16 rows, u16 height) {
-  u16 n;
+  font_choose(screen.width, screen.height, rows, 1);
   text_rows = rows;
   last_row = (u8)(rows - 1);
   text_cells = 80 * rows;
@@ -400,18 +408,6 @@ static void SetTextGeometry(u16 rows, u16 height) {
   large_surface = (u8)(font_extended || rows != 25 || screen.width != 800 ||
                        screen.height != 600 || screen.pitch != 100);
   plane_bytes = MultiplyWide(screen.pitch, screen.height);
-  raster_height = screen.height >= font_height * (rows + 1) ? font_height
-                                                            : font_body_height;
-  pixel_scale = 1;
-  for (n = 2; n <= 4 && screen.width >= TEXT_COLS * font_width * n; ++n) {
-    if (screen.height >= font_height * (rows + 1) * n) {
-      pixel_scale = n;
-      raster_height = font_height;
-    } else if (screen.height >= font_body_height * (rows + 1) * n) {
-      pixel_scale = n;
-      raster_height = font_body_height;
-    }
-  }
   viewport_x = (screen.width - TEXT_COLS * font_width * pixel_scale) / 2;
   viewport_y =
       large_surface
@@ -424,8 +420,7 @@ static void SetTextGeometry(u16 rows, u16 height) {
 static int IsSavedSurfaceValid(const struct VbeSurface* saved, u16 rows) {
   return saved->width >= 800 && saved->width <= 4096 && saved->height >= 600 &&
          saved->height <= 2160 &&
-         saved->height >= font_body_height * (rows + 1) &&
-         saved->width >= TEXT_COLS * font_width &&
+         font_choose(saved->width, saved->height, rows, 0) &&
          saved->pitch >= (saved->width + 7) / 8 && saved->pitch <= 512 &&
          !(saved->pitch & 1) && saved->segment == 0xa000 &&
          saved->window_kb == 64 && saved->granularity_kb &&
@@ -515,7 +510,7 @@ static int SetTextRows(u16 rows, u16 height, u16 preserve) {
   if (!rows || rows > MAX_TEXT_ROWS || (!banked_text && rows != 25)) {
     return 0;
   }
-  if (candidate.height < font_body_height * (rows + 1)) {
+  if (!font_choose(candidate.width, candidate.height, rows, 0)) {
     for (i = 0; i < 2; ++i) {
       ClearBytes(&bios_registers, sizeof(bios_registers));
       ClearBytes(info, sizeof(info));
@@ -528,8 +523,7 @@ static int SetTextRows(u16 rows, u16 height, u16 preserve) {
           DecodeConsoleModeInfo(&candidate, info, vbe_version,
                                 bios_registers.cx) &&
           (info[2 + candidate.window] & 1) &&
-          candidate.height >= font_body_height * (rows + 1) &&
-          candidate.width >= TEXT_COLS * font_width) {
+          font_choose(candidate.width, candidate.height, rows, 0)) {
         break;
       }
     }
@@ -601,6 +595,7 @@ u16 CALL initialize(void) {
   u16 n;
   u16 number;
   u16 previous_mode;
+  u16 font_missing = 0;
   ClearBytes(controller, sizeof(controller));
   ClearBytes(&bios_registers, sizeof(bios_registers));
   bios_registers.ax = 0x4f00;
@@ -645,15 +640,20 @@ u16 CALL initialize(void) {
     bios_registers.di = (u16)mode_info;
     bios(&bios_registers);
     if (bios_registers.ax == 0x004f &&
-        DecodeConsoleModeInfo(&screen, mode_info, version, number) &&
-        screen.width >= TEXT_COLS * font_width &&
-        screen.height >= font_body_height * (requested_rows + 1)) {
-      vbe_mode = 1;
-      break;
+        DecodeConsoleModeInfo(&screen, mode_info, version, number)) {
+      banked_text_allowed =
+          (u8)(version >= 0x102 && mode_info[29] > 0 &&
+               (mode_info[2 + screen.window] & 1) &&
+               !(64 % screen.granularity_kb));
+      if (font_open()) {
+        vbe_mode = 1;
+        break;
+      }
+      font_missing = 1;
     }
   }
   if (!vbe_mode) {
-    return 1;
+    return font_missing ? 4 : 1;
   }
   preferred = screen;
   scan_lines = requested_rows == 43 ? 350 : 400;
@@ -661,9 +661,6 @@ u16 CALL initialize(void) {
   if (requested_rows > 25) {
     cursor_shape = 0x0607;
   }
-  banked_text_allowed =
-      (u8)(version >= 0x102 && mode_info[29] > 0 &&
-           (mode_info[2 + screen.window] & 1) && !(64 % screen.granularity_kb));
   if (large_surface && !banked_text_allowed) {
     return 1;
   }

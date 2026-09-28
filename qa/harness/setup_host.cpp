@@ -10,6 +10,21 @@ unsigned hh_abi_size(unsigned type) {
     default: return 0;
   }
 }
+void hh_scan(InstallationFiles* files) {
+  ScanFiles(files);
+}
+const char* hh_font(InstallationFiles* files, unsigned width,
+                    unsigned height, unsigned rows) {
+  const DisplayFont* font = ChooseDisplayFont(files, width, height, rows);
+  return font ? font->name : NULL;
+}
+unsigned hh_rows(DisplayMode* mode, InstallationFiles* files) {
+  return DisplayRows(mode, files);
+}
+unsigned long hh_font_family(MachineCapabilities* machine,
+                             InstallationFiles* files, SetupChoices* choices) {
+  return DisplayFontFamilyBytes(machine, files, choices);
+}
 void hh_recommend(MachineCapabilities* machine, InstallationFiles* files,
                   SetupChoices* choices) {
   RecommendConfiguration(machine, files, choices);

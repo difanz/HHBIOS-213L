@@ -30,6 +30,7 @@ extrn prompt_notify:byte
 extrn font_get:near, font_open:near, font_close:near, font_bitmap:near
 extrn font_sync:near, font_custom:byte
 extrn font_extended:byte, font_name:byte, font_draw:near, font_bitmap_draw:near
+extrn font_selected:byte
 CELL_WIDTH equ 10
 CELL_HEIGHT equ 23
 GLYPH_HEIGHT equ 20
@@ -66,6 +67,7 @@ saved_memory_mode db 0
 gc_index db 0
 seq_index db 0
 video_depth db 0
+text_copy_pending db 0
 font_checking db 0
 aperture_alias db 0ffh
 text_map db 1
@@ -702,23 +704,11 @@ refresh_ready:
     call video_begin
     jc refresh_done
     call S_XR
-    call video_end
-    cmp cs:active,0
-    je refresh_done
     cmp cs:banked_text,0
-    je refresh_done
-    call classifier_policy
-    mov es,cs:D_B800
-    push cs
-    pop ds
-    mov si,offset text_transfer
-    xor di,di
-    mov cx,cs:text_cells
-    shr cx,1
-    pushf
-    cli
-    rep movsd
-    popf
+    je refresh_finish
+    mov cs:text_copy_pending,1
+refresh_finish:
+    call video_end
 refresh_done:
     load_regs
     ret
@@ -1394,9 +1384,8 @@ video_begin proc near
     save_regs
     cmp cs:active,0
     je video_inactive
-    inc cs:video_depth
-    cmp cs:video_depth,1
-    jne video_ready
+    cmp cs:video_depth,0
+    jne video_nested
     push cs
     pop ds
     mov dx,3ceh
@@ -1414,8 +1403,11 @@ video_save_gc:
     cmp bx,9
     jb video_save_gc
     cmp cs:banked_text,0
-    je video_direct
+    je video_publish
     call snapshot_text
+    ; IRQ keyboard queries may use the snapshot as soon as depth is nonzero.
+    ; Publish it before changing banks, after the complete copy is available.
+    mov cs:video_depth,1
     xor dx,dx
     call select_bank
     jc video_unavailable
@@ -1423,6 +1415,9 @@ video_save_gc:
     mov dx,3ceh
     mov ax,0506h
     out dx,ax
+    jmp short video_direct
+video_publish:
+    mov cs:video_depth,1
 video_direct:
     mov ax,1
     out dx,ax
@@ -1456,6 +1451,9 @@ video_direct:
     out dx,ax
     mov ax,0f02h
     out dx,ax
+    jmp short video_ready
+video_nested:
+    inc cs:video_depth
 video_ready:
     load_regs
     clc
@@ -1476,8 +1474,11 @@ video_end proc near
     save_regs
     cmp cs:video_depth,0
     je video_finished
+    cmp cs:video_depth,1
+    je video_outer_end
     dec cs:video_depth
-    jne video_finished
+    jmp video_finished
+video_outer_end:
     push cs
     pop ds
     cmp cs:banked_text,0
@@ -1507,6 +1508,29 @@ video_restore_gc:
     out dx,ax
     mov al,seq_index
     out dx,al
+    ; S_XR can repair frame aliases in the snapshot. Write those repairs only
+    ; after the outer drawing batch has restored the application's text bank.
+    cmp cs:text_copy_pending,0
+    je video_restored
+    mov cs:text_copy_pending,0
+    cmp cs:active,0
+    je video_restored
+    call classifier_policy
+    mov es,cs:D_B800
+    push cs
+    pop ds
+    mov si,offset text_transfer
+    xor di,di
+    mov cx,cs:text_cells
+    shr cx,1
+    pushf
+    cli
+    cld
+    rep movsd
+    popf
+video_restored:
+    ; Until this point IRQ queries must use the resident text snapshot.
+    mov cs:video_depth,0
 video_finished:
     load_regs
     ret
@@ -1956,6 +1980,7 @@ parse_font_done:
     or bx,bx
     jz bad_option
     mov byte ptr [di],0
+    mov font_selected,1
     jmp parse_option
 parse_rows:
     cmp cx,3
@@ -2018,9 +2043,6 @@ options_done:
     int 2fh
     cmp bx,4a06h
     jne no_font
-    call font_open
-    or ax,ax
-    jz no_font20
     mov ax,3510h
     int 21h
     mov word ptr old10,bx
@@ -2043,6 +2065,8 @@ options_done:
     mov keyboard_segment,bp
     mov busy,1
     call initialize
+    cmp ax,4
+    je no_font20
     or ax,ax
     jnz no_vbe
     mov ax,offset resident_end
@@ -2206,7 +2230,7 @@ msg_font db 'Load a HHBIOS font reader before VESA.',13,10,'$'
 msg_font20 db 'Cannot load font file into XMS or EMS 4.0 memory.',13,10,'$'
 msg_vbe db 'VESA needs a supported planar VBE mode and isolated text memory.',13,10,'$'
 msg_usage db 'VESA [/N] [/M:hex] [/F:file] [/R:25|43|50]',13,10
-          db 'Defaults: mode 102, HH20.FNT, 80x25 text.',13,10
+          db 'Defaults: mode 102, automatic font size, 80x25 text.',13,10
           db '/N keeps the driver in conventional memory.',13,10,'$'
 INIT_TEXT ends
 

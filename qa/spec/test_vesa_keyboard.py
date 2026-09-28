@@ -5,7 +5,7 @@ import pytest
 from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_WRITE
 
 from qa.spec.test_keymenu import menu_binary
-from qa.spec.test_vesa_api import Driver, vesa_driver
+from qa.spec.test_vesa_api import Driver, initialize_with_font, vesa_driver
 
 pytestmark = pytest.mark.unit
 
@@ -165,8 +165,7 @@ def mode_switch_driver(image, failure=0x4f02):
         else:
             assert ax in (0x4f02, 3)
 
-    machine = Driver(image, bios)
-    machine.run('initialize')
+    machine = initialize_with_font(image, bios)
     initializing = False
     machine.write('active', b'\1')
     machine.write('keyboard_segment', struct.pack('<H', 0x2000))

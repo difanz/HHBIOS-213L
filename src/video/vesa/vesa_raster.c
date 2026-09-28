@@ -166,10 +166,11 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
   width = font_width * pixel_scale;
   bytes = (shift + width + 7) / 8;
   for (byte_index = 0; byte_index < bytes; ++byte_index) {
-    scratch.glyph.masks[byte_index] = 0;
+    scratch.glyph.masks[byte_index] = 255;
   }
-  for (bit = shift; bit < shift + width; ++bit) {
-    scratch.glyph.masks[bit / 8] |= 128 >> (bit & 7);
+  scratch.glyph.masks[0] >>= shift;
+  if ((shift + width) & 7) {
+    scratch.glyph.masks[bytes - 1] &= 255 << (8 - ((shift + width) & 7));
   }
   for (row = 0; row < raster_height; ++row) {
     if (pixel_scale == 1) {
@@ -237,7 +238,7 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
   WritePortWord(0x3c4, 0x0f02);
 }
 
-static u16 TransferRow(u32 offset, u16 width, u16 writing) {
+static u16 TransferRow(u32 offset, u16 width, u16 writing, u16 shift) {
   u16 part;
   u16 done = 0;
   u16 plane_index;
@@ -254,6 +255,17 @@ static u16 TransferRow(u32 offset, u16 width, u16 writing) {
     for (plane_index = 0; plane_index < 4; ++plane_index) {
       SelectPlane(plane_index);
       if (writing) {
+        if (shift && !done) {
+          u8 mask = 255 >> shift;
+          scratch.scroll_row[plane_index][0] =
+              (scratch.scroll_row[plane_index][0] & mask) | (window[0] & ~mask);
+        }
+        if (shift && done + part == width) {
+          u8 mask = 255 << (8 - shift);
+          scratch.scroll_row[plane_index][width - 1] =
+              (scratch.scroll_row[plane_index][width - 1] & mask) |
+              (window[part - 1] & ~mask);
+        }
         raster_copy(window,
                     PTR(u8, resident_segment,
                         (u16)&scratch.scroll_row[plane_index][done]),
@@ -270,9 +282,25 @@ static u16 TransferRow(u32 offset, u16 width, u16 writing) {
   return 1;
 }
 
+static void CopyScrollEdges(u16 destination, u16 source, u16 width, u16 shift) {
+  u8 FAR* window = PTR(u8, screen.segment, 0);
+  u8 first_mask = 255 >> shift;
+  u8 last_mask = 255 << (8 - shift);
+  u16 plane;
+  for (plane = 0; plane < 4; ++plane) {
+    SelectPlane(plane);
+    window[destination] = (window[source] & first_mask) |
+                          (window[destination] & ~first_mask);
+    window[destination + width - 1] =
+        (window[source + width - 1] & last_mask) |
+        (window[destination + width - 1] & ~last_mask);
+  }
+}
+
 u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down) {
   u16 height = raster_height * pixel_scale;
-  u16 width = TEXT_COLS * font_width * pixel_scale / 8;
+  u16 shift = viewport_x & 7;
+  u16 width = TEXT_COLS * font_width * pixel_scale / 8 + (shift != 0);
   u16 lines = (last - first + 1 - count) * height;
   u16 row;
   u16 index;
@@ -280,8 +308,7 @@ u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down) {
   u32 destination;
   u32 source;
   u32 distance = MultiplyWide(count * height, display_pitch);
-  if ((viewport_x & 7) || width > sizeof(scratch.scroll_row[0]) ||
-      !begin_draw()) {
+  if (width > sizeof(scratch.scroll_row[0]) || !begin_draw()) {
     return 0;
   }
   for (row = 0; row < lines; ++row) {
@@ -296,13 +323,19 @@ u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down) {
       destination = swap;
     }
     if ((source >> 16) == (destination >> 16) &&
-        (u16)source <= 65535U - width && (u16)destination <= 65535U - width) {
+        (u16)source <= 65535U - (width - 1) &&
+        (u16)destination <= 65535U - (width - 1)) {
       if (!MapFramebufferByte(source)) {
         break;
       }
-      raster_latches((u16)destination, (u16)source, width);
-    } else if (!TransferRow(source, width, 0) ||
-               !TransferRow(destination, width, 1)) {
+      if (shift) {
+        CopyScrollEdges((u16)destination, (u16)source, width, shift);
+        raster_latches((u16)destination + 1, (u16)source + 1, width - 2);
+      } else {
+        raster_latches((u16)destination, (u16)source, width);
+      }
+    } else if (!TransferRow(source, width, 0, shift) ||
+               !TransferRow(destination, width, 1, shift)) {
       break;
     }
   }

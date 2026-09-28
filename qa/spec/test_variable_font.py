@@ -19,9 +19,9 @@ from qa.spec.test_resident_text import mouseview_build
 pytestmark = pytest.mark.dos
 
 
-def sample_text():
-    text = bytearray(b' \x17' * 2000)
-    for row in range(25):
+def sample_text(rows=25):
+    text = bytearray(b' \x17' * (80 * rows))
+    for row in range(rows):
         for column in range(0, 80, 4):
             offset = (row * 80 + column) * 2
             text[offset:offset + 8] = b'A\x2e\xd6\x1e\xd0\x4b \x17'
@@ -29,7 +29,7 @@ def sample_text():
 
 
 def assert_cells(shot, text, width, height):
-    for row in range(25):
+    for row in range(shot.rows):
         for column in range(80):
             role = column % 4
             origin = width if role == 2 else 0

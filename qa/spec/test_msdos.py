@@ -247,10 +247,11 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
         assert count==1,'QA startup must load exactly one supported mouse driver'
         if mode is None:
             startup=startup.replace(b'CALL HHBIOS.BAT',b'REM native VGA')
-        elif mode!=0x102:
-            bat=read('HHBIOS/HHBIOS.BAT')
-            bat=re.sub(rb'(?im)^VESA[^\r\n]*',f'VESA /M:{mode:x}'.encode(),bat)
-            (directory/'HHBIOS.BAT').write_bytes(bat)
+        else:
+            # Use an explicit test configuration; SETUP may emit qualified
+            # executable paths, and the user's saved mode is not this case.
+            commands=['@ECHO OFF','CD \\HHBIOS','READ5','CKBD /E',f'VESA /M:{mode:x}']
+            (directory/'HHBIOS.BAT').write_bytes(('\r\n'.join(commands)+'\r\n').encode())
             copy_in(directory/'HHBIOS.BAT','::HHBIOS/HHBIOS.BAT')
         commands=['CD \\DOS','C:\\SHELLCAP MSBACKUP',
                   'ECHO complete>C:\\DONE.TXT','C:\\DOS\\SHUTDOWN /S']
@@ -283,6 +284,8 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
         for offset in range(0,len(raw),8280):
             frame=raw[offset:offset+8280]; meta=struct.unpack_from('<12H',frame)
             assert meta[1]==4000
+            if mode is not None:
+                assert meta[2:4] == {0x102: (800,600), 0x104: (1024,768)}[mode]
             shot=shots[meta[0]]
             rgb=subprocess.check_output(['convert',str(directory/shot['file']),'-depth','8','rgb:-'])
             width,height=shot['width'],shot['height']
@@ -311,7 +314,8 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
         from collections import Counter
         text,meta,rgb,width=frame
         row,col=divmod(text[::2].index(0xcb),80)
-        ox,oy,cell_width,cell_height=(0,0,width//80,16) if native else (meta[7],meta[8],10,meta[10])
+        ox,oy,cell_width,cell_height=(0,0,width//80,16) if native else (
+            meta[7],meta[8],(width-2*meta[7])//80,meta[10]*meta[9])
         # Recover the 8x16 source pixels from each of the four cursor cells.
         pixels=[]
         for y in range(32):
@@ -339,7 +343,8 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
             actual,meta,rgb,width=vesa_frame
             assert mouse_sprite(vesa_frame,False)==mouse_sprite(native_frame,True)
             arrow={code:expected[::2].index(code) for code in (0xcb,0xb2,0xce,0xb4)}
-            ox,oy,ch=meta[7],meta[8],meta[10]
+            ox,oy,ch=meta[7],meta[8],meta[10]*meta[9]
+            cw=(width-2*ox)//80
             checked=0
             for cell,code in enumerate(actual[::2]):
                 source_cell=arrow.get(code,cell)
@@ -351,9 +356,9 @@ def test_msdos_backup_downloaded_font(dosbox_binary,pytestconfig,tmp_path,guest_
                 row,col=divmod(cell,80)
                 source_row,source_col=divmod(source_cell,80)
                 for y in range(ch):
-                    for x in range(10):
-                        src=((source_row*16+y*16//ch)*rw+source_col*(rw//80)+x*8//10)*3
-                        dst=((oy+row*ch+y)*width+ox+col*10+x)*3
+                    for x in range(cw):
+                        src=((source_row*16+y*16//ch)*rw+source_col*(rw//80)+x*8//cw)*3
+                        dst=((oy+row*ch+y)*width+ox+col*cw+x)*3
                         assert rgb[dst:dst+3]==reference[src:src+3], (row,col,hex(code),x,y)
                 checked+=1
             assert checked>=60, 'Must inspect the downloaded borders'

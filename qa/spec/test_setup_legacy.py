@@ -80,13 +80,10 @@ def test_missing_optional_font_preserves_existing_pair(dosbox_binary, setup_gues
     # The reader COM exists, but its font files do not. Import is not permission
     # to emit a batch which will fail only after installing the other TSRs.
     source = ROOT/'build'/f'{reader}.COM'
-    if not source.exists():
-        source = ROOT/'build/distribution'/f'{reader}.COM'
-    if not source.exists():
-        pytest.skip(f'Optional original {reader}.COM is unavailable')
+    assert source.is_file(), f'Build the {reader} reader before DOS tests'
     shutil.copy2(source, setup_guest)
     original = legacy_ini()
-    access = 'W' if reader == 'READSL' else 'WSFHK'
+    access = 'W' if reader == 'READSL' else f'/F:HH{reader[4:]}.FNT'
     batch = f'@ECHO OFF\r\n{reader} {access}\r\n'.encode()
     (setup_guest/'213L.INI').write_bytes(original)
     (setup_guest/'HHBIOS.BAT').write_bytes(batch)
@@ -94,7 +91,7 @@ def test_missing_optional_font_preserves_existing_pair(dosbox_binary, setup_gues
                     [('SETUP /AUTO /VIDEO:VGA > ERROR.TXT', 1)])
     assert files['213L.INI'].read_bytes() == original
     assert files['HHBIOS.BAT'].read_bytes() == batch
-    assert 'HZK' in files['ERROR.TXT'].read_text()
+    assert ('HZK' if reader == 'READSL' else 'HHFONT2') in files['ERROR.TXT'].read_text()
     assert not (setup_guest/'213L.BAK').exists()
     assert not (setup_guest/'HHBIOS.BAK').exists()
 

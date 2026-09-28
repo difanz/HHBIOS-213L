@@ -1,6 +1,7 @@
 /* HH Console 20: bounded glyph cache; XMS or EMS 4.0 owns the font payload.
  * File I/O and allocation occur only before display installation. */
 #include "vesa.h"
+#include "../../common/font_layout.h"
 
 #define FONT_SLOTS 8434U
 #define FONT_MAP_BYTES (FONT_SLOTS * 4UL)
@@ -17,20 +18,31 @@ u16 CALL font_width = CELL_WIDTH;
 u16 CALL font_height = CELL_HEIGHT;
 u16 CALL font_body_height = GLYPH_HEIGHT;
 u8 CALL font_extended;
+u8 CALL font_selected;
 char CALL font_name[64] = "HH20.FNT";
+enum { kFontVariants = 4 };
+static FontFileInfo fonts[kFontVariants];
+static u32 font_offsets[kFontVariants];
+static u16 font_count;
+static u16 current_font = 0xffff;
+static u32 glyph_storage;
 static u16 record_bytes = FONT_RECORD;
-static u16 cache_slots = (2048 - FONT_MAP_CACHE * 2) / FONT_RECORD;
 static u16 record_count;
 static u16 next_slot;
+static u16 next_byte;
 static u32 text_storage;
 u8 CALL font_custom[256]; /* bit 0: application bitmap, bit 1: changed */
 static u16 custom_active;
 static u16 keys[FONT_CACHE];
+static u16 cache_offsets[FONT_CACHE];
+/* The high bit marks a compact, single-cell record. */
+static u16 cache_lengths[FONT_CACHE];
+static u16 loaded_compact;
 /* Bit 0: valid, bit 1: recently used (second-chance replacement). */
 static u8 valid[FONT_CACHE];
 static u16 map_page = 0xffff;
-/* The first 128 bytes cache record IDs. The rest hold 5 to 60 glyphs. */
-static u8 cache[2048];
+/* The first 128 bytes cache record IDs. Variable-sized glyphs use the rest. */
+static u8 cache[2176];
 static u32 large_glyph[MAX_FONT_HEIGHT * 2];
 static u32 doubled_glyph[MAX_FONT_HEIGHT * 2];
 extern u8 CALL text_transfer[8192];
@@ -38,6 +50,7 @@ void CALL font_service(u16 kind, struct BiosRegisters* bios_registers);
 u16 CALL font_snapshot(void);
 void CALL font_unpack(const u8* source, u32* out, u16 width, u16 height,
                       u16 stride);
+void CALL font_unpack_half(const u8* source, u32* out, u16 width, u16 height);
 
 #pragma pack(push, 1)
 struct XmsMoveRequest {
@@ -66,6 +79,10 @@ static void ClearBytes(void* buffer, u16 size) {
     *bytes++ = 0;
   }
 }
+
+static void CopyBytes(void* destination, const void* source, u16 size);
+#pragma aux CopyBytes = "push es" "push ds" "pop es" "rep movsb" "pop es" \
+    parm [di] [si] [cx] modify [di si cx];
 
 static int TransferFontBytes(u32 offset, void* buffer, u16 size, u16 writing) {
   struct BiosRegisters bios_registers;
@@ -112,11 +129,73 @@ static int TransferFontBytes(u32 offset, void* buffer, u16 size, u16 writing) {
   return !(bios_registers.ax & 0xff00);
 }
 
+/* Western records often contain an entirely empty second cell. Store only
+ * the first cell, without resampling or dropping any nonzero source pixels.
+ * Small records already fit the alphabet and avoid this extra cache format. */
+static u16 CompactGlyph(u8* pixels) {
+  u16 stride = (font_width * 2 + 7) / 8;
+  u16 half = (font_width + 7) / 8;
+  u16 unused = font_width & 7;
+  u16 x, y;
+  u16 at = 0;
+  /* If even A-Z cannot remain resident, repeated alphabet output repacks
+   * every miss. Keep those large records raw instead of paying that cost. */
+  if (half * font_height > (sizeof(cache) - FONT_MAP_CACHE * 2) / 26) {
+    return 0;
+  }
+  for (y = 0; y < font_height; ++y) {
+    if (unused && (pixels[y * stride + half - 1] & (255 >> unused))) {
+      return 0;
+    }
+    for (x = half; x < stride; ++x) {
+      if (pixels[y * stride + x]) {
+        return 0;
+      }
+    }
+  }
+  for (y = 0; y < font_height; ++y) {
+    for (x = 0; x < half; ++x) {
+      pixels[at++] = pixels[y * stride + x];
+    }
+  }
+  return at;
+}
+
+static void CacheGlyph(u16 index, u16 slot, u16 size) {
+  u8* pixels = (u8*)doubled_glyph;
+  u16 length = size;
+  u16 compact = 0;
+  u16 i;
+  if (slot < 256 && size > FONT_RECORD) {
+    i = CompactGlyph(pixels);
+    if (i) {
+      length = i;
+      compact = 0x8000;
+    }
+  }
+  if (next_byte + length > sizeof(cache) - FONT_MAP_CACHE * 2) {
+    next_byte = 0;
+  }
+  /* Reusing arena bytes retires every overlapping entry before the copy. */
+  for (i = 0; i < FONT_CACHE; ++i) {
+    if (valid[i] && cache_offsets[i] < next_byte + length &&
+        cache_offsets[i] + (cache_lengths[i] & 0x7fff) > next_byte) {
+      valid[i] = 0;
+    }
+  }
+  cache_offsets[index] = next_byte;
+  cache_lengths[index] = length | compact;
+  CopyBytes(cache + FONT_MAP_CACHE * 2 + next_byte, pixels, length);
+  next_byte += length;
+  keys[index] = slot;
+  valid[index] = 3;
+}
+
 static u8* LoadGlyph(u16 code) {
   u16 slot;
   u16 i;
   u16 record_index;
-  u8* glyph_data;
+  u8* glyph_data = (u8*)doubled_glyph;
   if (code < 256) {
     slot = (font_custom[code] & 1) ? code | 0x8000 : code;
   } else {
@@ -129,25 +208,24 @@ static u8* LoadGlyph(u16 code) {
       slot += FONT_SLOTS;
     }
   }
-  for (i = 0; i < cache_slots; ++i) {
+  for (i = 0; i < FONT_CACHE; ++i) {
     if (valid[i] && keys[i] == slot) {
       valid[i] |= 2;
       break;
     }
   }
-  if (i == cache_slots) {
+  if (i == FONT_CACHE) {
     while (valid[next_slot] & 2) {
       valid[next_slot] &= ~2;
-      if (++next_slot == cache_slots) {
+      if (++next_slot == FONT_CACHE) {
         next_slot = 0;
       }
     }
     i = next_slot;
-    if (++next_slot == cache_slots) {
+    if (++next_slot == FONT_CACHE) {
       next_slot = 0;
     }
     valid[i] = 0;
-    glyph_data = cache + FONT_MAP_CACHE * 2 + i * record_bytes;
     if (slot & 0x8000) {
       if (!TransferFontBytes(text_storage + 32768UL + (u32)code * 16,
                              glyph_data, 16, 0)) {
@@ -162,7 +240,7 @@ static u8* LoadGlyph(u16 code) {
           count = FONT_MAP_CACHE;
         }
         map_page = 0xffff;
-        if (!TransferFontBytes((u32)page * 2, cache, count * 2, 0)) {
+        if (!TransferFontBytes(glyph_storage + (u32)page * 2, cache, count * 2, 0)) {
           font_fault = 1;
           return 0;
         }
@@ -171,16 +249,16 @@ static u8* LoadGlyph(u16 code) {
       record_index = ((u16*)cache)[slot - map_page];
       if (record_index >= record_count ||
           !TransferFontBytes(
-              FONT_MAP_BYTES + MultiplyWide(record_index, record_bytes),
+              glyph_storage + FONT_MAP_BYTES + MultiplyWide(record_index, record_bytes),
               glyph_data, record_bytes, 0)) {
         font_fault = 1;
         return 0;
       }
     }
-    keys[i] = slot;
-    valid[i] = 3;
+    CacheGlyph(i, slot, (slot & 0x8000) ? 16 : record_bytes);
   }
-  return cache + FONT_MAP_CACHE * 2 + i * record_bytes;
+  loaded_compact = cache_lengths[i] & 0x8000;
+  return cache + FONT_MAP_CACHE * 2 + cache_offsets[i];
 }
 
 void CALL font_get(u16 code, u16* out) {
@@ -237,7 +315,11 @@ void CALL font_get_large(u16 code, u32* out) {
     ScaleBitmap(pixels, out);
     return;
   }
-  font_unpack(pixels, out, font_width, font_height, stride);
+  if (loaded_compact) {
+    font_unpack_half(pixels, out, font_width, font_height);
+  } else {
+    font_unpack(pixels, out, font_width, font_height, stride);
+  }
 }
 
 static void DrawLargeHalf(const u32* bits, u16 attribute, u16 position,
@@ -398,9 +480,49 @@ void CALL font_close(void) {
     font_service(font_kind == 1 ? 3 : 2, &bios_registers);
   }
   font_kind = font_handle = 0;
+  font_count = 0;
+  current_font = 0xffff;
   map_page = 0xffff;
   next_slot = 0;
+  next_byte = 0;
   ClearBytes(valid, sizeof(valid));
+}
+
+/* All variants are preloaded. BIOS calls can change rows without opening a
+ * file or entering DOS while DOS itself is busy writing to the console. */
+u16 CALL font_choose(u16 width, u16 height, u16 rows, u16 apply) {
+  FontLayout layout;
+  u16 best = 0xffff;
+  u16 i;
+  for (i = 0; i < font_count; ++i) {
+    if (BetterFont(&fonts[i], best == 0xffff ? 0 : &fonts[best],
+                    width, height, rows)) {
+      best = i;
+    }
+  }
+  if (best == 0xffff) {
+    return 0;
+  }
+  if (apply) {
+    FitFont(&fonts[best], width, height, rows, &layout);
+    pixel_scale = layout.scale;
+    raster_height = layout.height;
+  }
+  if (apply && best != current_font) {
+    current_font = best;
+    glyph_storage = font_offsets[best];
+    font_width = fonts[best].width;
+    font_height = fonts[best].height;
+    font_extended = (u8)(fonts[best].format == 2);
+    font_body_height = font_extended ? font_height : GLYPH_HEIGHT;
+    record_bytes = fonts[best].record_bytes;
+    record_count = fonts[best].records;
+    map_page = 0xffff;
+    next_slot = 0;
+    next_byte = 0;
+    ClearBytes(valid, sizeof(valid));
+  }
+  return 1;
 }
 
 #pragma code_seg("INIT_TEXT", "INIT")
@@ -450,20 +572,208 @@ static int AllocateFontStorage(u16 kb) {
   return 1;
 }
 
-u16 CALL font_open(void) {
+struct FontCandidate {
+  FontFileInfo info;
+  char name[64];
+};
+
+static u16 OpenFont(const char* name, struct BiosRegisters* regs) {
+  ClearBytes(regs, sizeof(*regs));
+  regs->ax = 0x3d00;
+  regs->ds = resident_segment;
+  regs->dx = (u16)name;
+  font_service(0, regs);
+  return !(regs->flags & 1);
+}
+
+static void CloseFont(u16 file, struct BiosRegisters* regs) {
+  regs->ax = 0x3e00;
+  regs->bx = file;
+  font_service(0, regs);
+}
+
+static int ReadFontInfo(const char* name, struct FontCandidate* candidate) {
+  struct BiosRegisters regs;
+  FontFileInfo info;
+  u16 file;
+  u16 i;
+  int valid = 0;
+  if (!OpenFont(name, &regs)) {
+    return 0;
+  }
+  file = regs.ax;
+  regs.ax = 0x3f00;
+  regs.bx = file;
+  regs.cx = 32;
+  regs.dx = (u16)text_transfer;
+  font_service(0, &regs);
+  if (!(regs.flags & 1) && regs.ax == 32 && DecodeFontFile(text_transfer, &info)) {
+    regs.ax = 0x4202;
+    regs.bx = file;
+    regs.cx = regs.dx = 0;
+    font_service(0, &regs);
+    valid = !(regs.flags & 1) &&
+            (((u32)regs.dx << 16) | regs.ax) == info.payload_bytes + 32;
+  }
+  CloseFont(file, &regs);
+  if (!valid) {
+    return 0;
+  }
+  candidate->info = info;
+  for (i = 0; name[i] && i < 63; ++i) {
+    candidate->name[i] = name[i];
+  }
+  candidate->name[i] = 0;
+  return 1;
+}
+
+static void ConsiderFont(const struct FontCandidate* candidate,
+                          struct FontCandidate* best, u16 width, u16 height) {
+  static const u16 rows[3] = {25, 43, 50};
+  u16 i;
+  if (!banked_text_allowed && candidate->info.format != 1) {
+    return;
+  }
+  for (i = 0; i < 3; ++i) {
+    if (BetterFont(&candidate->info, &best[i].info,
+                    width, height, rows[i])) {
+      best[i] = *candidate;
+    }
+  }
+  /* HH20 is the normal fallback for applications selecting taller text
+   * grids. A pack without HH20 can use its smallest native cell instead. */
+  if (best[3].info.format != 1 &&
+      (!best[3].info.width || candidate->info.format == 1 ||
+       candidate->info.height < best[3].info.height ||
+       (candidate->info.height == best[3].info.height &&
+        candidate->info.width < best[3].info.width))) {
+    best[3] = *candidate;
+  }
+}
+
+static void FindFonts(struct FontCandidate* best, u16 width, u16 height) {
+  struct BiosRegisters regs;
+  struct FontCandidate candidate;
+  u8 dta[43];
+  u16 dta_segment;
+  u16 dta_offset;
+  u16 count;
+  static const char pattern[] = "F????.FNT";
+  ClearBytes(best, sizeof(*best) * kFontVariants);
+  if (ReadFontInfo("HH20.FNT", &candidate)) {
+    ConsiderFont(&candidate, best, width, height);
+  }
+  ClearBytes(&regs, sizeof(regs));
+  regs.ax = 0x2f00;
+  font_service(0, &regs);
+  dta_segment = regs.es;
+  dta_offset = regs.bx;
+  regs.ax = 0x1a00;
+  regs.ds = resident_segment;
+  regs.dx = (u16)dta;
+  font_service(0, &regs);
+  regs.ax = 0x4e00;
+  regs.cx = 0;
+  regs.dx = (u16)pattern;
+  font_service(0, &regs);
+  for (count = 0; !(regs.flags & 1) && count < 256; ++count) {
+    u16 length = 0;
+    while (length < 13 && dta[30 + length]) {
+      ++length;
+    }
+    if (length == 9 && ReadFontInfo((const char*)dta + 30, &candidate)) {
+      ConsiderFont(&candidate, best, width, height);
+    }
+    regs.ax = 0x4f00;
+    font_service(0, &regs);
+  }
+  regs.ax = 0x1a00;
+  regs.ds = dta_segment;
+  regs.dx = dta_offset;
+  font_service(0, &regs);
+}
+
+static int SameName(const char* first, const char* second) {
+  while (*first && *first == *second) {
+    ++first;
+    ++second;
+  }
+  return *first == *second;
+}
+
+static u16 ChooseFiles(struct FontCandidate* files) {
+  struct FontCandidate best[kFontVariants];
+  struct FontCandidate fallback[kFontVariants];
+  struct VbeSurface surface;
+  struct BiosRegisters regs;
+  u8 info[256];
+  u16 order[kFontVariants];
+  u16 count = 0;
+  u16 i;
+  u16 j;
+  FontLayout layout;
+  if (font_selected) {
+    return ReadFontInfo(font_name, files) &&
+           (banked_text_allowed || files[0].info.format == 1) &&
+           FitFont(&files[0].info, screen.width, screen.height,
+                    requested_rows, &layout);
+  }
+  FindFonts(best, screen.width, screen.height);
+  order[0] = requested_rows == 50 ? 2 : requested_rows == 43 ? 1 : 0;
+  if (!best[order[0]].info.width) {
+    return 0;
+  }
+  /* A short surface may need a larger physical mode for 43/50 rows. Load
+   * those strikes now too; SetTextRows uses the same two BIOS fallbacks. */
+  for (i = 0; banked_text_allowed && i < 2 &&
+              (!best[1].info.width || !best[2].info.width); ++i) {
+    ClearBytes(&regs, sizeof(regs));
+    ClearBytes(info, sizeof(info));
+    regs.ax = 0x4f01;
+    regs.cx = i ? 0x106 : 0x104;
+    regs.es = resident_segment;
+    regs.di = (u16)info;
+    bios(&regs);
+    if (regs.ax != 0x004f || !info[29] ||
+        !DecodeConsoleModeInfo(&surface, info, 0x102, i ? 0x106 : 0x104) ||
+        !(info[2 + surface.window] & 1)) {
+      continue;
+    }
+    FindFonts(fallback, surface.width, surface.height);
+    for (j = 1; j < 3; ++j) {
+      if (!best[j].info.width) {
+        best[j] = fallback[j];
+      }
+    }
+  }
+  order[1] = 3;
+  order[2] = (order[0] + 1) % 3;
+  order[3] = (order[0] + 2) % 3;
+  for (i = 0; i < kFontVariants; ++i) {
+    if (!best[order[i]].info.width) {
+      continue;
+    }
+    for (j = 0; j < count; ++j) {
+      if (SameName(files[j].name, best[order[i]].name)) {
+        break;
+      }
+    }
+    if (j == count) {
+      files[count++] = best[order[i]];
+    }
+  }
+  return count;
+}
+
+static int LoadFontFile(const struct FontCandidate* candidate, u32 destination) {
   struct BiosRegisters bios_registers;
+  FontFileInfo info;
   u16 file;
   u16 count;
-  u16 i;
   u16 ok = 0;
-  u32 length;
+  u32 length = candidate->info.payload_bytes;
   u32 offset;
-  ClearBytes(&bios_registers, sizeof(bios_registers));
-  bios_registers.ax = 0x3d00;
-  bios_registers.ds = resident_segment;
-  bios_registers.dx = (u16)font_name;
-  font_service(0, &bios_registers);
-  if (bios_registers.flags & 1) {
+  if (!OpenFont(candidate->name, &bios_registers)) {
     return 0;
   }
   file = bios_registers.ax;
@@ -472,51 +782,11 @@ u16 CALL font_open(void) {
   bios_registers.cx = 32;
   bios_registers.dx = (u16)text_transfer;
   font_service(0, &bios_registers);
-  if ((bios_registers.flags & 1) || bios_registers.ax != 32) {
-    goto done;
-  }
-  font_extended = 1;
-  for (i = 0; i < 8; ++i) {
-    if (text_transfer[i] != "HHFONT2\n"[i]) {
-      font_extended = 0;
-    }
-  }
-  if (!font_extended) {
-    for (i = 0; i < 8; ++i) {
-      if (text_transfer[i] != "HH20F01\n"[i]) {
-        goto done;
-      }
-    }
-  }
-  font_width = *(u16*)(text_transfer + 8);
-  font_height = *(u16*)(text_transfer + 10);
-  if (font_width < 8 || font_width > MAX_FONT_WIDTH || font_height < 16 ||
-      font_height > MAX_FONT_HEIGHT ||
-      (!font_extended &&
-       (font_width != CELL_WIDTH || font_height != CELL_HEIGHT)) ||
-      *(u16*)(text_transfer + 12) != FONT_SLOTS) {
-    goto done;
-  }
-  for (i = 20; i < 32; ++i) {
-    if (text_transfer[i]) {
-      goto done;
-    }
-  }
-  font_body_height = font_extended ? font_height : GLYPH_HEIGHT;
-  record_bytes = (((font_width * 2 + 7) / 8) * font_height + 1) & ~1U;
-  cache_slots = (sizeof(cache) - FONT_MAP_CACHE * 2) / record_bytes;
-  if (cache_slots > FONT_CACHE) {
-    cache_slots = FONT_CACHE;
-  }
-  record_count = *(u16*)(text_transfer + 14);
-  length = *(u32*)(text_transfer + 16);
-  if (!record_count || record_count > FONT_SLOTS * 2 ||
-      length != FONT_MAP_BYTES + MultiplyWide(record_count, record_bytes)) {
-    goto done;
-  }
-  font_kb = (u16)((length + 1023) >> 10);
-  text_storage = length;
-  if (!AllocateFontStorage(font_kb + 36)) {
+  if ((bios_registers.flags & 1) || bios_registers.ax != 32 ||
+      !DecodeFontFile(text_transfer, &info) ||
+      info.format != candidate->info.format ||
+      info.width != candidate->info.width || info.height != candidate->info.height ||
+      info.payload_bytes != length) {
     goto done;
   }
   for (offset = 0; offset < length; offset += count) {
@@ -527,7 +797,7 @@ u16 CALL font_open(void) {
     bios_registers.dx = (u16)text_transfer;
     font_service(0, &bios_registers);
     if ((bios_registers.flags & 1) || bios_registers.ax != count ||
-        !TransferFontBytes(offset, text_transfer, count, 1)) {
+        !TransferFontBytes(destination + offset, text_transfer, count, 1)) {
       goto done;
     }
   }
@@ -538,11 +808,42 @@ u16 CALL font_open(void) {
   font_service(0, &bios_registers);
   ok = !(bios_registers.flags & 1) && !bios_registers.ax;
 done:
-  bios_registers.ax = 0x3e00;
-  bios_registers.bx = file;
-  font_service(0, &bios_registers);
-  if (!ok) {
-    font_close();
-  }
+  CloseFont(file, &bios_registers);
   return ok;
+}
+
+u16 CALL font_open(void) {
+  struct FontCandidate files[kFontVariants];
+  u16 count = ChooseFiles(files);
+  u16 i;
+  if (!count) {
+    return 0;
+  }
+  /* Optional row sizes yield to the requested size on a small machine.
+   * No duplicate payload is stored when several layouts select one file. */
+  while (count) {
+    text_storage = 0;
+    for (i = 0; i < count; ++i) {
+      font_offsets[i] = text_storage;
+      text_storage += files[i].info.payload_bytes;
+    }
+    font_kb = (u16)((text_storage + 1023) >> 10);
+    if (AllocateFontStorage(font_kb + 36)) {
+      break;
+    }
+    --count;
+  }
+  if (!count) {
+    return 0;
+  }
+  for (i = 0; i < count; ++i) {
+    if (!LoadFontFile(&files[i], font_offsets[i])) {
+      font_close();
+      return 0;
+    }
+    fonts[i] = files[i].info;
+  }
+  font_count = count;
+  current_font = 0xffff;
+  return font_choose(screen.width, screen.height, requested_rows, 1);
 }

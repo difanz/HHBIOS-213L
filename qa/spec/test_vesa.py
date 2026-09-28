@@ -47,7 +47,7 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
     resident=files['RESIDENT.BIN'].read_bytes()
     abi=struct.unpack_from('<10H',resident)
     assert abi[:3]==(0x5356,1,28) and abi[4]==1
-    assert 0 < abi[5] < 50*1024  # 50 rows, variable fonts, mouse and shared raster scratch
+    assert 0 < abi[5] < 53*1024  # bounded cache and font catalog; payloads stay in XMS/EMS
     assert (abi[8]<0xa000)==bool(residency)
     owner,paragraphs=struct.unpack_from('<HH',resident,49)
     assert owner==abi[8] and paragraphs==(abi[5]+15)//16

@@ -1,0 +1,49 @@
+{
+  "format": 2,
+  "cell": [
+    24,
+    24
+  ],
+  "baseline": 19,
+  "records": 9991,
+  "payload_bytes": 1472440,
+  "freetype": "2.13.2",
+  "inputs": [
+    {
+      "file": "NotoSansCJK-Regular.ttc",
+      "index": 2,
+      "family": "Noto Sans CJK SC",
+      "source": "outline",
+      "pixel_size": 19,
+      "copyright": [
+        "© 2014-2021 Adobe (http://www.adobe.com/)."
+      ],
+      "sha256": "b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a"
+    },
+    {
+      "file": "terminus-normal.otb",
+      "index": 0,
+      "family": "Terminus",
+      "source": "bitmap",
+      "pixel_size": 24,
+      "copyright": [
+        "Copyright (C) 2019 Dimitar Toshkov Zhekov"
+      ],
+      "sha256": "482219650d82b9db6330626adf085313fd609086fefa77ad3539b3afb508f06a"
+    }
+  ],
+  "sha256": "35eede6bae452b6f9fdb463486259cf139dd8a8c525ec4e413c6e108f80a6b7c",
+  "aspect": "native",
+  "layouts": [
+    {
+      "mode": [
+        1920,
+        1080
+      ],
+      "text": [
+        80,
+        43
+      ]
+    }
+  ]
+}

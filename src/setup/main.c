@@ -35,6 +35,11 @@ static void DescribeDisplay(char* out, const SetupChoices* selected) {
     sprintf(out, "%s, 80x%u", kVideoNames[selected->video],
             selected->rows ? selected->rows : 25);
   }
+  const DisplayFont* font = SelectedDisplayFont(&machine, &files, selected);
+  if (font) {
+    sprintf(out + strlen(out), ", %ux%u %s", font->info.width,
+            font->info.height, font->name);
+  }
 }
 
 static void DescribeMonitor(char* out) {
@@ -371,7 +376,9 @@ static void ShowVideoDialog(void) {
   DescribeMonitor(monitor);
   AddParagraph(&form, 1, 2, 64, monitor);
   AddField(&form, 3, 2, 8, 62, FLD_LISTBOX, &video);
-  AddParagraph(&form, 12, 2, 60, LocalizedText("Text layout:", "文本布局："));
+  AddParagraph(&form, 12, 2, 60,
+               LocalizedText("Text layout (font selected automatically):",
+                             "文本布局（自动选择合适字号）："));
   AddRadio(&form, 13, "80x25", &rows, 25);
   AddRadio(&form, 14, "80x43", &rows, 43);
   AddRadio(&form, 15, "80x50", &rows, 50);

@@ -22,12 +22,13 @@ COMS := $(addprefix $(BUILD)/,$(notdir $(ASMS:.ASM=.COM)))
 ASM_INCLUDES := $(addprefix -I,$(SOURCE_DIRS))
 VESA := $(SRC)/video/vesa
 COMMON_C := $(wildcard $(SRC)/common/*.[ch])
+PRINT_READERS := $(addprefix $(BUILD)/,READ24.COM READ32.COM READ40.COM)
 vpath %.ASM $(SOURCE_DIRS)
 
 .PHONY: all clean check setup variants qa-smoke qa-test qa-dos qa-application qa-all qa-mutate
 QA_PYTHON ?= python3
 
-all: $(COMS) $(BUILD)/VESA.COM $(BUILD)/README
+all: $(COMS) $(BUILD)/VESA.COM $(PRINT_READERS) $(BUILD)/README
 
 $(BUILD)/README: docs/README.DOS | $(BUILD)
 	iconv -f UTF-8 -t GB2312 "$<" > "$@.tmp"
@@ -72,10 +73,13 @@ $(addprefix $(BUILD)/,VGA.COM EGA.COM HGA.COM CKBD.COM): $(BUILD)/%.COM: %.ASM $
 
 $(BUILD)/CKBD.COM: $(SRC)/input/pinyin.c $(SRC)/input/pinyin.h
 
-# Confirm every assembly module produced a non-empty COM.
+$(PRINT_READERS): $(SRC)/font/print_font.c $(SRC)/font/print_font.asm $(SRC)/font/bitmap.c $(SRC)/font/bitmap.h $(SRC)/common/font_file.c $(SRC)/common/font_file.h tools/build-print-reader.sh | $(BUILD)
+	JWASM="$(JWASM)" bash tools/build-print-reader.sh "$(patsubst READ%.COM,%,$(@F))" "$@" "$(SRC)"
+
+# Confirm every assembly and mixed-language module produced a non-empty COM.
 check: all
 	@bash tools/check-coms.sh "$(SRC)" "$(BUILD)"
-	@test -s $(BUILD)/VESA.COM
+	@for module in $(BUILD)/VESA.COM $(PRINT_READERS); do test -s "$$module" || exit 1; done
 
 clean:
 	rm -rf $(BUILD)

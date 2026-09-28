@@ -33,11 +33,13 @@ trap 'rm -rf "$work"' EXIT
     wcc -q -"$cpu_flag" -bt=dos -ms -s -os -zl -zlf -fo=rasterc.obj "$source_dir/vesa_raster.c"
     wcc -q -"$cpu_flag" -bt=dos -ms -zu -s -os -zl -zlf -fo=mousec.obj "$source_dir/vesa_mouse.c"
     wcc "${common_c_flags[@]}" -fo=framec.obj "$common_dir/frame.c"
+    wcc -q -"$cpu_flag" -bt=dos -ms -s -os -zl -zlf -nt=INIT_TEXT -nc=INIT -fo=fontfile.obj "$common_dir/font_file.c"
+    wcc -q -"$cpu_flag" -bt=dos -ms -s -os -zl -zlf -fo=fontlayout.obj "$common_dir/font_layout.c"
     env -u JWASM "$assembler" -q -0 -Zm -omf "${asm_includes[@]}" -Fomousea.obj "$source_dir/vesa_mouse.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -DHH_CPU=3 "${asm_includes[@]}" -Fovesaa.obj "$source_dir/vesa.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Fofonta.obj "$source_dir/vesa_font.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Forastera.obj "$source_dir/vesa_raster.asm"
-    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj,rastera.obj,mousea.obj,mousec.obj,framec.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
+    wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj,rastera.obj,mousea.obj,mousec.obj,framec.obj,fontfile.obj,fontlayout.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT
     cp vesa.com "$out"
     cp vesa.map "${out%.*}.map"
 )

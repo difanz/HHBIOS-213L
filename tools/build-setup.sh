@@ -87,6 +87,10 @@ for source in "$root"/src/setup/*.c; do
         -fo="$work/$name.obj" "$work/$name.c"
     app_objects+=("$work/$name.obj")
 done
+for name in font_file font_layout; do
+    wcc "${flags[@]}" -fo="$work/$name.obj" "$root/src/common/$name.c"
+    app_objects+=("$work/$name.obj")
+done
 wcc "${flags[@]}" -dVESA_HOST -fo="$work/vlayout.obj" "$root/src/video/vesa/vesa.c"
 {
     printf '%s\n' 'system dos' 'option quiet' 'option stack=32768'

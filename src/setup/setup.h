@@ -3,6 +3,8 @@
 #define HHBIOS_SRC_SETUP_SETUP_H_
 #include <stdio.h>
 
+#include "../common/font_file.h"
+
 enum { kFontXms, kFontEms, kFontLow, kFontCount };
 enum {
   kVideoVga,
@@ -15,13 +17,14 @@ enum {
   kVideoDetected,
   kVideoCount
 };
-enum { kMaxDisplayModes = 64 };
+enum { kMaxDisplayModes = 64, kMaxDisplayFonts = 257 };
 enum { kEdidUnavailable, kEdidInvalid, kEdidNoPreferred, kEdidPreferred };
 typedef struct DisplayMode {
   unsigned number;
   unsigned width;
   unsigned height;
-  unsigned rows; /* bits 0..2: 80x25, 80x43, 80x50 with HH20.FNT */
+  unsigned rows; /* Hardware limits: bits 0..2 are 80x25, 80x43, 80x50. */
+  unsigned banked; /* Readable banking for the variable-size renderer. */
 } DisplayMode;
 enum { kImePinyin = 1, kImeShouwei = 2, kImeTelegraph = 4, kImeWubi = 8 };
 enum { kAdapterUnknown, kAdapterMda, kAdapterCga, kAdapterEga, kAdapterVga };
@@ -51,9 +54,7 @@ enum {
   kFileRead32,
   kFileRead40,
   kFileReadsl,
-  kFileHzk24T, kFileHzk24S, kFileHzk24F, kFileHzk24H, kFileHzk24K,
-  kFileHzk32T, kFileHzk32S, kFileHzk32F, kFileHzk32H, kFileHzk32K,
-  kFileHzk40T, kFileHzk40S, kFileHzk40F, kFileHzk40H, kFileHzk40K,
+  kFileFont24, kFileFont32, kFileFont40,
   kFileHzkSlT, kFileHzkSlS,
   kFilePrTable,
   kFileCount
@@ -87,8 +88,15 @@ typedef struct MachineCapabilities {
   unsigned display_truncated;
   DisplayMode display_modes[kMaxDisplayModes];
 } MachineCapabilities;
+typedef struct DisplayFont {
+  char name[13];
+  FontFileInfo info;
+} DisplayFont;
 typedef struct InstallationFiles {
   unsigned long size[kFileCount];
+  unsigned display_font_count;
+  unsigned display_font_truncated;
+  DisplayFont display_fonts[kMaxDisplayFonts];
 } InstallationFiles;
 typedef struct SetupChoices {
   unsigned font;
@@ -101,10 +109,10 @@ typedef struct SetupChoices {
   unsigned special_display; /* 0: none, 1: INT10K, 2: INT10V */
   unsigned printer; /* index into kPrinters */
   unsigned print_fonts; /* READ16, READ24, READ32, READ40, READSL */
-  unsigned print_access; /* 0: DOS file reads (W), 1..9: sector cache size */
-  char print_styles[3][5]; /* READ24/32/40 style aliases; empty uses Song. */
+  unsigned print_memory; /* 0: automatic XMS/EMS, 1: XMS, 2: EMS */
   unsigned printer_flags; /* PRNT's /1 through /5 switches. */
-  unsigned vector_access; /* 0: follow print_access, 1: file, 2: sector. */
+  unsigned vector_access; /* READSL: 0/1 file access, 2 sector access. */
+  char print_files[3][4][128]; /* Bitmap sizes, then faces; empty aliases face 0. */
 } SetupChoices;
 enum {
   kIniDisplay = 0,
@@ -135,6 +143,9 @@ extern const PrinterModel kPrinters[kPrinterCount];
 const char* ValidateModules(const InstallationFiles* files,
                            const SetupChoices* choices);
 int ValidModuleChoices(const SetupChoices* choices);
+const char* ValidatePrintMemory(const MachineCapabilities* machine,
+                                const InstallationFiles* files,
+                                const SetupChoices* choices);
 char* AppendModuleCommands(const SetupChoices* choices, char* out);
 unsigned long ModuleMemoryKb(const InstallationFiles* files,
                              const SetupChoices* choices);
@@ -154,6 +165,17 @@ extern const char* const kVideoNames[kVideoCount];
 extern const char* const kVideoCommands[kVideoCount];
 void ProbeMachine(MachineCapabilities* machine);
 void ScanFiles(InstallationFiles* files);
+void ScanDisplayFonts(InstallationFiles* files);
+const DisplayFont* ChooseDisplayFont(const InstallationFiles* files,
+                                    unsigned width, unsigned height,
+                                    unsigned rows);
+const DisplayFont* SelectedDisplayFont(const MachineCapabilities* machine,
+                                      const InstallationFiles* files,
+                                      const SetupChoices* choices);
+unsigned DisplayRows(const DisplayMode* mode, const InstallationFiles* files);
+unsigned long DisplayFontFamilyBytes(const MachineCapabilities* machine,
+                                     const InstallationFiles* files,
+                                     const SetupChoices* choices);
 int IsSafeDirectory(const char* path);
 void RecommendConfiguration(const MachineCapabilities* machine,
                             const InstallationFiles* files,

@@ -1,0 +1,5 @@
+HH Console Pack
+
+Copyright (C) 2019 Dimitar Toshkov Zhekov
+
+© 2014-2021 Adobe (http://www.adobe.com/).

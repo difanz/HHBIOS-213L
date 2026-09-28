@@ -13,6 +13,10 @@ ROOT = Path(__file__).resolve().parent
 
 
 def pytest_addoption(parser):
+    parser.addoption('--print-font-pack', type=Path, default=os.environ.get('PRINT_FONT_PACK'),
+                     help='Optional generated HH24/32/40 font pack with source metadata.')
+    parser.addoption('--print-cjk-font', type=Path, default=os.environ.get('PRINT_CJK_FONT'),
+                     help='Original CJK font used to independently check printing glyph pixels.')
     parser.addoption('--ctmouse', type=Path, default=os.environ.get('CTMOUSE_EXE'),
                      help='Optional CuteMouse driver for relative-input real-MS-DOS tests.')
     parser.addoption('--vbmouse', type=Path, default=os.environ.get('VBMOUSE_EXE'),

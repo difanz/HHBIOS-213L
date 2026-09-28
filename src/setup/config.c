@@ -10,10 +10,7 @@ const char* const kFileNames[kFileCount] = {
     "HH20.FNT",  "PYMB",      "SWMB",      "DBMB",     "WBX.COM",
     "INT10K.COM", "INT10V.COM", "PRNT.COM", "PRTH.COM", "PR.EXE",
     "READ16.COM", "READ24.COM", "READ32.COM", "READ40.COM", "READSL.COM",
-    "HZK24T", "HZK24S", "HZK24F", "HZK24H", "HZK24K",
-    "HZK32T", "HZK32S", "HZK32F", "HZK32H", "HZK32K",
-    "HZK40T", "HZK40S", "HZK40F", "HZK40H", "HZK40K",
-    "HZKSLT", "HZKSLSTJ", "PRTA.TAB"};
+    "HH24.FNT", "HH32.FNT", "HH40.FNT", "HZKSLT", "HZKSLSTJ", "PRTA.TAB"};
 const char* const kFontNames[kFontCount] = {"XMS (READ5)", "EMS 4.0 (READ4)",
                                             "Conventional (READ2)"};
 const char* const kVideoNames[kVideoCount] = {
@@ -32,23 +29,7 @@ void ScanFiles(InstallationFiles* files) {
       files->size[i] = file_info.st_size;
     }
   }
-  /* A truncated/incompatible VESA font must not be recommended. */
-  if (files->size[kFileFont20]) {
-    unsigned char header[32];
-    FILE* file = fopen("HH20.FNT", "rb");
-    int ok = file && fread(header, 1, sizeof(header), file) == sizeof(header);
-    if (file) {
-      fclose(file);
-    }
-    if (!ok || memcmp(header, "HH20F01\n", 8) || header[8] != 10 || header[9] ||
-        header[10] != 23 || header[11] ||
-        (unsigned long)header[16] + ((unsigned long)header[17] << 8) +
-                ((unsigned long)header[18] << 16) +
-                ((unsigned long)header[19] << 24) + 32 !=
-            files->size[kFileFont20]) {
-      files->size[kFileFont20] = 0;
-    }
-  }
+  ScanDisplayFonts(files);
 }
 
 int IsSafeDirectory(const char* path) {
@@ -82,7 +63,8 @@ static int HasVesaFontMemory(const MachineCapabilities* machine,
                              const InstallationFiles* files,
                              const SetupChoices* choices) {
   /* VESA also retains 32 KiB of text pages and 4 KiB of downloaded font. */
-  unsigned long kb = (files->size[kFileFont20] - 32 + 1023) / 1024 + 36;
+  const DisplayFont* font = SelectedDisplayFont(machine, files, choices);
+  unsigned long kb = (font->info.payload_bytes + 1023UL) / 1024 + 36;
   unsigned xms = choices->font == kFontXms ? 256 : 0;
   unsigned ems = choices->font == kFontEms ? 16 : 0;
   /* VESA tries XMS, then EMS. Account for READ5/READ4 loaded beforehand.
@@ -171,13 +153,13 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
     }
     if (!((mode                          ? mode->rows
            : choices->video == kVideo106 ? 7
-                                         : 1) &
+           : choices->video == kVideo104 ? 3 : 1) &
           rows_mask)) {
       return "The selected display mode cannot fit this text layout and IME "
              "row.";
     }
-    if (!files->size[kFileFont20]) {
-      return "Missing or invalid HH20.FNT for VESA.";
+    if (!SelectedDisplayFont(machine, files, choices)) {
+      return "No installed VESA font can fit this text layout and IME row.";
     }
     if ((!machine->loaded && !HasVesaFontMemory(machine, files, choices)) ||
         (machine->loaded && !machine->xms_version &&
@@ -185,6 +167,10 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
       return "Insufficient XMS/EMS for both font stores. Choose VGA or another "
              "reader.";
     }
+  }
+  module_error = ValidatePrintMemory(machine, files, choices);
+  if (module_error) {
+    return module_error;
   }
   for (i = 0; i < 3; ++i) {
     if (choices->ime & (1U << i)) {
@@ -298,7 +284,7 @@ int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
       "%c:\r\nCD %s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n",
       path[0], path + 2);
   /* Explicit current-directory paths avoid accidentally loading a different
-   * copy from PATH. The directory also supplies VESA's HH20.FNT. */
+   * copy from PATH. The directory also supplies VESA's font catalog. */
   output_cursor +=
       sprintf(output_cursor,
               ".\\%s%s\r\nIF ERRORLEVEL 1 GOTO HHFAIL\r\n"
@@ -619,9 +605,17 @@ void ReportMachine(FILE* out, const MachineCapabilities* machine,
           machine->display_truncated);
   for (i = 0; i < machine->display_count; ++i) {
     const DisplayMode* mode = &machine->display_modes[i];
-    fprintf(out, "VBE_MODE_%04X=%ux%u;80x25%s%s\n", mode->number, mode->width,
-            mode->height, mode->rows & 2 ? ",80x43" : "",
-            mode->rows & 4 ? ",80x50" : "");
+    unsigned rows = DisplayRows(mode, files);
+    fprintf(out, "VBE_MODE_%04X=%ux%u;%s%s%s\n", mode->number, mode->width,
+            mode->height, rows & 1 ? "80x25" : "no fitting font",
+            rows & 2 ? ",80x43" : "", rows & 4 ? ",80x50" : "");
+  }
+  fprintf(out, "FONT_CATALOG_TRUNCATED=%u\n", files->display_font_truncated);
+  for (i = 0; i < files->display_font_count; ++i) {
+    const DisplayFont* font = &files->display_fonts[i];
+    fprintf(out, "FONT_%s=%ux%u;%lu bytes\n", font->name,
+            font->info.width, font->info.height,
+            (unsigned long)font->info.payload_bytes);
   }
   for (i = 0; i < kFileCount; ++i) {
     fprintf(out, "%s=%lu\n", kFileNames[i], files->size[i]);

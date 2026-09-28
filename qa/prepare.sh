@@ -80,6 +80,7 @@ MEMTEST memory
 MOUSEVW mouseview mouseview
 MOUSEDIR mousedir
 PERF perf
+PAINT paintperf
 PRESSURE pressure
 PRMTEST prompt
 ROWGUARD rowguard
@@ -105,6 +106,18 @@ while IFS= read -r -d '' source; do
     cp "$root/build/$name.COM" "$run/"
     modules+=("$run/$name.COM")
 done < <(find "$root/src" -name '*.ASM' -print0 | LC_ALL=C sort -z)
+for name in READ24 READ32 READ40; do
+    cp "$root/build/$name.COM" "$run/"
+    modules+=("$run/$name.COM")
+done
+mkdir -p "$run/FONTINFO"
+for font in "$root"/fonts/large/*.FNT; do
+    cp "$font" "$run/"
+    modules+=("$run/$(basename "$font")")
+done
+cp "$root"/fonts/large/*.json "$root/fonts/large/OFL.txt" \
+    "$root/fonts/large/NOTICE.txt" "$run/FONTINFO/"
+cp "$root/fonts/OpenCC-LICENSE.txt" "$run/FONTINFO/OPENCC.TXT"
 cp "$root/build/SETUP.EXE" "$root/build/SETUP.LIC" "$run/"
 rm -f "$run/LSETUP.COM"
 

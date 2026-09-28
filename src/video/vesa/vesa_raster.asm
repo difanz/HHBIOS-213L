@@ -94,6 +94,84 @@ raster_span proc near
     xor eax,edx
     mov [bp-8],eax
     mov [bp-12],edx
+    ; Native 8/16/24-pixel cells overwrite complete bytes. Avoid VGA reads
+    ; and edge merging here; the caller has already bounded this bank span.
+    cmp word ptr [bp+18],1
+    jne span_row
+    mov bx,[bp+12]
+    mov cx,[bp+10]
+    cmp cx,2
+    jne span_native_bounds
+    cmp word ptr [bx],0ffffh
+    jne span_native_masked_word
+span_native_bounds:
+    cmp byte ptr [bx],0ffh
+    jne span_row
+    cmp cx,3
+    ja span_row
+    jne span_native_edges
+    cmp byte ptr [bx+1],0ffh
+    jne span_row
+span_native_edges:
+    add bx,cx
+    cmp byte ptr [bx-1],0ffh
+    jne span_row
+    mov ax,cx
+    mov cx,[bp-2]
+    mov dx,word ptr [bp-8]
+    mov bx,word ptr [bp-12]
+    cmp ax,2
+    je span_native_word
+    ja span_native_three
+span_native_byte:
+    mov al,[si]
+    and al,dl
+    xor al,bl
+    mov es:[di],al
+    add si,16
+    add di,cs:display_pitch
+    loop span_native_byte
+    jmp span_done
+span_native_word:
+    mov ax,[si]
+    and ax,dx
+    xor ax,bx
+    mov es:[di],ax
+    add si,16
+    add di,cs:display_pitch
+    loop span_native_word
+    jmp span_done
+span_native_three:
+    mov ax,[si]
+    and ax,dx
+    xor ax,bx
+    mov es:[di],ax
+    mov al,[si+2]
+    and al,dl
+    xor al,bl
+    mov es:[di+2],al
+    add si,16
+    add di,cs:display_pitch
+    loop span_native_three
+    jmp span_done
+    ; Twelve-pixel cells alternate between left and right half-byte edges.
+    ; Keep the mask across rows and merge each destination word only once.
+span_native_masked_word:
+    mov bx,[bx]
+    mov cx,[bp-2]
+span_masked_word_row:
+    mov ax,[si]
+    and ax,word ptr [bp-8]
+    xor ax,word ptr [bp-12]
+    mov dx,es:[di]
+    xor ax,dx
+    and ax,bx
+    xor ax,dx
+    mov es:[di],ax
+    add si,16
+    add di,cs:display_pitch
+    loop span_masked_word_row
+    jmp span_done
 span_row:
     push si
     push di
@@ -152,6 +230,7 @@ span_next_row:
 span_same_source:
     dec word ptr [bp-2]
     jnz span_row
+span_done:
     pop es
     popad
     mov sp,bp

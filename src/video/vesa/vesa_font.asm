@@ -147,4 +147,50 @@ unpack_halves:
     pop bp
     ret
 font_unpack endp
+
+; Compact western rows contain one cell. Their omitted half is all zero.
+public font_unpack_half
+font_unpack_half proc near
+    push bp
+    mov bp,sp
+    pushad
+    push es
+    push ds
+    pop es
+    mov di,[bp+6]
+    xor eax,eax
+    mov cx,128
+    rep stosd
+    mov di,[bp+6]
+    mov si,[bp+4]
+    mov bx,[bp+8]
+    add bx,7
+    shr bx,3
+    mov cx,32
+    sub cx,[bp+8]
+    mov edx,-1
+    shl edx,cl
+    mov cx,[bp+10]
+half_row:
+    xor eax,eax
+    mov ah,[si]
+    cmp bx,1
+    je half_shift
+    mov al,[si+1]
+half_shift:
+    shl eax,16
+    cmp bx,3
+    jne half_store
+    mov ah,[si+2]
+half_store:
+    and eax,edx
+    mov [di],eax
+    add si,bx
+    add di,4
+    loop half_row
+    pop es
+    popad
+    pop bp
+    ret
+font_unpack_half endp
 end

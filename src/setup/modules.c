@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../common/font_file.h"
 #include "setup.h"
 
 const PrinterModel kPrinters[kPrinterCount] = {
@@ -27,29 +28,75 @@ const PrinterModel kPrinters[kPrinterCount] = {
     {2, 22, "PRTH 22 - XP-11-A4 400 DPI"},
     {2, 23, "PRTH 23 - Canon BJ-10ex"}};
 
-static const char* PrintStyles(const SetupChoices* choices, unsigned reader) {
-  return choices->print_styles[reader][0] ? choices->print_styles[reader] : "S";
+static const char* PrintFontPath(const SetupChoices* choices, unsigned reader,
+                                 unsigned face) {
+  if (choices->print_files[reader][face][0]) {
+    return choices->print_files[reader][face];
+  }
+  if (face && choices->print_files[reader][0][0]) {
+    return choices->print_files[reader][0];
+  }
+  return kFileNames[kFileFont24 + reader];
 }
 
-static int ValidStyles(const char* styles) {
+static int ValidFontPath(const char* path) {
   unsigned i;
-  for (i = 0; i < 4 && styles[i]; ++i) {
-    if (!strchr("SFHK", styles[i])) {
+  for (i = 0; i < 128 && path[i]; ++i) {
+    if (!isalnum((unsigned char)path[i]) && !strchr("._-\\:", path[i])) {
       return 0;
     }
   }
-  return styles[i] == 0;
+  return i < 128;
+}
+
+static int SameFontPath(const char* first, const char* second) {
+  while (*first &&
+         toupper((unsigned char)*first) == toupper((unsigned char)*second)) {
+    ++first;
+    ++second;
+  }
+  return toupper((unsigned char)*first) == toupper((unsigned char)*second);
+}
+
+static int ReadPrintingFont(const char* path, unsigned reader,
+                            FontFileInfo* info) {
+  unsigned char header[32];
+  FILE* file = fopen(path, "rb");
+  int valid = file &&
+              fread(header, 1, sizeof(header), file) == sizeof(header) &&
+              DecodeFontFile(header, info) && info->format == 2 &&
+              info->width == 12 + reader * 4 && info->height == 24 + reader * 8;
+  if (valid) {
+    valid = !fseek(file, 0, SEEK_END) &&
+            ftell(file) == (long)info->payload_bytes + 32;
+  }
+  if (file) {
+    fclose(file);
+  }
+  return valid;
 }
 
 int ValidModuleChoices(const SetupChoices* choices) {
   unsigned i;
   if (choices->special_display > 2 || choices->printer >= kPrinterCount ||
-      choices->print_fonts > 31 || choices->print_access > 9 ||
+      choices->print_fonts > 31 || choices->print_memory > 2 ||
       choices->printer_flags > 31 || choices->vector_access > 2) {
     return 0;
   }
   for (i = 0; i < 3; ++i) {
-    if (!ValidStyles(choices->print_styles[i])) {
+    unsigned face;
+    unsigned command_size =
+        12 + (choices->low ? 3 : 0) + (choices->print_memory ? 3 : 0);
+    for (face = 0; face < 4; ++face) {
+      const char* path = choices->print_files[i][face];
+      if (!ValidFontPath(path)) {
+        return 0;
+      }
+      if (*path) {
+        command_size += strlen(path) + 5;
+      }
+    }
+    if (command_size > 126) {
       return 0;
     }
   }
@@ -57,7 +104,7 @@ int ValidModuleChoices(const SetupChoices* choices) {
 }
 
 const char* ValidateModules(const InstallationFiles* files,
-                           const SetupChoices* choices) {
+                            const SetupChoices* choices) {
   unsigned i;
   if (!ValidModuleChoices(choices)) {
     return "Invalid optional module selection.";
@@ -84,19 +131,11 @@ const char* ValidateModules(const InstallationFiles* files,
     }
     if (i >= 1 && i <= 3 && (choices->print_fonts & (1U << i))) {
       unsigned j;
-      unsigned base = kFileHzk24T + (i - 1) * 5;
-      const char* styles = PrintStyles(choices, i - 1);
-      const char* available = "SFHK";
-      if (!ValidStyles(styles)) {
-        return "Printing styles must contain one to four S/F/H/K letters.";
-      }
-      if (!files->size[base]) {
-        return "The selected printing reader needs its HZK24T/32T/40T font.";
-      }
-      for (j = 0; styles[j]; ++j) {
-        unsigned font = (unsigned)(strchr(available, styles[j]) - available) + 1;
-        if (!files->size[base + font]) {
-          return "A selected HZK24/32/40 printing style file is missing.";
+      FontFileInfo info;
+      for (j = 0; j < 4; ++j) {
+        if (!ReadPrintingFont(PrintFontPath(choices, i - 1, j), i - 1, &info)) {
+          return "Printing requires complete HHFONT2 files with 12x24, 16x32 "
+                 "or 20x40 cells.";
         }
       }
     }
@@ -106,6 +145,83 @@ const char* ValidateModules(const InstallationFiles* files,
     return "READSL needs HZKSLT and HZKSLSTJ for symbols and Song text.";
   }
   return 0;
+}
+
+static int ReserveFont(unsigned memory, unsigned long kb, unsigned long* xms,
+                       unsigned long* ems) {
+  if (memory != 2 && *xms >= kb) {
+    *xms -= kb;
+    return 1;
+  }
+  kb = (kb + 15) & ~15UL;
+  if (memory != 1 && *ems >= kb) {
+    *ems -= kb;
+    return 1;
+  }
+  return 0;
+}
+
+const char* ValidatePrintMemory(const MachineCapabilities* machine,
+                                const InstallationFiles* files,
+                                const SetupChoices* choices) {
+  unsigned reader, face;
+  unsigned long xms =
+      machine->xms_version
+          ? (machine->xms_largest < machine->xms_total ? machine->xms_largest
+                                                       : machine->xms_total)
+          : 0;
+  unsigned long ems =
+      machine->ems_version >= 0x40 ? (unsigned long)machine->ems_pages * 16 : 0;
+  if (!(choices->print_fonts & 14)) {
+    return NULL;
+  }
+  if (machine->loaded) {
+    xms = machine->xms_version ? 0x100000UL : 0;
+    ems = machine->ems_version >= 0x40 ? 0x100000UL : 0;
+  }
+  if (choices->font == kFontXms) {
+    xms = xms >= 256 ? xms - 256 : 0;
+  }
+  if (choices->font == kFontEms) {
+    ems = ems >= 256 ? ems - 256 : 0;
+  }
+  if (SelectedVbeMode(choices)) {
+    const DisplayFont* display = SelectedDisplayFont(machine, files, choices);
+    unsigned long kb;
+    if (!display) {
+      return "No display font fits the selected mode.";
+    }
+    kb = (DisplayFontFamilyBytes(machine, files, choices) + 1023) / 1024 + 36;
+    if (!ReserveFont(0, kb, &xms, &ems)) {
+      return "Insufficient XMS/EMS for the display font.";
+    }
+  }
+  for (reader = 0; reader < 3; ++reader) {
+    if (!(choices->print_fonts & (2U << reader))) {
+      continue;
+    }
+    for (face = 0; face < 4; ++face) {
+      unsigned previous;
+      FontFileInfo info;
+      const char* path = PrintFontPath(choices, reader, face);
+      for (previous = 0; previous < face; ++previous) {
+        if (SameFontPath(path, PrintFontPath(choices, reader, previous))) {
+          break;
+        }
+      }
+      if (previous != face) {
+        continue;
+      }
+      if (!ReadPrintingFont(path, reader, &info)) {
+        return "Invalid printing font file.";
+      }
+      if (!ReserveFont(choices->print_memory,
+                       (info.payload_bytes + 1023) / 1024, &xms, &ems)) {
+        return "Insufficient XMS/EMS for the printing fonts.";
+      }
+    }
+  }
+  return NULL;
 }
 
 unsigned long ModuleMemoryKb(const InstallationFiles* files,
@@ -118,14 +234,6 @@ unsigned long ModuleMemoryKb(const InstallationFiles* files,
   for (i = 0; i < 5; ++i) {
     if (choices->print_fonts & (1U << i)) {
       bytes += files->size[kFileRead16 + i] + 256;
-      /* READ24's sector cache holds 50 glyphs of 74 bytes per unit. */
-      if (i == 1 && choices->print_access) {
-        bytes += (unsigned long)choices->print_access * 50 * 74;
-      } else if ((i == 2 || i == 3) && choices->print_access) {
-        /* These optional readers are distribution binaries, not built here.
-         * Reserve a full real-mode segment rather than assume a cache layout. */
-        bytes += 65536UL;
-      }
     }
   }
   if (choices->printer) {
@@ -149,12 +257,17 @@ char* AppendModuleCommands(const SetupChoices* choices, char* out) {
     if (choices->print_fonts & (1U << i)) {
       out += sprintf(out, ".\\%s", kFileNames[kFileRead16 + i]);
       if (i && i < 4) {
-        out += sprintf(out, " %c", choices->print_access
-                                       ? '0' + choices->print_access
-                                       : 'W');
-        out += sprintf(out, "%s", PrintStyles(choices, i - 1));
-      } else if (i == 4 && (choices->vector_access == 1 ||
-                 (!choices->vector_access && !choices->print_access))) {
+        unsigned face;
+        for (face = 0; face < 4; ++face) {
+          if (choices->print_files[i - 1][face][0]) {
+            out += sprintf(out, " /F%u:%s", face,
+                           choices->print_files[i - 1][face]);
+          }
+        }
+        if (choices->print_memory) {
+          out += sprintf(out, " /%c", choices->print_memory == 1 ? 'X' : 'E');
+        }
+      } else if (i == 4 && choices->vector_access != 2) {
         out += sprintf(out, " W");
       }
       out += sprintf(out, "%s\r\n", low);
@@ -171,8 +284,8 @@ char* AppendModuleCommands(const SetupChoices* choices, char* out) {
       }
       out += sprintf(out, "%s\r\n", low);
     } else {
-      out += sprintf(out, ".\\PR.EXE %u\r\n.\\PRTH.COM%s\r\n",
-                     printer->number, low);
+      out += sprintf(out, ".\\PR.EXE %u\r\n.\\PRTH.COM%s\r\n", printer->number,
+                     low);
     }
   }
   return out;
@@ -239,20 +352,21 @@ int ReadModuleChoices(const char* batch, SetupChoices* choices) {
   SetupChoices parsed = *choices;
   const char* line = batch;
   unsigned printer_driver = 0, printer_number = 0;
-  unsigned saw_pr = 0, saw_access = 0, saw_core = 0;
+  unsigned saw_pr = 0, saw_memory = 0, saw_core = 0;
   unsigned i;
   if (!batch || strlen(batch) >= kBatchSize) {
     return 0;
   }
   parsed.special_display = parsed.printer = parsed.print_fonts = 0;
-  parsed.printer_flags = parsed.vector_access = 0;
+  parsed.printer_flags = parsed.vector_access = parsed.print_memory = 0;
   parsed.ime &= ~kImeWubi;
-  memset(parsed.print_styles, 0, sizeof(parsed.print_styles));
+  memset(parsed.print_files, 0, sizeof(parsed.print_files));
   while (*line && *line != '\x1a') {
     char text[256];
     char *cursor, *command, *argument;
     unsigned length = (unsigned)strcspn(line, "\r\n\x1a");
     unsigned count = 0, number = 0;
+    unsigned font_memory = 0;
     int file;
     if (length >= sizeof(text)) {
       return 0;
@@ -292,8 +406,8 @@ int ReadModuleChoices(const char* batch, SetupChoices* choices) {
     } else if (file == kFileCkbd) {
       parsed.paired = 0;
     } else if (file >= kFileVga && file <= kFileCga) {
-      static const unsigned videos[] = {
-          kVideoVga, kVideo102, kVideoEga, kVideoHga, kVideoCga};
+      static const unsigned videos[] = {kVideoVga, kVideo102, kVideoEga,
+                                        kVideoHga, kVideoCga};
       parsed.video = videos[file - kFileVga];
       parsed.mode = 0;
       parsed.rows = 0;
@@ -322,10 +436,12 @@ int ReadModuleChoices(const char* batch, SetupChoices* choices) {
                  argument[1] >= '1' && argument[1] <= '5' && !argument[2]) {
         parsed.printer_flags |= 1U << (argument[1] - '1');
       } else if (file == kFileVesa && !strncmp(argument, "/M:", 3) &&
-                 ParseNumber(argument + 3, 16, &number) &&
-                 number >= 0x100 && number <= 0x3fff) {
-        parsed.video = number == 0x102 ? kVideo102 : number == 0x104 ? kVideo104 :
-                       number == 0x106 ? kVideo106 : kVideoDetected;
+                 ParseNumber(argument + 3, 16, &number) && number >= 0x100 &&
+                 number <= 0x3fff) {
+        parsed.video = number == 0x102   ? kVideo102
+                       : number == 0x104 ? kVideo104
+                       : number == 0x106 ? kVideo106
+                                         : kVideoDetected;
         parsed.mode = parsed.video == kVideoDetected ? number : 0;
       } else if (file == kFileVesa && !strncmp(argument, "/R:", 3) &&
                  ParseNumber(argument + 3, 10, &number) && number &&
@@ -335,32 +451,43 @@ int ReadModuleChoices(const char* batch, SetupChoices* choices) {
                  ParseNumber(argument, 10, &number)) {
         printer_number = number;
         saw_pr |= file == kFilePr;
-      } else if (file >= kFileRead24 && file <= kFileReadsl && count++ == 0 &&
-                 (argument[0] == 'W' || (argument[0] >= '1' && argument[0] <= '9'))) {
-        unsigned access = argument[0] == 'W' ? 0 : argument[0] - '0';
-        if (file != kFileReadsl && saw_access && parsed.print_access != access) {
+      } else if (file >= kFileRead24 && file <= kFileRead40 &&
+                 (!strcmp(argument, "/X") || !strcmp(argument, "/E"))) {
+        if (font_memory) {
           return 0;
         }
-        if (file != kFileReadsl) {
-          parsed.print_access = access;
-          saw_access = 1;
-          if (!argument[1] || !ValidStyles(argument + 1)) {
-            return 0;
-          }
-          strcpy(parsed.print_styles[file - kFileRead24], argument + 1);
-        } else {
-          if (argument[1]) {
-            return 0;
-          }
-          parsed.vector_access = access ? 2 : 1;
+        font_memory = argument[1] == 'X' ? 1 : 2;
+      } else if (file >= kFileRead24 && file <= kFileRead40 &&
+                 !strncmp(argument, "/F", 2)) {
+        unsigned face = 0;
+        const char* path = argument + 2;
+        if (*path >= '0' && *path <= '3') {
+          face = *path++ - '0';
         }
+        if (*path++ != ':' || !*path || !ValidFontPath(path)) {
+          return 0;
+        }
+        strcpy(parsed.print_files[file - kFileRead24][face], path);
+      } else if (file == kFileReadsl && count++ == 0 &&
+                 (argument[0] == 'W' ||
+                  (argument[0] >= '1' && argument[0] <= '9'))) {
+        if (argument[1]) {
+          return 0;
+        }
+        parsed.vector_access = argument[0] == 'W' ? 1 : 2;
       } else {
         return 0;
       }
     }
-    if ((file == kFilePr || (file >= kFileRead24 && file <= kFileRead40)) &&
-        count != 1) {
+    if (file == kFilePr && count != 1) {
       return 0;
+    }
+    if (file >= kFileRead24 && file <= kFileRead40) {
+      if (saw_memory && parsed.print_memory != font_memory) {
+        return 0;
+      }
+      parsed.print_memory = font_memory;
+      saw_memory = 1;
     }
   }
   if (printer_driver == 2 && !saw_pr) {
@@ -368,7 +495,8 @@ int ReadModuleChoices(const char* batch, SetupChoices* choices) {
   }
   if (printer_driver) {
     for (i = 1; i < kPrinterCount; ++i) {
-      if (kPrinters[i].driver == printer_driver && kPrinters[i].number == printer_number) {
+      if (kPrinters[i].driver == printer_driver &&
+          kPrinters[i].number == printer_number) {
         parsed.printer = i;
         break;
       }
@@ -376,6 +504,9 @@ int ReadModuleChoices(const char* batch, SetupChoices* choices) {
     if (i == kPrinterCount) {
       return 0;
     }
+  }
+  if (!ValidModuleChoices(&parsed)) {
+    return 0;
   }
   *choices = parsed;
   return 1;
