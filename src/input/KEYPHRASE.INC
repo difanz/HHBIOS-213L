@@ -6,6 +6,7 @@ P_LENGTH        DW      0
 P_CURSOR        DW      0
 P_PAGE          DW      -1
 P_END           DW      0
+P_SEG           DW      0
 
 S_PHRASE_MOVE   PROC    NEAR
                 PUSH    DX
@@ -107,6 +108,11 @@ L_PO_UNLOCK:
                 MOV     CS:T_BUSY,0
                 MOV     CS:T_FAULT,0
 L_PO_DONE:
+                CMP     CS:P_HANDLE,0
+                JE      L_PO_RESTORE
+                MOV     AX,CS:D_SPCZ
+                MOV     CS:P_SEG,AX
+L_PO_RESTORE:
                 POP     DS
                 POP     BP
                 POP     DI
@@ -125,6 +131,9 @@ S_PHRASE_OPEN   ENDP
 S_PHRASE_SEARCH PROC    NEAR
                 CMP     CS:P_HANDLE,0
                 JE      L_PS_FALLBACK
+                MOV     AX,DS
+                CMP     AX,CS:P_SEG
+                JNE     L_PS_FALLBACK
                 CMP     CS:T_BUSY,0
                 JNE     L_PS_FALLBACK
                 MOV     AX,DS:[0]
@@ -167,7 +176,9 @@ L_PS_CACHED:
 L_PS_SECOND:
                 CMP     SI,CS:P_END
                 JAE     L_PS_NEXT
-                LODSW
+                CALL    S_DICT_LODSW
+                CMP     CS:T_FAULT,0
+                JNE     L_PS_FAILED
                 TEST    AX,8080H
                 JZ      L_PS_NEXT
                 CALL    S_A9A0

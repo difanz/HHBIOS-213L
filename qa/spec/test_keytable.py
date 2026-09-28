@@ -23,7 +23,9 @@ SYMBOLS = ('S_TABLE_WORD', 'S_TABLE_NEXT', 'S_TABLE_OPEN', 'T_XMS', 'T_HANDLE',
            'S_A9C0', 'D_PY', 'L_A597', 'D_DB', 'D_SW', 'S_INDEX_OPEN',
            'I_HANDLE', 'I_SW', 'I_PY', 'I_LENGTH', 'P_HANDLE', 'P_LENGTH',
            'S_PHRASE_OPEN', 'S_A9000', 'D_SPCZ', 'D_2CC1', 'D_9648',
-           'S_INDEX_SIZE', 'S_PHRASE_NEXT', 'D_959D', 'L_S60')
+           'S_INDEX_SIZE', 'S_PHRASE_NEXT', 'D_959D', 'L_S60',
+           'INT_16', 'S_DICT_OPEN', 'Q_HANDLE', 'Q_BASE', 'Q_CACHE',
+           'Q_SERIAL', 'D_INKEY', 'D_PUMP')
 
 
 @pytest.fixture(scope='session', params=['8086', '386', '586'])
@@ -41,12 +43,21 @@ def table_binary(assembler, source_dir, tmp_path_factory, request):
     return raw, symbols
 
 
+@pytest.mark.unit
 def test_install_helpers_fit_existing_return_buffer_prefix(table_binary):
     _, symbols = table_binary
     start = symbols['D_959D']
     assert start == symbols['S_INDEX_SIZE'] < symbols['S_PHRASE_NEXT'] < start + 64
     assert symbols['L_S60'] == start + 64
     assert symbols['T_CACHE'] == start + 1024
+
+
+@pytest.mark.unit
+def test_all_tables_and_index_staging_fit_the_installer_segment(table_binary):
+    # The loader initially reads all three shipped code tables into this
+    # segment, then stages index records above them before moving to XMS.
+    _, symbols = table_binary
+    assert symbols['T_CACHE'] + 14108 + 13540 + 20000 + 1024 <= 65536
 
 
 class Tables:
@@ -518,10 +529,12 @@ def test_msdos_distribution_tables_and_unload(dosbox_binary, memory_build,
     assert len(payload) == 14108
     dictionary = read('HHBIOS/SPCZ.DAT')
     two_end, = struct.unpack_from('<H', dictionary)
+    basic_end, = struct.unpack_from('<H', dictionary, 4)
     groups = sum(not (word & 0x8080) for (word,) in
                  struct.iter_unpack('<H', dictionary[16:two_end]))
     table_kb = (len(payload)+1023)//1024
     index_kb = ((len(payload)-572)*2+1023)//1024 + (groups*4+1023)//1024
+    dictionary_kb = (basic_end+1023)//1024
     startup = re.sub(rb'(?im)^CALL HHBIOS.BAT\s*$', b'', read('AUTOEXEC.BAT'))
     (tmp_path/'STARTUP.BAT').write_bytes(startup)
     copy_in(tmp_path/'STARTUP.BAT', '::STARTUP.BAT')
@@ -560,11 +573,16 @@ def test_msdos_distribution_tables_and_unload(dosbox_binary, memory_build,
         if cycle:
             assert live.resident(0x10) >= 0xa000
             assert live.occupied() == before.occupied()
-            assert local_xms-live.xms == table_kb+index_kb
+            assert local_xms-live.xms == table_kb+index_kb+dictionary_kb
+            assert sizes[-1] < 24*1024
         else:
             local_xms = live.xms
     assert sizes[1] == sizes[2]
-    assert abs((sizes[0]-sizes[1])-(len(payload)-1024)) < 16
+    # The full basic dictionary is replaced by its live header and 2 KiB
+    # cache; mutable capacity remains resident. Paragraph rounding affects
+    # both the table/dictionary boundary and the final allocation.
+    saved = len(payload)-1024 + basic_end-16-2048
+    assert abs((sizes[0]-sizes[1])-saved) < 64
 
 
 @pytest.mark.dos
@@ -596,9 +614,15 @@ def test_irq_input_and_candidate_paging(dosbox_binary, memory_build, tmp_path, l
         (tmp_path/'PYMB').write_bytes(b'\xb0\xa1'*286+struct.pack('<6768H', *codes))
         dictionary = bytearray(16)
         dictionary += b'\x30\x21\xb0\xa2'  # two-character group
+        # Large enough to exercise real XMS compaction, including its second
+        # cache page; these groups have a different first pinyin key.
+        dictionary += b'\x30\x23\xb0\xa4' * 1200
+        two_end = len(dictionary)
         dictionary += b'\x30\x23\xb0\xa4\xb0\xa5'  # three-character section
+        three_end = len(dictionary)
         dictionary += b'\xb0\xa3\xb0\xa4\xb0\xa5\xb0\xa6,'
-        struct.pack_into('<4H', dictionary, 0, 20, 26, 35, 35)
+        struct.pack_into('<4H', dictionary, 0, two_end, three_end,
+                         len(dictionary), len(dictionary))
         dictionary[15] = 255
         (tmp_path/'SPCZ.DAT').write_bytes(dictionary)
     (tmp_path/'SCREEN.KEY').touch()

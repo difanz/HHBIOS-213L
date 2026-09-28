@@ -10,6 +10,13 @@ SEG_A		SEGMENT
 START:		JMP	BEGIN
 
 D_FILE1 	DB	'\SPCZ.DAT',0
+D_API           DB      0
+D_SHRUNK        DB      0
+D_SYNCERR       DB      0
+D_CAPACITY      DW      0
+D_GENERATION    DW      0
+NOMEM           DB      'Not enough memory!',7,13,10,'$'
+SYNCERR         DB      'Cannot update phrase dictionary!',7,13,10,'$'
 D_END		DW	0			;双拼词组尾
 D_NUM		DW	0			;双拼扩展词组数
 WRITERR 	DB	'文件写错误!',7,13,10,'$'
@@ -52,6 +59,35 @@ L_20:
 		REP	MOVSB			;形成文件全名
 		POP	DI
 
+        ; New CKBD may keep only the mutable tail in conventional memory.
+        ; Negotiate before reading its historical dictionary pointer.
+        PUSH BP
+        PUSH DI
+        MOV AX,2E00H
+        MOV BX,4B48H
+        INT 16H
+        POP DI
+        POP BP
+        OR AX,AX
+        JZ L_SYNCERR
+        CMP AX,4B48H
+        JNE L_DICT_LEGACY
+        MOV D_CAPACITY,CX
+        MOV D_API,1
+        CALL S_ALLOC
+        MOV ES,AX
+        PUSH AX
+        XOR DI,DI
+        MOV CX,D_CAPACITY
+        MOV AX,2E01H
+        MOV BX,4B48H
+        INT 16H
+        POP BX
+        CMP AX,4B48H
+        JNE L_SYNCERR
+        MOV D_GENERATION,DX
+        JMP SHORT L_22
+L_DICT_LEGACY:
 		MOV	ES,BP
 		MOV	BX,ES:[DI+18]		;双拼词组段
 		OR	BX,BX			;=0:未安装?
@@ -68,11 +104,12 @@ L_22:
 		POP	ES
 		CALL	S_CL			;双拼扩展词组处理
 		JNB	L_25
+        CMP CS:D_SYNCERR,0
+        JNE L_SYNCERR
 		JMP	L_EXIT1
 L_25:
 		XOR	SI,SI
-		MOV	AX,CS
-		ADD	AX,1000H		;下一64K段
+        CALL S_ALLOC
 		MOV	ES,AX
 		XOR	DI,DI
 		MOV	CX,DS:[4]		;双拼词组234字词尾
@@ -209,6 +246,16 @@ L_60:
 		INT	21H
 		XOR	AL,AL
 		JMP	SHORT L_EXIT
+L_NOMEM:
+        PUSH CS
+        POP DS
+        MOV DX,OFFSET NOMEM
+        JMP SHORT L_ERR
+L_SYNCERR:
+        PUSH CS
+        POP DS
+        MOV DX,OFFSET SYNCERR
+        JMP SHORT L_ERR
 L_WERR:
 		PUSH	CS
 		POP	DS
@@ -341,7 +388,9 @@ L_CL6C:
 		SHL	BX,1
 		ADD	BX,OFFSET D_BUF
 		MOV	[BX],DI 		;存词组首
-		MOV	WORD PTR [BX+2],0	;8.7
+        SUB AX,2
+        MOV [BX+2],AX
+        MOV WORD PTR [BX+4],0
 		INC	D_NUM			;词组数+1
 
 		MOV	SI,OFFSET D_INKEY+2	;键入词组首
@@ -352,7 +401,13 @@ L_CL6C:
 		MOV	DS:[6],DI		;新扩展词组尾
 		XOR	AX,AX
 		STOSW				;尾标志
+        CALL S_SYNC
+        CMP CS:D_SYNCERR,0
+        JNE L_CL_SYNCERR
 		JMP	L_CL6A
+L_CL_SYNCERR:
+        STC
+        RET
 L_CL7:
 		CMP	AL,'2'                  ;'2':删除
 		JZ	L_CL8
@@ -421,6 +476,9 @@ L_CL8F:
 		REP	MOVSB			;前移
 		SUB	DI,2
 		MOV	DS:[6],DI		;新扩展词组尾
+        CALL S_SYNC
+        CMP CS:D_SYNCERR,0
+        JNE L_CL_SYNCERR
 		JMP	L_CL4A
 
 ;子程序:显示字符串DS:DX($结尾)
@@ -557,6 +615,66 @@ L_IN3:
 		CLC
 		RET
 S_INPUT 	ENDP
+
+; CSP is a foreground editor. Keep its own 64 KiB segment (including the
+; phrase-offset list and DOS stack), then ask DOS for each work segment.
+S_ALLOC PROC NEAR
+        PUSH ES
+        CMP CS:D_SHRUNK,0
+        JNE L_ALLOC_BLOCK
+        PUSH CS
+        POP ES
+        MOV BX,1000H
+        MOV AH,4AH
+        INT 21H
+        JC L_NOMEM
+        MOV CS:D_SHRUNK,1
+L_ALLOC_BLOCK:
+        MOV BX,1000H
+        MOV AH,48H
+        INT 21H
+        JC L_NOMEM
+        POP ES
+        RET
+S_ALLOC ENDP
+
+; Esc skips the disk write, but historically keeps edits in the resident
+; extension. Publish each edit before the next prompt. A stale snapshot
+; must never overwrite phrases learned while the editor was waiting.
+S_SYNC PROC NEAR
+        PUSHF
+        PUSH AX
+        PUSH BX
+        PUSH CX
+        PUSH DX
+        PUSH DI
+        PUSH ES
+        CMP CS:D_API,0
+        JE L_SYNC_DONE
+        PUSH DS
+        POP ES
+        XOR DI,DI
+        MOV CX,CS:D_CAPACITY
+        MOV DX,CS:D_GENERATION
+        MOV AX,2E02H
+        MOV BX,4B48H
+        INT 16H
+        CMP AX,4B48H
+        JNE L_SYNC_FAILED
+        MOV CS:D_GENERATION,DX
+        JMP SHORT L_SYNC_DONE
+L_SYNC_FAILED:
+        MOV CS:D_SYNCERR,1
+L_SYNC_DONE:
+        POP ES
+        POP DI
+        POP DX
+        POP CX
+        POP BX
+        POP AX
+        POPF
+        RET
+S_SYNC ENDP
 
 D_BUF	EQU	$
 

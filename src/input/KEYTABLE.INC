@@ -249,6 +249,14 @@ TABLE_INT2F     PROC    FAR
                 PUSH    AX
                 PUSH    BX
                 PUSH    DX
+                MOV     DX,CS:Q_HANDLE
+                OR      DX,DX
+                JZ      L_TI_PHRASE
+                MOV     AH,0AH
+                CLD
+                CALL    CS:T_XMS
+                MOV     CS:Q_HANDLE,0
+L_TI_PHRASE:
                 MOV     DX,CS:P_HANDLE
                 OR      DX,DX
                 JZ      L_TI_INDEX

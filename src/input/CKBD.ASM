@@ -150,6 +150,12 @@ D_DB		DW	0			;电报码表地址
 
 ;---键盘管理中断---------------------------------
 INT_16		PROC	FAR
+                CMP AH,2EH
+                JNE L_KEYDRAIN
+                CMP BX,4B48H
+                JNE L_KEYENTRY
+                JMP DICT_API
+L_KEYDRAIN:
 		CMP	AH,2DH
 		JNZ	L_KEYENTRY
 		CMP	BX,4B48H
@@ -289,7 +295,7 @@ L_0010:
 ;AH=25H *** 显示版本信息 BL=显示属性
 L_AH25:
 		CALL	S_XSBB
-		JMP	SHORT L_RET
+		JMP	L_RET
 
 ;AH=29H *** 重显提示行
 L_AH29:
@@ -362,6 +368,10 @@ L_AH20:
 		POP	CX
 		JMP	SHORT L_RET2
 L_2000:
+                CMP BL,3
+                JNE L_2000_STORE
+                INC Q_SERIAL
+L_2000_STORE:
 		MOV	[DI],BP 		;段
 		MOV	[DI+2],DX		;外码区首
 		MOV	[DI+4],CX		;内码区首
@@ -831,11 +841,20 @@ AF9_D:
 		CMP	AX,ES:[8]		;比双拼词组区尾?
 		JA	AF9_ERR
 		MOV	ES:[6],AX
+		CMP	CS:Q_HANDLE,0
+		JE	AF9_STORE
+		MOV	AX,ES
+		CMP	AX,CS:Q_SEG
+		JNE	AF9_STORE
+		SUB	DI,CS:Q_BASE
+		ADD	DI,16
+AF9_STORE:
 		REP	MOVSB			;写入新词
 		MOV	AL,','
 		STOSB
 		XOR	AX,AX
 		STOSW				;结束标志
+		INC	CS:Q_SERIAL
 		RET
 CF1_0:
 		XOR	BH,BH
@@ -3365,22 +3384,31 @@ L_A634:
 		CMP	CS:D_2BD4,0		;判二字词偏移?
 		JZ	L_A650
 L_A640:
-		LODSW				;传送第一字
+		CALL	S_DICT_LODSW		;传送第一字
 		OR	AX,8080H
 		STOSW
 		TEST	CS:D_2BB9,80H		;二字词叠字?
 		JZ	L_A642
-		MOV	AX,[SI-2]
+		PUSH	BX
+		LEA	BX,[SI-2]
+		CALL	S_DICT_WORD
+		POP	BX
 		STOSW
 L_A642:
 		MOV	AL,CS:D_2BD4
 		CBW
 		MOV	CS:D_2BD4,AH		;清0
 		ADD	SI,AX			;加偏移
-		MOVSW				;传送第二字
+		PUSH	AX
+		CALL	S_DICT_LODSW
+		STOSW				;传送第二字
+		POP	AX
 		TEST	CS:D_2BB9,80H		;二字词叠字?		11.11
 		JZ	L_A660
-		MOV	AX,[SI-2]
+		PUSH	BX
+		LEA	BX,[SI-2]
+		CALL	S_DICT_WORD
+		POP	BX
 		STOSW
 		ADD	CS:D_95D5,4
 		JMP	SHORT L_A660
@@ -3390,10 +3418,14 @@ L_A650:
 		CMP	CL,4			;判二字词?
 		JZ	L_A640
 L_A654:
-		REP	MOVSB
+		CALL	S_DICT_COPY
 L_A660:
 		PUSH	CS
 		POP	DS
+		CMP	T_FAULT,0
+		JE	L_A660A
+		MOV	D_95D5,0
+L_A660A:
 		TEST	D_2BB9,8		;判双拼词组?
 		JZ	L_A664
 		MOV	CL,4
@@ -3444,33 +3476,33 @@ L_A6BC:
 		MOV	DS,D_2B98		;词表段
 		OR	CH,CH			;判二字词偏移?
 		JZ	L_A6DB
-		LODSB				;取一字节
+		CALL	S_DICT_LODSB		;取一字节
 		OR	AL,80H
 		CALL	S_1403A 		;显示
-		LODSB				;取一字节
+		CALL	S_DICT_LODSB		;取一字节
 		OR	AL,80H
 		CALL	S_1403A 		;显示
 		MOV	AL,CH
 		XOR	AH,AH
 		ADD	SI,AX			;加偏移
-		LODSB				;取一字节
+		CALL	S_DICT_LODSB		;取一字节
 		CALL	S_1403A 		;显示
-		LODSB				;取一字节
+		CALL	S_DICT_LODSB		;取一字节
 		CALL	S_1403A 		;显示
 		JMP	SHORT L_A6E0
 L_A6DB:
 		TEST	CS:D_2BB9,8		;判双拼词组?
 		JZ	L_A6DE
 L_A6DC:
-		LODSB				;取一字节		3.15
+		CALL	S_DICT_LODSB		;取一字节		3.15
 		OR	AL,80H
 		CALL	S_1403A 		;显示
-		LODSB				;取一字节
+		CALL	S_DICT_LODSB		;取一字节
 		OR	AL,80H
 		CALL	S_1403A 		;显示
 		SUB	CX,2
 L_A6DE:
-		LODSB				;取一字节
+		CALL	S_DICT_LODSB		;取一字节
 		CALL	S_1403A 		;显示
 		LOOP	L_A6DE
 L_A6E0:
@@ -3480,13 +3512,21 @@ L_A6E0:
 		POP	DS
 		POP	CX
 		POP	DX
+		CMP	T_FAULT,0
+		JE	L_A6NEXT
+		MOV	DL,16
+		CALL	S_9F30
+		RET
+L_A6NEXT:
 		INC	DL			;序号+1
 		CMP	DL,3AH
 		JNZ	L_A6F3
 		MOV	DL,'0'                  ;10='0'
 L_A6F3:
-		LOOP	L_A6B8
+		LOOP	L_A6MORE
 		RET
+L_A6MORE:
+		JMP	L_A6B8
 
 ;【重选词组】
 L_A73B:
@@ -3741,11 +3781,19 @@ S_A9000:
 
 		MOV	SI,DS:[4]		;扩展词库首
 L_A901:
+		CMP	CS:T_FAULT,0
+		JNE	L_A970
 		CMP	SI,DS:[6]		;判:扩展词库尾?
 		JZ	L_A940			;判:基本词库
 		XOR	BP,BP
 L_A903:
-		CMP	BYTE PTR DS:[BP+SI],',' ;判词尾?
+		PUSH	BX
+		LEA	BX,[BP+SI]
+		CALL	S_DICT_BYTE
+		POP	BX
+		CMP	CS:T_FAULT,0
+		JNE	L_A970
+		CMP	AL,',' ;判词尾?
 		JZ	L_A910
 		INC	BP
 		JMP	SHORT L_A903
@@ -3753,10 +3801,10 @@ L_A910:
 		CMP	BP,4			;二字词?
 		JNZ	L_A920
 		MOV	DI,SI
-		LODSW				;取一字
+		CALL	S_DICT_LODSW		;取一字
 		CALL	S_A9A0			;取双拼
 		CMP	AX,WORD PTR CS:D_2CC1	;判?
-		LODSW
+		CALL	S_DICT_LODSW
 		JNZ	L_A919
 		CALL	S_A9A0			;取双拼
 		CMP	AL,CS:D_2CC1+2		;判第三码?
@@ -3785,16 +3833,18 @@ L_A940:
 		MOV	BP,4			;二字词
 		MOV	SI,16
 L_A941:
+		CMP	CS:T_FAULT,0
+		JNE	L_A970
 		XOR	DL,DL
 		CMP	SI,DS:[0]		;三字词开始?
 		JZ	L_A950
 		MOV	DI,SI
-		LODSW				;取一字
+		CALL	S_DICT_LODSW		;取一字
 		CALL	S_A9A0			;取双拼
 		CMP	AX,WORD PTR CS:D_2CC1	;判?
 		JZ	L_A945
 L_A942:
-		LODSW
+		CALL	S_DICT_LODSW
 		TEST	AX,8080H		;判下一行首?
 		JNZ	L_A942
 L_A943:
@@ -3803,7 +3853,7 @@ L_A943:
 L_A944:
 		ADD	DL,2			;偏移
 L_A945:
-		LODSW				;取一字
+		CALL	S_DICT_LODSW		;取一字
 		TEST	AX,8080H		;判下一行首?
 		JZ	L_A943
 		CALL	S_A9A0			;取双拼
@@ -3821,11 +3871,15 @@ L_A950:
 		JNZ	L_A960
 		MOV	BP,6			;三字词
 L_A951:
+		CMP	CS:T_FAULT,0
+		JNE	L_A970
 		CMP	SI,DS:[2]		;四字词开始地址?
 		JZ	L_A970
 		CALL	S_SP6
 		JMP	SHORT L_A951
 L_A960:
+		CMP	CS:T_FAULT,0
+		JNE	L_A970
 		CMP	SI,DS:[4]		;四字词结束?
 		JZ	L_A970
 		CALL	S_SP8
@@ -3837,17 +3891,17 @@ L_A970:
 		RET
 ;子程序:查找三字词
 S_SP6:
-		LODSW
+		CALL	S_DICT_LODSW
 		CALL	S_A9B0			;取双拼声母
 		CMP	AL,CS:D_2CC1
 		JZ	L_SP61
 		ADD	SI,4
 		RET
 L_SP61:
-		LODSW
+		CALL	S_DICT_LODSW
 		CALL	S_A9B0			;取双拼声母
 		CMP	AL,CS:D_2CC1+1
-		LODSW
+		CALL	S_DICT_LODSW
 		JNZ	L_SP62
 		CALL	S_A9B0			;取双拼声母
 		CMP	AL,CS:D_2CC1+2
@@ -3857,7 +3911,7 @@ L_SP62:
 		RET
 ;子程序:查找多字词
 S_SP8:
-		LODSW				;第一字
+		CALL	S_DICT_LODSW		;第一字
 		CALL	S_A9B0			;取双拼声母
 		CMP	AL,CS:D_2CC1
 		JZ	L_SP82
@@ -3865,7 +3919,13 @@ S_SP8:
 S_A980:
 		MOV	BP,6
 L_A981:
-		CMP	BYTE PTR [SI],','       ;判词尾?
+		PUSH	BX
+		MOV	BX,SI
+		CALL	S_DICT_BYTE
+		POP	BX
+		CMP	CS:T_FAULT,0
+		JNE	L_A981A
+		CMP	AL,','       ;判词尾?
 		JZ	L_A981A
 		INC	BP
 		INC	SI
@@ -3873,16 +3933,19 @@ L_A981:
 L_A981A:
 		RET
 L_SP82:
-		LODSW				;第二字
+		CALL	S_DICT_LODSW		;第二字
 		CALL	S_A9B0			;取双拼声母
 		CMP	AL,CS:D_2CC1+1
 		JNZ	S_A980
-		LODSW				;第三字
+		CALL	S_DICT_LODSW		;第三字
 		CALL	S_A9B0			;取双拼声母
 		CMP	AL,CS:D_2CC1+2
 		JNZ	S_A980
 		CALL	S_A980			;查找词尾
-		MOV	AX,[SI-2]		;取末字
+		PUSH	BX
+		LEA	BX,[SI-2]
+		CALL	S_DICT_WORD		;取末字
+		POP	BX
 		CALL	S_A9B0			;取双拼声母
 		CMP	AL,CS:D_2CC1+3
 		JNZ	L_SP83
@@ -3891,6 +3954,8 @@ L_SP83:
 		RET
 ;子程序:存查到词地址
 S_A990:
+		CMP	CS:T_FAULT,0
+		JNE	L_A993
 		INC	CS:D_9597		;重码数+1	11.16-
 		MOV	CX,BP			;词长
 		ADD	DH,CL			;累计词长
@@ -4002,6 +4067,8 @@ S_JRCL		ENDP
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 		INCLUDE	KEYEDIT.INC
 		INCLUDE	KEYTABLE.INC
+                INCLUDE KEYDICT.INC
+                INCLUDE KEYDAPI.INC
 
 D_SHIFT_DOWN	DB	0
 D_SHIFT_TOGGLE	DB	0
@@ -4199,6 +4266,7 @@ L_S98:
 		CALL	S_NOFOUND
 L_S100:
 		CALL	S_PHRASE_OPEN
+                CALL S_DICT_OPEN
 		MOV	DX,BP
 		MOV	BP,CS
 		MOV	DS,BP
@@ -4406,6 +4474,24 @@ L_SI_FLAGS:
 		ADD	AX,DX
 		MOV	D_SPCZ,AX
 L_SI2:
+                MOV AX,Q_SEG
+                OR AX,AX
+                JZ L_SI_PHRASE
+                MOV BX,CS
+                SUB AX,BX
+                MOV DX,DS
+                ADD AX,DX
+                MOV Q_SEG,AX
+L_SI_PHRASE:
+                MOV AX,P_SEG
+                OR AX,AX
+                JZ L_SI_DONE
+                MOV BX,CS
+                SUB AX,BX
+                MOV DX,DS
+                ADD AX,DX
+                MOV P_SEG,AX
+L_SI_DONE:
 		RET
 S_SETINT	ENDP
 
@@ -4479,7 +4565,8 @@ MSG		DB	'2.13L 汉字系统键盘模块 ',DATE,13,10
 D_EDITREQ	DB	0FFH
 BEGIN:
         require_386
-		MOV	SP,0D0H
+; Reuse the idle-exit stack until installation finishes; PSP:82h holds the path.
+                MOV SP,OFFSET D_28STK
 
 		MOV	SI,80H
 		LODSB

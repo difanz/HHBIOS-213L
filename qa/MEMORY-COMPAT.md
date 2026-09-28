@@ -16,8 +16,26 @@ The mutable phrase extension and three/multi-character sections retain their
 original scanners. Reverse searches preserve DF. A nested lookup during a refill uses its own
 two-byte destination and move descriptor on the caller's stack. Failed fills
 are not published, and input affected by a transfer failure is discarded.
-No cache space is retained when using resident tables (`CKBD /C`, no XMS, or
-initial allocation/copy failure). SPCZ.DAT remains writable resident storage.
+No table cache space is retained when using resident tables (`CKBD /C`, no XMS,
+or initial allocation/copy failure).
+
+The immutable basic section of SPCZ.DAT uses a separate XMS block and 2 KiB
+cache. Its live header and writable extension remain in the DOS block; logical
+file offsets are translated when reading the compacted extension. Installation
+keeps the complete resident dictionary if XMS allocation/copy fails or the
+dictionary is too small to benefit. Candidate order and the on-disk format stay
+unchanged. Replacing an external dictionary does not retarget an existing cache.
+
+CSP uses CKBD's INT 16h AH=2Eh, BX=4B48h interface to edit a private snapshot.
+AL=0 returns the logical capacity (including the two-byte terminator) in CX and
+the basic-section end in DX. AL=1 copies a snapshot to ES:DI (CX is its capacity)
+and returns an edit generation in DX. AL=2 replaces only the mutable extension
+from that snapshot, accepting its generation in DX and returning the new one.
+AX=4B48h means success; AX=0 means failure. A stale update is rejected without
+changing the resident dictionary. Other registers and caller flags are preserved.
+CSP publishes each edit, including edits followed by Esc without a disk save.
+Older CSP binaries that dereference the exposed dictionary segment require
+resident storage (`CKBD /C`); use the rebuilt CSP with XMS dictionaries.
 
 VESA owns its font allocation and relocated DOS block. Full HHBIOS unload
 detaches its native mouse callback, restores its interrupt hooks, and releases
@@ -27,6 +45,8 @@ printer unloads leave the display and input tables loaded.
 `test_keytable.py` executes CKBD's production table code with cache misses,
 nested calls, allocation/copy failures, frequency filtering, forward/reverse
 candidate searches, phrase order, extension edits and table boundaries.
+The dictionary cases also cover odd offsets, cache and basic/extension
+boundaries, nested transfers, candidate bytes, snapshot conflicts and CSP edits.
 DOS cases query all 6768 Hanzi and
 compare memory and vectors across repeated unload/reload, with XMS, EMS-only,
 forced conventional residency and forced resident tables. Physical keyboard
