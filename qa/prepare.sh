@@ -52,7 +52,7 @@ mkdir -p "$run" "$drive/PROBES" "$dist" "$cache/distribution"
 assembler=${JWASM:-$(command -v jwasm || printf '%s' "$cache/JWasm/build/GccUnixR/jwasm")}
 assembler=$(realpath "$assembler")
 if $build; then
-    make -C "$root" all "JWASM=$assembler"
+    make -C "$root" all setup "JWASM=$assembler"
     # DOS names stay within 8.3. Additional entries are assembly helper files.
     while read -r name source helpers; do
         output="$drive/PROBES/$name.COM"
@@ -95,6 +95,8 @@ PROBES
         env -u JWASM "$assembler" -q -0 -bin "-Fo$drive/PROBES/$name.COM" "$root/qa/harness/${name,,}.asm"
     done
 fi
+[[ -s $root/build/SETUP.EXE && -s $root/build/SETUP.LIC ]] || \
+    die 'Build SETUP first: make setup (tools/build-setup.sh --fetch obtains the UI source).'
 modules=("$run/VESA.COM" "$run/README")
 cp "$root/build/README" "$run/README"
 cp "$root/build/VESA.COM" "$root/fonts/HH20.FNT" "$run/"
@@ -103,23 +105,14 @@ while IFS= read -r -d '' source; do
     cp "$root/build/$name.COM" "$run/"
     modules+=("$run/$name.COM")
 done < <(find "$root/src" -name '*.ASM' -print0 | LC_ALL=C sort -z)
-[[ ! -f $root/build/SETUP.EXE ]] || cp "$root/build/SETUP.EXE" "$run/"
-[[ ! -f $root/build/SETUP.LIC ]] || cp "$root/build/SETUP.LIC" "$run/"
+cp "$root/build/SETUP.EXE" "$root/build/SETUP.LIC" "$run/"
+rm -f "$run/LSETUP.COM"
 
 # Preserve the original binary distribution, including its optional utilities,
 # code tables and both 16-pixel fonts; overlay rebuilt modules in the disk.
-command -v 7z >/dev/null || die 'Extracting the original ARJ self-extractors requires 7z.'
-while IFS= read -r name; do
-    case ${name^^} in
-        *.COM|*.EXE|*.BAT|*.INI|*.SYS|*.DAT|*.TAB|*.BIN)
-            git -C "$root" show "original-import:$name" > "$dist/${name^^}";;
-    esac
-done < <(git -C "$root" ls-tree --name-only original-import)
-for name in 213L 213M H16F; do
-    7z x -y -aoa "-o$dist" "$dist/$name.EXE" > "$cache/distribution/$name.log"
-done
 # shellcheck source=qa/msdos.sh
 source "$root/qa/msdos.sh"
+stage_distribution
 dos_lines '@ECHO OFF' 'C:' 'CD \HHBIOS' 'READ5' 'IF ERRORLEVEL 1 GOTO END' \
     'CKBD /E' 'IF ERRORLEVEL 1 GOTO END' 'VESA' ':END' '@ECHO ON' > "$dist/HHBIOS.BAT"
 

@@ -1,0 +1,347 @@
+/* Persistent keyboard, display and module choices from the 2.13L format. */
+#include <string.h>
+
+#include "forms.h"
+
+static const char* FunctionName(unsigned function) {
+  static const char* const english[kFunctionKeyCount] = {
+      "Chinese / native display", "GB2312 code input", "Shouwei input",
+      "Pinyin input", "Shuangpin input", "Full-width input", "English input",
+      "Wubi input", "Telegraph input", "Character selection", "Help",
+      "System menu", "Define Shuangpin phrase", "Printer settings"};
+  static const char* const chinese[kFunctionKeyCount] = {
+      "中西文显示切换", "区位码输入", "首尾码输入", "拼音输入", "双拼输入",
+      "纯中文输入", "英文输入", "五笔字型输入", "电报码输入", "预选字输入",
+      "联机帮助", "系统控制菜单", "定义双拼词组", "打印参数"};
+  return LocalizedText(english[function], chinese[function]);
+}
+
+static void ChangeBinding(IniSettings* settings, unsigned function) {
+  if (settings->value[kIniGreatWall] == 'Y' && function >= 1 && function <= 6) {
+    ShowMessage(LocalizedText("Turn off Great Wall keyboard to change this key.",
+                               "请先关闭仿长城键盘，再修改此功能键。"));
+    return;
+  }
+  Form form = {0};
+  a_list list = {0};
+  /* Only one binding chooser is open. Keep its bounded byte-code catalog
+   * outside the 8086 stack shared with the two parent dialogs. */
+  static char labels[256][32];
+  static const char* items[257];
+  static unsigned codes[256];
+  unsigned count = 0;
+  for (unsigned key = 0; key < 256; ++key) {
+    if (!IsFunctionKey(key)) {
+      continue;
+    }
+    DescribeFunctionKey(key, labels[count]);
+    codes[count] = key;
+    items[count] = labels[count];
+    if (settings->value[kIniKeys + function] == key) {
+      list.choice = count;
+    }
+    ++count;
+  }
+  items[count] = NULL;
+  list.data = items;
+  AddField(&form, 1, 2, 12, 50, FLD_LISTBOX, &list);
+  AddDialogButtons(&form, 15);
+  if (RunForm(&form, FunctionName(function), 17, 56, 0) == kCmdAccept &&
+      !AssignFunctionKey(settings, function, codes[list.choice])) {
+    ShowMessage(LocalizedText("This key is assigned to another function.",
+                               "此键已分配给其他功能。"));
+  }
+}
+
+static void ShowBindings(IniSettings* settings) {
+  IniSettings trial = *settings;
+  unsigned selected = 0;
+  for (;;) {
+    Form form = {0};
+    a_list list = {0};
+    char labels[kFunctionKeyCount][76];
+    const char* items[kFunctionKeyCount + 1];
+    for (unsigned i = 0; i < kFunctionKeyCount; ++i) {
+      char key[32];
+      DescribeFunctionKey(trial.value[kIniKeys + i], key);
+      sprintf(labels[i], "%-12s %s", key, FunctionName(i));
+      items[i] = labels[i];
+    }
+    items[kFunctionKeyCount] = NULL;
+    list.data = items;
+    list.choice = selected;
+    AddField(&form, 1, 2, 14, 66, FLD_LISTBOX, &list);
+    AddButton(&form, 16, 24, 22, LocalizedText("&Edit", "修改 (&E)"),
+              kCmdChange, 0);
+    AddDialogButtons(&form, 19);
+    ui_event event = RunForm(&form, LocalizedText("Function keys", "功能键配置"),
+                             21, 70, 0);
+    if (event == kCmdAccept) {
+      *settings = trial;
+      return;
+    }
+    if (event != kCmdChange) {
+      return;
+    }
+    selected = list.choice;
+    ChangeBinding(&trial, selected);
+  }
+}
+
+void ShowKeyboardOptions(IniSettings* settings) {
+  IniSettings trial = *settings;
+  for (;;) {
+    Form form = {0};
+    a_list phrases = {0};
+    a_radio_group toggle = {0};
+    static const char* const sizes[] = {
+        "0 KiB", "1 KiB", "2 KiB", "3 KiB", "4 KiB", "5 KiB",
+        "6 KiB", "7 KiB", "8 KiB", "9 KiB", NULL};
+    int great_wall = trial.value[kIniGreatWall] == 'Y';
+    phrases.data = (void*)sizes;
+    phrases.choice = trial.value[kIniPhraseKb] >= '0' &&
+                              trial.value[kIniPhraseKb] <= '9'
+                          ? trial.value[kIniPhraseKb] - '0' : 0;
+    toggle.value = toggle.def = trial.value[kIniShift];
+    AddCheck(&form, 1, LocalizedText("&Great Wall keyboard", "仿长城键盘 (&G)"),
+              great_wall);
+    AddParagraph(&form, 3, 2, 55,
+                 LocalizedText("Shuangpin phrase space (0 disables):",
+                               "双拼词组扩展区（0 为不安装）："));
+    AddField(&form, 5, 2, 3, 22, FLD_LISTBOX, &phrases);
+    AddParagraph(&form, 9, 2, 55,
+                 LocalizedText("Keyboard enable / disable key:", "系统功能开关键："));
+    AddRadio(&form, 10, LocalizedText("&Right Shift", "右 Shift (&R)"), &toggle, 1);
+    AddRadio(&form, 11, LocalizedText("&Left Shift", "左 Shift (&L)"), &toggle, 2);
+    AddRadio(&form, 12, "&Scroll Lock", &toggle, 16);
+    AddButton(&form, 14, 17, 26,
+              LocalizedText("&Function keys", "功能键配置 (&F)"), kCmdBindings, 0);
+    AddDialogButtons(&form, 17);
+    ui_event event = RunForm(&form, LocalizedText("Keyboard", "键盘设置"),
+                             19, 60, 0);
+    if (event != kCmdAccept && event != kCmdBindings) {
+      return;
+    }
+    if (great_wall != !!form.checks[0].val &&
+        !SetGreatWallMode(&trial, form.checks[0].val != 0)) {
+      ShowMessage(LocalizedText("The keyboard mapping conflicts with a function key.",
+                                 "键盘布局与现有功能键冲突。"));
+      continue;
+    }
+    trial.value[kIniShift] = (unsigned char)toggle.value;
+    trial.value[kIniPhraseKb] = (unsigned char)('0' + phrases.choice);
+    if (event == kCmdAccept) {
+      *settings = trial;
+      return;
+    }
+    ShowBindings(&trial);
+  }
+}
+
+static const char* ColorName(unsigned color) {
+  static const char* const english[] = {
+      "0 Black", "1 Blue", "2 Green", "3 Cyan", "4 Red", "5 Magenta",
+      "6 Brown", "7 Light gray", "8 Dark gray", "9 Bright blue",
+      "A Bright green", "B Bright cyan", "C Bright red", "D Bright magenta",
+      "E Yellow", "F White"};
+  static const char* const chinese[] = {
+      "0 黑", "1 蓝", "2 绿", "3 青", "4 红", "5 紫", "6 棕", "7 浅灰",
+      "8 深灰", "9 亮蓝", "A 亮绿", "B 亮青", "C 亮红", "D 亮紫",
+      "E 黄", "F 白"};
+  return LocalizedText(english[color], chinese[color]);
+}
+
+static unsigned SelectColor(unsigned attribute) {
+  Form form = {0};
+  a_list foreground = {0};
+  a_list background = {0};
+  const char* colors[17];
+  for (unsigned i = 0; i < 16; ++i) {
+    colors[i] = ColorName(i);
+  }
+  colors[16] = NULL;
+  foreground.data = background.data = colors;
+  foreground.choice = attribute & 15;
+  background.choice = attribute >> 4;
+  AddParagraph(&form, 1, 2, 25, LocalizedText("Text", "文字颜色"));
+  AddParagraph(&form, 1, 30, 25, LocalizedText("Background", "背景颜色"));
+  AddField(&form, 3, 2, 10, 25, FLD_LISTBOX, &foreground);
+  AddField(&form, 3, 30, 10, 25, FLD_LISTBOX, &background);
+  AddDialogButtons(&form, 15);
+  if (RunForm(&form, LocalizedText("Status color", "提示行颜色"), 17, 60, 0) ==
+      kCmdAccept) {
+    return (background.choice << 4) | foreground.choice;
+  }
+  return attribute;
+}
+
+static void ShowColors(IniSettings* settings) {
+  IniSettings trial = *settings;
+  unsigned selected = 0;
+  static const char* const english[] = {
+      "Candidates: characters / phrase numbers", "Candidates: phrases / character numbers",
+      "Input method title: graphics mode", "Input method title: text mode"};
+  static const char* const chinese[] = {
+      "候选字、词序号", "候选词、字序号", "输入法标题（图形方式）",
+      "输入法标题（文本方式）"};
+  for (;;) {
+    Form form = {0};
+    a_list list = {0};
+    char labels[4][76];
+    const char* items[5];
+    for (unsigned i = 0; i < 4; ++i) {
+      sprintf(labels[i], "%02X  %s", trial.value[kIniColors + i],
+              LocalizedText(english[i], chinese[i]));
+      items[i] = labels[i];
+    }
+    items[4] = NULL;
+    list.data = items;
+    list.choice = selected;
+    AddField(&form, 1, 2, 4, 66, FLD_LISTBOX, &list);
+    AddButton(&form, 7, 24, 22, LocalizedText("&Edit", "修改 (&E)"), kCmdChange, 0);
+    AddDialogButtons(&form, 10);
+    ui_event event = RunForm(&form, LocalizedText("Status colors", "提示行颜色"),
+                             12, 70, 0);
+    if (event == kCmdAccept) {
+      *settings = trial;
+      return;
+    }
+    if (event != kCmdChange) {
+      return;
+    }
+    selected = list.choice;
+    trial.value[kIniColors + selected] =
+        (unsigned char)SelectColor(trial.value[kIniColors + selected]);
+  }
+}
+
+typedef struct DisplayOption {
+  unsigned offset;
+  unsigned mask;
+  int inverted;
+  const char* english;
+  const char* chinese;
+} DisplayOption;
+
+void ShowDisplayOptions(IniSettings* settings) {
+  static const DisplayOption options[] = {
+      {kIniDisplay, 1, 0, "Extended character font", "使用扩展字符库"},
+      {kIniDisplay2, 1, 0, "Translate direct text-memory writes", "支持直接写屏"},
+      {kIniDisplay3, 1, 1, "Use Chinese display for modes above 5", "显示方式大于 5 时进入中文显示"},
+      {kIniDisplay, 8, 1, "Show startup information", "显示启动信息"},
+      {kIniDisplay2, 8, 0, "Move the cursor down two scanlines", "光标下移两条扫描线"},
+      {kIniDisplay3, 8, 0, "Pass CGA palette calls to BIOS", "允许 BIOS 设置 CGA 调色板"},
+      {kIniDisplay, 2, 0, "Keep the input status bar visible", "保持显示输入法提示行"},
+      {kIniDisplay3, 2, 1, "Allow programs to set cursor shape", "允许程序改变光标形状"},
+      {kIniDisplay3, 4, 0, "Initialize display attributes", "初始化显示属性寄存器"},
+      {kIniDisplay2, 2, 0, "Map B800 in graphics modes", "图形方式打开 B800 段"},
+      {kIniDisplay2, 4, 0, "Use BIOS character drawing and scrolling", "字符显示及滚屏调用 BIOS"}};
+  IniSettings trial = *settings;
+  for (;;) {
+    Form form = {0};
+    a_list band = {0};
+    static const char* const bands[] = {
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", NULL};
+    unsigned count = sizeof(options) / sizeof(options[0]);
+    unsigned old_band = trial.value[kIniBand];
+    unsigned band_choice = old_band >= '0' && old_band <= '9' ? old_band - '0' : 0;
+    for (unsigned i = 0; i < count; ++i) {
+      const DisplayOption* option = &options[i];
+      int checked = (trial.value[option->offset] & option->mask) != 0;
+      AddCheck(&form, i + 1, LocalizedText(option->english, option->chinese),
+                checked != option->inverted);
+    }
+    AddCheck(&form, 12, LocalizedText("Disable split screen", "取消屏幕分割"),
+              old_band > '9');
+    band.data = (void*)bands;
+    band.choice = band_choice;
+    AddParagraph(&form, 14, 2, 48,
+                 LocalizedText("VGA status-band color:", "VGA 提示行光带颜色："));
+    AddField(&form, 14, 49, 3, 7, FLD_LISTBOX, &band);
+    AddButton(&form, 17, 14, 32,
+              LocalizedText("Status co&lors (all drivers)", "提示行颜色（所有驱动）(&L)"),
+              kCmdColors, 0);
+    AddDialogButtons(&form, 20);
+    ui_event event = RunForm(&form,
+                             LocalizedText("Legacy display parameters", "传统显示参数"),
+                             22, 60, 0);
+    if (event != kCmdAccept && event != kCmdColors) {
+      return;
+    }
+    for (unsigned i = 0; i < count; ++i) {
+      const DisplayOption* option = &options[i];
+      trial.value[option->offset] &= (unsigned char)~option->mask;
+      if (!!form.checks[i].val != option->inverted) {
+        trial.value[option->offset] |= (unsigned char)option->mask;
+      }
+    }
+    if (!!form.checks[count].val != (old_band > '9') || band.choice != band_choice) {
+      trial.value[kIniBand] = form.checks[count].val ? 'A' : '0' + band.choice;
+    }
+    if (event == kCmdAccept) {
+      *settings = trial;
+      return;
+    }
+    ShowColors(&trial);
+  }
+}
+
+void ShowModuleOptions(SetupChoices* choices) {
+  Form form = {0};
+  a_list special = {0};
+  a_list printer = {0};
+  a_list access = {0};
+  const char* special_items[] = {NULL, "INT10K.COM", "INT10V.COM", NULL};
+  const char* printer_items[kPrinterCount + 1];
+  const char* access_items[] = {
+      "W - DOS file access", "1", "2", "3", "4", "5", "6", "7", "8", "9", NULL};
+  special_items[0] = LocalizedText("None", "不安装");
+  for (unsigned i = 0; i < kPrinterCount; ++i) {
+    printer_items[i] = i ? kPrinters[i].name : LocalizedText("None", "不安装");
+  }
+  printer_items[kPrinterCount] = NULL;
+  access_items[0] = LocalizedText("W - DOS file access", "W - DOS 文件读取");
+  special.data = special_items;
+  special.choice = choices->special_display;
+  printer.data = printer_items;
+  printer.choice = choices->printer;
+  access.data = access_items;
+  access.choice = choices->print_access;
+  AddParagraph(&form, 1, 2, 30, LocalizedText("Special display:", "特殊显示模块："));
+  AddField(&form, 3, 2, 3, 26, FLD_LISTBOX, &special);
+  AddParagraph(&form, 1, 32, 36, LocalizedText("Printer:", "打印驱动："));
+  AddField(&form, 3, 32, 5, 36, FLD_LISTBOX, &printer);
+  AddParagraph(&form, 9, 2, 30, LocalizedText("Printing fonts:", "打印字库："));
+  static const char* const fonts[] = {
+      "READ16", "READ24", "READ32", "READ40", "READSL"};
+  for (unsigned i = 0; i < 5; ++i) {
+    a_check* check = &form.checks[form.check_count++];
+    check->str = (char*)fonts[i];
+    check->val = (choices->print_fonts & (1U << i)) != 0;
+    AddField(&form, 10 + i, 2, 1, 26, FLD_CHECK, check);
+  }
+  a_check* vector_file = &form.checks[form.check_count++];
+  vector_file->str = (char*)LocalizedText("READSL &file access", "READSL 文件读取 (&F)");
+  vector_file->val = choices->vector_access == 1 ||
+                     (!choices->vector_access && !choices->print_access);
+  AddField(&form, 16, 2, 1, 26, FLD_CHECK, vector_file);
+  AddParagraph(&form, 9, 32, 36,
+               LocalizedText("Bitmap font access / cache:", "点阵字库读取方式／缓存："));
+  AddField(&form, 11, 32, 4, 36, FLD_LISTBOX, &access);
+  AddParagraph(&form, 16, 32, 36,
+               LocalizedText("1-9: sector cache size", "1-9：扇区缓存大小"));
+  AddDialogButtons(&form, 18);
+  if (RunForm(&form, LocalizedText("Optional modules", "可选模块"), 20, 72, 0) ==
+      kCmdAccept) {
+    choices->special_display = special.choice;
+    choices->printer = printer.choice;
+    choices->print_access = access.choice;
+    choices->vector_access = vector_file->val ? 1 : 2;
+    choices->print_fonts = 0;
+    for (unsigned i = 0; i < 5; ++i) {
+      if (form.checks[i].val) {
+        choices->print_fonts |= 1U << i;
+      }
+    }
+  }
+}

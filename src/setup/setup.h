@@ -41,6 +41,21 @@ enum {
   kFileSw,
   kFileDb,
   kFileWbx,
+  kFileInt10k,
+  kFileInt10v,
+  kFilePrnt,
+  kFilePrth,
+  kFilePr,
+  kFileRead16,
+  kFileRead24,
+  kFileRead32,
+  kFileRead40,
+  kFileReadsl,
+  kFileHzk24T, kFileHzk24S, kFileHzk24F, kFileHzk24H, kFileHzk24K,
+  kFileHzk32T, kFileHzk32S, kFileHzk32F, kFileHzk32H, kFileHzk32K,
+  kFileHzk40T, kFileHzk40S, kFileHzk40F, kFileHzk40H, kFileHzk40K,
+  kFileHzkSlT, kFileHzkSlS,
+  kFilePrTable,
   kFileCount
 };
 enum { kBatchSize = 4096, kIniSize = 8192 };
@@ -83,7 +98,47 @@ typedef struct SetupChoices {
   unsigned paired;
   unsigned mode;
   unsigned rows; /* zero retains the default 25 rows */
+  unsigned special_display; /* 0: none, 1: INT10K, 2: INT10V */
+  unsigned printer; /* index into kPrinters */
+  unsigned print_fonts; /* READ16, READ24, READ32, READ40, READSL */
+  unsigned print_access; /* 0: DOS file reads (W), 1..9: sector cache size */
+  char print_styles[3][5]; /* READ24/32/40 style aliases; empty uses Song. */
+  unsigned printer_flags; /* PRNT's /1 through /5 switches. */
+  unsigned vector_access; /* 0: follow print_access, 1: file, 2: sector. */
 } SetupChoices;
+enum {
+  kIniDisplay = 0,
+  kIniDisplay2 = 1,
+  kIniDisplay3 = 2,
+  kIniBand = 3,
+  kIniColors = 5,
+  kIniShift = 10,
+  kIniKeys = 11,
+  kIniGreatWall = 27,
+  kIniPhraseKb = 28,
+  kIniPinyin = 29,
+  kIniShouwei = 30,
+  kIniTelegraph = 31,
+  kIniCount = 32,
+  kFunctionKeyCount = 14
+};
+typedef struct IniSettings {
+  unsigned char value[kIniCount];
+} IniSettings;
+typedef struct PrinterModel {
+  unsigned driver; /* 0: none, 1: PRNT, 2: PRTH */
+  unsigned number;
+  const char* name;
+} PrinterModel;
+enum { kPrinterCount = 21 };
+extern const PrinterModel kPrinters[kPrinterCount];
+const char* ValidateModules(const InstallationFiles* files,
+                           const SetupChoices* choices);
+int ValidModuleChoices(const SetupChoices* choices);
+char* AppendModuleCommands(const SetupChoices* choices, char* out);
+unsigned long ModuleMemoryKb(const InstallationFiles* files,
+                             const SetupChoices* choices);
+int ReadModuleChoices(const char* batch, SetupChoices* choices);
 void DecodePreferredTiming(MachineCapabilities* machine,
                            const unsigned char* edid);
 void AddDisplayMode(MachineCapabilities* machine, unsigned number,
@@ -107,8 +162,15 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
                                   const InstallationFiles* files,
                                   const SetupChoices* choices);
 int MakeBatch(const char* path, const SetupChoices* choices, char* out);
-/* Preserve all original INI lines except the three IME switches. */
-int MakeIni(const char* original, const SetupChoices* choices, char* out);
+int ReadIni(const char* original, IniSettings* settings);
+const char* ValidateIni(const IniSettings* settings);
+void SetIniInputMethods(IniSettings* settings, unsigned ime);
+int SetGreatWallMode(IniSettings* settings, unsigned enabled);
+/* Replace changed values, preserving comments, reserved fields and DOS EOF. */
+int MakeIni(const char* original, const IniSettings* settings, char* out);
+int AssignFunctionKey(IniSettings* settings, unsigned function, unsigned key);
+int IsFunctionKey(unsigned key);
+void DescribeFunctionKey(unsigned key, char* out);
 const char* SaveConfigurationFiles(const char* batch, const char* ini);
 void ReportMachine(FILE* out, const MachineCapabilities* machine,
                    const InstallationFiles* files);

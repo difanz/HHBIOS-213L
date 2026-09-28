@@ -5,6 +5,7 @@ HHBIOS 2.13L 使用说明
   SETUP.EXE 检测机器并生成 HHBIOS.BAT、213L.INI。
   修改常驻模块的配置后，重新启动 DOS 再运行 HHBIOS.BAT。
   SETUP /EN 使用英文界面；SETUP /REPORT 显示检测结果。
+  Alt-K 设置键盘与快捷键，Alt-D 设置显示参数与颜色，Alt-A 选择打印等模块。
 
 输入法快捷键
   标准键盘配置：

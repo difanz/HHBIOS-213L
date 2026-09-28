@@ -6,22 +6,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "forms.h"
 #include "screen.h"
-#include "setup.h"
-#include "stdui.h"
-#include "uidialog.h"
 
 static MachineCapabilities machine;
 static InstallationFiles files;
 static SetupChoices choices;
+static IniSettings settings;
 static char directory[80];
 static char batch[kBatchSize];
 static char ini[kIniSize];
 static char original[kIniSize];
 static int chinese = 0;
 static int ini_ok = 1;
-static const char* LocalizedText(const char* en, const char* zh) {
-  return chinese ? EncodeScreenText(zh) : en;
+static int batch_ok = 1;
+
+const char* LocalizedText(const char* en, const char* zh) {
+  return chinese ? (IsScreenActive() ? EncodeScreenText(zh) : zh) : en;
 }
 
 static void DescribeDisplay(char* out, const SetupChoices* selected) {
@@ -54,49 +55,53 @@ static void DescribeMonitor(char* out) {
   }
 }
 
-enum {
-  kCmdProbe = EV_FIRST_UNUSED,
-  kCmdMemory,
-  kCmdVideo,
-  kCmdInput,
-  kCmdPreview,
-  kCmdLanguage,
-  kCmdAccept,
-  kCmdCancel,
-  kCmdExit
-};
-
-/* Each dialog owns its controls and text until uienddialog releases it. */
-typedef struct {
-  VFIELD fields[48];
-  a_hot_spot buttons[8];
-  a_radio radios[10];
-  a_check checks[5];
-  unsigned field_count;
-  unsigned button_count;
-  unsigned radio_count;
-  unsigned check_count;
-  unsigned text_used;
-  char text[4096];
-} Form;
-
-static int LoadIni() {
-  FILE* file = fopen("213L.INI", "rb");
+static int ReadConfigurationFile(const char* name, char* out, unsigned capacity) {
+  FILE* file = fopen(name, "rb");
   unsigned byte_count;
-  original[0] = 0;
+  out[0] = 0;
   if (!file) {
-    return access("213L.INI", 0) != 0;
+    return access(name, 0) != 0;
   }
-  byte_count = fread(original, 1, sizeof(original) - 1, file);
-  int ok = !ferror(file) && feof(file);
+  byte_count = fread(out, 1, capacity - 1, file);
+  int extra = fgetc(file);
+  int ok = extra == EOF && !ferror(file);
   fclose(file);
-  original[byte_count] = 0;
-  return ok && !memchr(original, 0, byte_count) &&
-         MakeIni(original, &choices, ini);
+  out[byte_count] = 0;
+  return ok && !memchr(out, 0, byte_count);
+}
+
+static void LoadConfiguration(void) {
+  ReadIni(NULL, &settings);
+  ini_ok = ReadConfigurationFile("213L.INI", original, sizeof(original));
+  if (ini_ok) {
+    ini_ok = ReadIni(original, &settings);
+  }
+  if (ini_ok && *original) {
+    choices.ime &= kImeWubi;
+    for (unsigned i = 0; i < 3; ++i) {
+      if (toupper(settings.value[kIniPinyin + i]) == 'Y') {
+        choices.ime |= 1U << i;
+      }
+    }
+  } else {
+    SetIniInputMethods(&settings, choices.ime);
+  }
+  const char* name = "HHBIOS.BAT";
+  if (access(name, 0)) {
+    name = access("213L.BAT", 0) ? "C:\\213L.BAT" : "213L.BAT";
+  }
+  batch_ok = ReadConfigurationFile(name, batch, sizeof(batch));
+  if (batch_ok && *batch) {
+    batch_ok = ReadModuleChoices(batch, &choices);
+  }
 }
 
 static const char* PrepareConfiguration() {
   const char* error;
+  if (!batch_ok) {
+    return LocalizedText("The existing startup batch could not be imported.",
+                          "无法读取原启动批处理文件的配置。");
+  }
   ScanFiles(&files);
   error = ValidateConfiguration(&machine, &files, &choices);
   if (error) {
@@ -107,16 +112,20 @@ static const char* PrepareConfiguration() {
         "Use a DOS 8.3 directory path of at most 32 characters.",
         "安装目录须为 DOS 短路径，完整路径不超过 32 字节。");
   }
-  if (!ini_ok || !MakeIni(original, &choices, ini)) {
+  if (!ini_ok || !MakeIni(original, &settings, ini)) {
     return LocalizedText(
         "213L.INI is malformed or too large. Keep a copy and repair it first.",
         "213L.INI 格式有误或过大，请先备份并修复原配置。");
   }
+  error = ValidateIni(&settings);
+  if (error) {
+    return error;
+  }
   return 0;
 }
 
-static void AddField(Form* form, unsigned row, unsigned col, unsigned height,
-                     unsigned width, a_field_type type, void* data) {
+void AddField(Form* form, unsigned row, unsigned col, unsigned height,
+              unsigned width, a_field_type type, void* data) {
   VFIELD* field = &form->fields[form->field_count++];
   field->area.row = row;
   field->area.col = col;
@@ -126,13 +135,13 @@ static void AddField(Form* form, unsigned row, unsigned col, unsigned height,
   field->u.ptr = data;
 }
 
-static void AddParagraph(Form* form, unsigned row, unsigned col, unsigned width,
-                         const char* text) {
+void AddParagraph(Form* form, unsigned row, unsigned col, unsigned width,
+                  const char* text) {
   while (*text) {
     unsigned length = 0;
     unsigned space = 0;
     while (text[length] && text[length] != '\n') {
-      unsigned count = uicharlen((unsigned char)text[length]);
+      unsigned count = ScreenTextCharacterWidth(text + length);
       if (length + count > width) {
         break;
       }
@@ -156,8 +165,8 @@ static void AddParagraph(Form* form, unsigned row, unsigned col, unsigned width,
   }
 }
 
-static void AddButton(Form* form, unsigned row, unsigned col, unsigned width,
-                      const char* label, ui_event event, int default_button) {
+void AddButton(Form* form, unsigned row, unsigned col, unsigned width,
+               const char* label, ui_event event, int default_button) {
   a_hot_spot* button = &form->buttons[form->button_count++];
   button->str = (char*)label;
   button->event = event;
@@ -168,8 +177,8 @@ static void AddButton(Form* form, unsigned row, unsigned col, unsigned width,
   AddField(form, row, col, 2, width, FLD_HOT, button);
 }
 
-static void AddRadio(Form* form, unsigned row, const char* label,
-                     a_radio_group* group, unsigned value) {
+void AddRadio(Form* form, unsigned row, const char* label,
+              a_radio_group* group, unsigned value) {
   a_radio* radio = &form->radios[form->radio_count++];
   radio->str = (char*)label;
   radio->group = group;
@@ -177,24 +186,30 @@ static void AddRadio(Form* form, unsigned row, const char* label,
   AddField(form, row, 2, 1, 55, FLD_RADIO, radio);
 }
 
-static void AddCheck(Form* form, unsigned row, const char* label, int checked) {
+void AddCheck(Form* form, unsigned row, const char* label, int checked) {
   a_check* check = &form->checks[form->check_count++];
   check->str = (char*)label;
   check->val = checked != 0;
   AddField(form, row, 2, 1, 55, FLD_CHECK, check);
 }
 
-static void AddDialogButtons(Form* form, unsigned row) {
+void AddDialogButtons(Form* form, unsigned row) {
   AddButton(form, row, 10, 16, LocalizedText("&OK", "确定 (&O)"), kCmdAccept,
             1);
   AddButton(form, row, 32, 16, LocalizedText("&Cancel", "取消 (&C)"),
             kCmdCancel, 0);
 }
 
-static ui_event RunForm(Form* form, const char* title, unsigned rows,
-                        unsigned cols, int home) {
+ui_event RunForm(Form* form, const char* title, unsigned rows,
+                 unsigned cols, int home) {
+  char padded_title[128];
   static ui_event events[] = {kCmdProbe, kCmdExit, __rend__, EV_ESCAPE,
                               EV_ALT_X,  EV_F2,    EV_F3,    __end__};
+  if (machine.loaded && chinese) {
+    /* Separate raw GB2312 from CP437 frame bytes at both title edges. */
+    snprintf(padded_title, sizeof(padded_title), " %s ", title);
+    title = padded_title;
+  }
   a_dialog* dialog = uibegdialog(title, form->fields, rows, cols, 0, 0);
   if (!dialog) {
     return kCmdCancel;
@@ -216,7 +231,7 @@ static ui_event RunForm(Form* form, const char* title, unsigned rows,
   return event;
 }
 
-static void ShowMessage(const char* text) {
+void ShowMessage(const char* text) {
   Form form;
   memset(&form, 0, sizeof(form));
   AddParagraph(&form, 1, 2, 68, text);
@@ -272,13 +287,20 @@ static ui_event ShowHome(void) {
             kCmdInput, 0);
   AddButton(&form, 14, 56, 16, LocalizedText("&Language", "语言 (&L)"),
             kCmdLanguage, 0);
-  AddButton(&form, 16, 2, 22, LocalizedText("&Hardware / F2", "检测结果 (&H)"),
-            kCmdProbe, 0);
+  AddButton(&form, 16, 2, 22, LocalizedText("&Keyboard", "键盘 (&K)"),
+            kCmdKeyboard, 0);
   AddButton(&form, 16, 26, 25,
+            LocalizedText("&Display options", "显示参数 (&D)"),
+            kCmdDisplayOptions, 0);
+  AddButton(&form, 16, 54, 18,
+            LocalizedText("&Add-ons", "可选模块 (&A)"), kCmdModules, 0);
+  AddButton(&form, 18, 2, 22, LocalizedText("&Hardware / F2", "检测结果 (&H)"),
+            kCmdProbe, 0);
+  AddButton(&form, 18, 26, 25,
             LocalizedText("&Preview / F3", "预览与保存 (&P)"), kCmdPreview, 1);
-  AddButton(&form, 16, 54, 18, LocalizedText("E&xit", "退出 (&X)"), kCmdExit,
+  AddButton(&form, 18, 54, 18, LocalizedText("E&xit", "退出 (&X)"), kCmdExit,
             0);
-  return RunForm(&form, LocalizedText("HHBIOS Setup", "HHBIOS 安装设置"), 19,
+  return RunForm(&form, LocalizedText("HHBIOS Setup", "HHBIOS 安装设置"), 21,
                  74, 1);
 }
 
@@ -367,12 +389,7 @@ static void ShowVideoDialog(void) {
     } else {
       trial.video = kVideoEga + video.choice - machine.display_count - 1;
     }
-    const char* error = ValidateConfiguration(&machine, &files, &trial);
-    if (error) {
-      ShowMessage(error);
-    } else {
-      choices = trial;
-    }
+    choices = trial;
   }
 }
 
@@ -402,6 +419,7 @@ static void ShowInputDialog(void) {
       }
     }
     choices.paired = form.checks[4].val;
+    SetIniInputMethods(&settings, choices.ime);
   }
 }
 
@@ -486,8 +504,11 @@ static void ShowPreview(void) {
     error = SaveConfigurationFiles(batch, ini);
     ShowMessage(
         error ? error
-              : LocalizedText("Saved. Run HHBIOS.BAT after exiting SETUP.",
-                              "已保存。退出后运行 HHBIOS.BAT。"));
+              : machine.loaded
+                    ? LocalizedText("Saved. Restart DOS before running HHBIOS.BAT.",
+                                    "已保存。重新启动 DOS 后运行 HHBIOS.BAT。")
+                    : LocalizedText("Saved. Run HHBIOS.BAT after exiting SETUP.",
+                                    "已保存。退出后运行 HHBIOS.BAT。"));
   }
 }
 
@@ -509,6 +530,15 @@ static void RunApplication(void) {
       case kCmdInput:
         ShowInputDialog();
         break;
+      case kCmdKeyboard:
+        ShowKeyboardOptions(&settings);
+        break;
+      case kCmdDisplayOptions:
+        ShowDisplayOptions(&settings);
+        break;
+      case kCmdModules:
+        ShowModuleOptions(&choices);
+        break;
       case kCmdProbe:
         ShowCapabilities();
         break;
@@ -516,7 +546,7 @@ static void RunApplication(void) {
         ShowPreview();
         break;
       case kCmdLanguage:
-        if (IsScreenActive()) {
+        if (IsScreenActive() || machine.loaded) {
           chinese = !chinese;
         } else {
           ShowMessage(
@@ -579,9 +609,15 @@ int main(int argc, char** argv) {
   int language = -1;
   int ime_seen = 0;
   int text_seen = 0;
+  int current_directory = 0;
   char path[80], *slash;
+  for (i = 1; i < argc; ++i) {
+    if (!stricmp(argv[i], "/W")) {
+      current_directory = 1;
+    }
+  }
   /* Keep the executable and all modules together; never embed a host path. */
-  if (strlen(argv[0]) < sizeof(path)) {
+  if (!current_directory && strlen(argv[0]) < sizeof(path)) {
     strcpy(path, argv[0]);
     slash = strrchr(path, '\\');
     if (slash) {
@@ -613,9 +649,12 @@ int main(int argc, char** argv) {
   ProbeMachine(&machine);
   ScanFiles(&files);
   RecommendConfiguration(&machine, &files, &choices);
+  LoadConfiguration();
   for (i = 1; i < argc; ++i) {
     if (!stricmp(argv[i], "/AUTO")) {
       automatic = 1;
+    } else if (!stricmp(argv[i], "/W")) {
+      /* The directory was selected before inspecting files or hardware. */
     } else if (!stricmp(argv[i], "/REPORT")) {
       report = 1;
     } else if (!stricmp(argv[i], "/EN")) {
@@ -666,10 +705,11 @@ int main(int argc, char** argv) {
       }
     } else {
       puts(
-          "SETUP [/EN|/ZH] [/REPORT|/AUTO] [/LOW] [/BYTE]\n"
+          "SETUP [/EN|/ZH] [/REPORT|/AUTO] [/W] [/LOW] [/BYTE]\n"
           "      [/FONT:XMS|EMS|LOW] [/VIDEO:VGA|102|104|106|EGA|HGA|CGA]\n"
           "      [/VIDEO:NATIVE|WIDTHxHEIGHT|hex] [/TEXT:80x25|80x43|80x50]\n"
           "      [/IME:NONE|PY|SW|DB|WB] (repeat /IME to combine)\n"
+          "/W uses the current directory; otherwise use SETUP's directory.\n"
           "/REPORT queries only; /AUTO explicitly saves without a dialog.");
       return !stricmp(argv[i], "/?") ? 0 : 1;
     }
@@ -684,7 +724,9 @@ int main(int argc, char** argv) {
             : "Cannot select this text layout in the current VESA console.");
     return ok ? 0 : 1;
   }
-  ini_ok = LoadIni();
+  if (ime_seen) {
+    SetIniInputMethods(&settings, choices.ime);
+  }
   if (automatic) {
     const char* error = PrepareConfiguration();
     if (!error) {
@@ -693,16 +735,13 @@ int main(int argc, char** argv) {
     puts(error ? error : "Saved HHBIOS.BAT and 213L.INI.");
     return error ? 1 : 0;
   }
-  if (machine.loaded) {
-    puts("Start SETUP from a clean DOS session before loading HHBIOS.");
-    return 1;
-  }
-  ConfigureScreen(language != 0 && machine.adapter == kAdapterVga);
+  ConfigureScreen(!machine.loaded && language != 0 && machine.adapter == kAdapterVga);
+  ConfigureResidentText(machine.loaded != 0);
   if (!uiinit(INIT_MOUSE_INITIALIZED)) {
     puts("Cannot initialize the DOS user interface.");
     return 1;
   }
-  chinese = IsScreenActive();
+  chinese = IsScreenActive() || (machine.loaded && language == 1);
   if (language == 1 && !chinese) {
     uifini();
     puts(

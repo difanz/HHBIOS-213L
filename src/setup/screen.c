@@ -17,6 +17,7 @@ static unsigned char far latin[256 * 16];
 static int active;
 static unsigned old_mode;
 static int graphics_requested;
+static int resident_text;
 static unsigned char far* font_blocks[8];
 /* CP437 frames and GB2312 share byte values. Encode Chinese UI characters
  * into unused Western slots before giving strings to Watcom UI. Each Han
@@ -27,7 +28,8 @@ static unsigned han_count;
 static char far text_pool[16384];
 static unsigned text_used;
 static unsigned text_count;
-static const char *source_text[128], *encoded_text[128];
+enum { kTextStringCount = 256 };
+static const char *source_text[kTextStringCount], *encoded_text[kTextStringCount];
 
 const char* EncodeScreenText(const char* text) {
   unsigned i;
@@ -40,7 +42,8 @@ const char* EncodeScreenText(const char* text) {
       return encoded_text[i];
     }
   }
-  if (text_count == 128 || strlen(text) + text_used + 1 > sizeof(text_pool)) {
+  if (text_count == kTextStringCount ||
+      strlen(text) + text_used + 1 > sizeof(text_pool)) {
     return "Text buffer full";
   }
   encoded = encoded_start = text_pool + text_used;
@@ -250,6 +253,10 @@ void ConfigureScreen(int use_graphics) {
   graphics_requested = use_graphics;
 }
 
+void ConfigureResidentText(int use_chinese) {
+  resident_text = use_chinese;
+}
+
 /* The upstream DOS initializer is renamed by a compiler define. It captures
  * the original text cursor and keyboard state before we select VGA graphics. */
 extern bool InitTextBios(void);
@@ -270,7 +277,20 @@ void uirefresh(void) {
 }
 
 int uicharlen(int character) {
+  /* Watcom also uses this on screen cells when moving its mouse cursor.
+   * Raw GB2312 lead bytes overlap CP437 frames, so only the private encoding
+   * can safely determine a screen-cell boundary from a single byte. */
   return active && character >= 0x80 && character < 0xb0 ? 2 : 1;
+}
+
+unsigned ScreenTextCharacterWidth(const char* text) {
+  const unsigned char* bytes = (const unsigned char*)text;
+  if (active) {
+    return uicharlen(bytes[0]);
+  }
+  return resident_text && bytes[0] >= 0xa1 && bytes[0] <= 0xf7 &&
+                 bytes[1] >= 0xa1 && bytes[1] <= 0xfe
+             ? 2 : 1;
 }
 
 bool uiisdbcs(void) {

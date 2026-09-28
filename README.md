@@ -43,7 +43,7 @@ CPU 目标只改变实际编译的代码。纯汇编模块可能完全相同，W
 
 ## 安装设置
 
-`SETUP.EXE` 使用 Open Watcom UI 检测机器能力，选择字库存储、驻留方式、显示驱动和输入法，预览并生成 `HHBIOS.BAT`、`213L.INI`。它独立于 HHBIOS 运行；VGA 中文界面直接加载 `HZK16`，旧显卡可用英文文本界面。运行方法及可选构建目标 `make setup` 见 [安装程序说明](src/setup/README.md)。
+`SETUP.EXE` 使用 Open Watcom UI 检测机器能力，设置字库存储、驻留方式、显示驱动、输入法、快捷键、颜色和打印模块，预览并生成 `HHBIOS.BAT`、`213L.INI`。它独立于 HHBIOS 运行；VGA 中文界面直接加载 `HZK16`，旧显卡可用英文文本界面。运行方法及构建目标 `make setup` 见 [安装程序说明](src/setup/README.md)。
 
 ## VESA 显示
 

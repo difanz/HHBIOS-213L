@@ -7,7 +7,13 @@
 const char* const kFileNames[kFileCount] = {
     "READ5.COM", "READ4.COM", "READ2.COM", "CKBD.COM", "VGA.COM",
     "VESA.COM",  "EGA.COM",   "HGA.COM",   "CGA.COM",  "HZK16",
-    "HH20.FNT",  "PYMB",      "SWMB",      "DBMB",     "WBX.COM"};
+    "HH20.FNT",  "PYMB",      "SWMB",      "DBMB",     "WBX.COM",
+    "INT10K.COM", "INT10V.COM", "PRNT.COM", "PRTH.COM", "PR.EXE",
+    "READ16.COM", "READ24.COM", "READ32.COM", "READ40.COM", "READSL.COM",
+    "HZK24T", "HZK24S", "HZK24F", "HZK24H", "HZK24K",
+    "HZK32T", "HZK32S", "HZK32F", "HZK32H", "HZK32K",
+    "HZK40T", "HZK40S", "HZK40F", "HZK40H", "HZK40K",
+    "HZKSLT", "HZKSLSTJ", "PRTA.TAB"};
 const char* const kFontNames[kFontCount] = {"XMS (READ5)", "EMS 4.0 (READ4)",
                                             "Conventional (READ2)"};
 const char* const kVideoNames[kVideoCount] = {
@@ -96,6 +102,7 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
   unsigned i;
   unsigned mode_number = SelectedVbeMode(choices);
   unsigned rows_mask = TextRowsMask(choices->rows);
+  const char* module_error = ValidateModules(files, choices);
   static const unsigned drivers[kVideoCount] = {kFileVga,  kFileVesa, kFileVesa,
                                                 kFileVesa, kFileEga,  kFileHga,
                                                 kFileCga,  kFileVesa};
@@ -109,8 +116,8 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
   if (machine->dos_major < 3) {
     return "HHBIOS setup requires DOS 3.0 or later.";
   }
-  if (machine->loaded) {
-    return "HHBIOS is already loaded. Configure from a clean DOS session.";
+  if (module_error) {
+    return module_error;
   }
   if (!files->size[kFileCkbd]) {
     return "Missing CKBD.COM in the installation directory.";
@@ -121,12 +128,15 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
   if (!files->size[choices->font]) {
     return "The selected READ*.COM is missing.";
   }
-  if (choices->font == kFontXms &&
+  if (choices->font == kFontXms && !machine->xms_version) {
+    return "READ5 requires an XMS manager.";
+  }
+  if (!machine->loaded && choices->font == kFontXms &&
       (machine->xms_largest < 256 || machine->xms_total < 256)) {
     return "READ5 needs a free 256 KiB XMS block.";
   }
   if (choices->font == kFontEms &&
-      (machine->ems_version < 0x40 || machine->ems_pages < 16 ||
+      (machine->ems_version < 0x40 || (!machine->loaded && machine->ems_pages < 16) ||
        !machine->ems_frame)) {
     return "READ4 needs EMS 4.0, a page frame and 16 free pages.";
   }
@@ -169,7 +179,9 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
     if (!files->size[kFileFont20]) {
       return "Missing or invalid HH20.FNT for VESA.";
     }
-    if (!HasVesaFontMemory(machine, files, choices)) {
+    if ((!machine->loaded && !HasVesaFontMemory(machine, files, choices)) ||
+        (machine->loaded && !machine->xms_version &&
+         (machine->ems_version < 0x40 || !machine->ems_frame))) {
       return "Insufficient XMS/EMS for both font stores. Choose VGA or another "
              "reader.";
     }
@@ -190,6 +202,7 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
     return "Wubi requires WBX.COM.";
   }
   conventional += (tables + 1023) / 1024;
+  conventional += ModuleMemoryKb(files, choices);
   if (choices->ime & kImeWubi) {
     conventional += 48;
   }
@@ -198,7 +211,7 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
   }
   /* Do not promise all modules fit in a fragmented UMB just because one exists.
    */
-  if (machine->free_kb < conventional) {
+  if (!machine->loaded && machine->free_kb < conventional) {
     return "Not enough conventional memory for a conservative load estimate.";
   }
   return 0;
@@ -264,7 +277,9 @@ int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
   char display[80];
   unsigned mode = SelectedVbeMode(choices);
   if (!IsSafeDirectory(path) || choices->font >= kFontCount ||
-      choices->video >= kVideoCount || !TextRowsMask(choices->rows) ||
+      choices->video >= kVideoCount || choices->low > 1 ||
+      choices->paired > 1 || choices->ime > 15 || !TextRowsMask(choices->rows) ||
+      !ValidModuleChoices(choices) ||
       (!mode && choices->rows > 25) ||
       (choices->video == kVideoDetected && (mode < 0x100 || mode > 0x3fff))) {
     return 0;
@@ -295,6 +310,7 @@ int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
   if (choices->ime & kImeWubi) {
     output_cursor += sprintf(output_cursor, ".\\WBX.COM\r\n");
   }
+  output_cursor = AppendModuleCommands(choices, output_cursor);
   sprintf(output_cursor,
           "GOTO HHEND\r\n:HHFAIL\r\n"
           "ECHO HHBIOS load failed. Check the message above; reboot before "
@@ -302,35 +318,77 @@ int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
   return 1;
 }
 
-static const unsigned char defaults[32] = {
+static const unsigned char kIniDefaults[kIniCount] = {
     2,    1,    5,    0x39, 0,    0x1e, 0x1a, 0x4e, 0x4a, 0,    2,
     0x64, 0x68, 0x69, 0x6a, 0x6b, 0x66, 0x6d, 0x6c, 0x71, 0x86, 0x85,
     0x62, 0x70, 0x67, 0,    0,    0x4e, 0x30, 0x4e, 0x4e, 0x4e};
 
-int MakeIni(const char* original, const SetupChoices* choices, char* out) {
+static int HexDigit(unsigned char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  c = (unsigned char)toupper(c);
+  return c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+int ReadIni(const char* original, IniSettings* settings) {
+  IniSettings parsed;
   unsigned i;
+  const char* line = original;
+  memcpy(parsed.value, kIniDefaults, sizeof(parsed.value));
+  if (original && *original) {
+    if (strlen(original) >= kIniSize) {
+      return 0;
+    }
+    for (i = 0; i < kIniCount; ++i) {
+      const char* end = strchr(line, '\n');
+      int high, low;
+      const char* eof = strchr(line, '\x1a');
+      if (!end || (eof && eof < end) || end - line < 2 ||
+          (high = HexDigit(line[0])) < 0) {
+        return 0;
+      }
+      /* CKBD also accepts one hex digit followed by a space. */
+      low = HexDigit(line[1]);
+      if (low < 0 && line[1] != ' ') {
+        return 0;
+      }
+      parsed.value[i] = (unsigned char)(low < 0 ? high : high * 16 + low);
+      line = end + 1;
+    }
+  }
+  *settings = parsed;
+  return 1;
+}
+
+void SetIniInputMethods(IniSettings* settings, unsigned ime) {
+  unsigned i;
+  for (i = 0; i < 3; ++i) {
+    settings->value[kIniPinyin + i] = (ime & (1U << i)) ? 'Y' : 'N';
+  }
+}
+
+int MakeIni(const char* original, const IniSettings* settings, char* out) {
+  unsigned i;
+  IniSettings previous;
   char* line_cursor = out;
   const char *line = original, *end;
-  for (i = 0; i < 32; ++i) {
-    unsigned value = defaults[i];
+  if (!ReadIni(original, &previous)) {
+    return 0;
+  }
+  for (i = 0; i < kIniCount; ++i) {
+    unsigned value = settings->value[i];
     unsigned length = 0;
     if (original && *original) {
       end = strchr(line, '\n');
-      if (!end || end - line < 2 || !isxdigit((unsigned char)line[0]) ||
-          !isxdigit((unsigned char)line[1])) {
-        return 0;
-      }
       length = (unsigned)(end - line + 1);
-      if ((unsigned)(line_cursor - out) + length + 256 >= kIniSize) {
+      if ((unsigned)(line_cursor - out) + length >= kIniSize) {
         return 0;
       }
-    }
-    if (i >= 29) {
-      value = choices->ime & (1U << (i - 29)) ? 'Y' : 'N';
     }
     if (length) {
       memcpy(line_cursor, line, length);
-      if (i >= 29) {
+      if (value != previous.value[i]) {
         char hex[3];
         sprintf(hex, "%02X", value);
         memcpy(line_cursor, hex, 2);
@@ -351,6 +409,114 @@ int MakeIni(const char* original, const SetupChoices* choices, char* out) {
     *line_cursor = 0;
   }
   return 1;
+}
+
+int IsFunctionKey(unsigned key) {
+  return (key >= 0x3b && key <= 0x44) ||
+         (key >= 0x54 && key <= 0x71) || (key >= 0x73 && key <= 0x96) ||
+         (key >= 0xf1 && key <= 0xf6);
+}
+
+int AssignFunctionKey(IniSettings* settings, unsigned function, unsigned key) {
+  unsigned i;
+  if (function >= kFunctionKeyCount || !IsFunctionKey(key)) {
+    return 0;
+  }
+  if (settings->value[kIniGreatWall] == 'Y' && function >= 1 && function <= 6 &&
+      key != 0xf0 + function) {
+    return 0;
+  }
+  for (i = 0; key && i < kFunctionKeyCount; ++i) {
+    if (i != function && settings->value[kIniKeys + i] == key) {
+      return 0;
+    }
+  }
+  settings->value[kIniKeys + function] = (unsigned char)key;
+  return 1;
+}
+
+const char* ValidateIni(const IniSettings* settings) {
+  unsigned i, j;
+  unsigned shift = settings->value[kIniShift];
+  if (shift != 1 && shift != 2 && shift != 0x10) {
+    return "Select Right Shift, Left Shift or Scroll Lock.";
+  }
+  if (settings->value[kIniPhraseKb] < '0' ||
+      settings->value[kIniPhraseKb] > '9') {
+    return "Phrase extension size must be 0 through 9 KiB.";
+  }
+  for (i = kIniGreatWall; i < kIniCount; ++i) {
+    if (i != kIniPhraseKb && settings->value[i] != 'Y' &&
+        settings->value[i] != 'N') {
+      return "Input-method and Great Wall switches must be Y or N.";
+    }
+  }
+  for (i = 0; i < kFunctionKeyCount; ++i) {
+    unsigned key = settings->value[kIniKeys + i];
+    if (!key) {
+      return "Every function needs a key; zero would stop CKBD's key table.";
+    }
+    for (j = 0; key && j < i; ++j) {
+      if (settings->value[kIniKeys + j] == key) {
+        return "Two functions use the same key.";
+      }
+    }
+  }
+  return NULL;
+}
+
+int SetGreatWallMode(IniSettings* settings, unsigned enabled) {
+  static const unsigned char standard[] = {0x68, 0x69, 0x6a, 0x6b, 0x66, 0x6d};
+  IniSettings updated = *settings;
+  unsigned i, j;
+  if (enabled > 1) {
+    return 0;
+  }
+  updated.value[kIniGreatWall] = enabled ? 'Y' : 'N';
+  for (i = 0; i < 6; ++i) {
+    updated.value[kIniKeys + 1 + i] = enabled ? 0xf1 + i : standard[i];
+  }
+  for (i = 1; i <= 6; ++i) {
+    for (j = 0; j < kFunctionKeyCount; ++j) {
+      if (j != i && updated.value[kIniKeys + i] == updated.value[kIniKeys + j]) {
+        return 0;
+      }
+    }
+  }
+  *settings = updated;
+  return 1;
+}
+
+void DescribeFunctionKey(unsigned key, char* out) {
+  static const char* const modifiers[] = {"Shift+", "Ctrl+", "Alt+"};
+  static const char* const navigation[] = {
+      "Ctrl+Left", "Ctrl+Right", "Ctrl+End", "Ctrl+PageDown", "Ctrl+Home",
+      "Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6", "Alt+7",
+      "Alt+8", "Alt+9", "Alt+0", "Alt+-", "Alt+=", "Ctrl+PageUp"};
+  static const char* const extended[] = {
+      "F11", "F12", "Shift+F11", "Shift+F12", "Ctrl+F11", "Ctrl+F12",
+      "Alt+F11", "Alt+F12", "Ctrl+Up", "Ctrl+Keypad-", "Ctrl+Keypad5",
+      "Ctrl+Keypad+", "Ctrl+Down", "Ctrl+Insert", "Ctrl+Delete", "Ctrl+Tab",
+      "Ctrl+Keypad/", "Ctrl+Keypad*"};
+  static const char* const great_wall[] = {
+      "Insert (GW)", "Home (GW)", "PageUp (GW)", "Delete (GW)",
+      "End (GW)", "PageDown (GW)"};
+  if (key >= 0x3b && key <= 0x44) {
+    sprintf(out, "F%u", key - 0x3b + 1);
+  } else if (key >= 0x54 && key <= 0x71) {
+    sprintf(out, "%sF%u", modifiers[(key - 0x54) / 10],
+            (key - 0x54) % 10 + 1);
+  } else if (key >= 0x73 && key <= 0x84) {
+    strcpy(out, navigation[key - 0x73]);
+  } else if (key >= 0x85 && key <= 0x96) {
+    strcpy(out, extended[key - 0x85]);
+  } else if (key >= 0xf1 && key <= 0xf6) {
+    strcpy(out, great_wall[key - 0xf1]);
+  } else if (!key) {
+    strcpy(out, "--");
+  } else {
+    sprintf(out, "%02Xh", key);
+  }
 }
 
 static int FileExists(const char* name) {

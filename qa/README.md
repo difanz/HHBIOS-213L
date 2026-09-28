@@ -90,8 +90,11 @@ bash qa/prepare.sh --msdos-dir /path/to/msdos622/files \
 The equivalent environment variables are `MSDOS_DIR`, `MSDOS_BOOT`,
 `CTMOUSE_EXE` and `BORLAND_DIR`. Application fixture variables documented below
 also apply. Available fixtures are copied; unavailable optional applications
-are reported. `--no-build` reuses existing modules and probes. Build the optional
-[SETUP.EXE](../src/setup/README.md) first to include it.
+are reported. Preparation builds the modules, probes and
+[SETUP.EXE](../src/setup/README.md); `--no-build` requires these existing outputs.
+SETUP needs a local Open Watcom UI source tree. Supply `WATCOM_SOURCE`, or run
+`bash tools/build-setup.sh --fetch` once to obtain it. Preparation does not fetch
+compiler or UI dependencies.
 
 The default `--mouse-driver cutemouse` loads CuteMouse and enables click-to-capture
 for its relative PS/2 input. Ctrl+Alt+F10 releases the pointer. Remote desktops such
@@ -119,7 +122,8 @@ The image boots Microsoft's kernel and COMMAND.COM with HIMEM, EMM386 and
 the selected mouse driver. `C:\HHBIOS` contains the original binary distribution from the
 repository's `original-import` tag, the files inside its three self-extracting
 archives, and current compiled modules. Both HZK16 fonts, input tables and
-legacy utilities are retained. `Q:` is an MS-DOS `SUBST` for `C:\QA`; `TOOLS`
+optional utilities are included; `SETUP.EXE` is the configuration editor.
+`Q:` is an MS-DOS `SUBST` for `C:\QA`; `TOOLS`
 lists the editors, IDEs, DOSSHELL and PC Tools available there. Guest probes
 are on the PATH through `Q:\PROBES`.
 

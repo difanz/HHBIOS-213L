@@ -3,6 +3,27 @@
 # No DOS kernel, compiler or application binaries are downloaded by this tool.
 
 dos_lines() { printf '%s\r\n' "$@"; }
+stage_distribution() {
+    local name
+    command -v 7z >/dev/null || die 'Extracting the original ARJ self-extractors requires 7z.'
+    mkdir -p "$dist" "$cache/distribution"
+    while IFS= read -r name; do
+        case ${name^^} in
+            *.COM|*.EXE|*.BAT|*.INI|*.SYS|*.DAT|*.TAB|*.BIN)
+                git -C "$root" show "original-import:$name" > "$dist/${name^^}";;
+        esac
+    done < <(git -C "$root" ls-tree --name-only original-import)
+    for name in 213L 213M H16F; do
+        7z x -y -aoa "-o$dist" "$dist/$name.EXE" > "$cache/distribution/$name.log"
+    done
+    # SETUP.EXE is the configuration editor in the runnable distribution.
+    rm -f "$dist/LSETUP.COM"
+}
+remove_guest_lsetup() {
+    if mdir -b -i "$volume" ::HHBIOS/LSETUP.COM >/dev/null 2>&1; then
+        mdel -i "$volume" ::HHBIOS/LSETUP.COM
+    fi
+}
 install_emulator() {
     {
         printf '%s\n' '[sdl]' 'output=surface' '[dosbox]' 'machine=svga_s3' \
@@ -87,7 +108,7 @@ install_dos() {
 }
 prepare_image() {
     local install="$root/build/msdos-install" volume path tool mouse_command mouse_lock
-    for tool in mcopy mtype mmd od truncate fuser; do
+    for tool in mcopy mtype mmd mdir mdel od truncate fuser; do
         command -v "$tool" >/dev/null || die "Disk preparation requires $tool (mtools/coreutils/psmisc)."
     done
     if [[ -f $image ]] && fuser -s "$image"; then
@@ -115,6 +136,7 @@ prepare_image() {
     for path in "$run/SETUP.EXE" "$run/SETUP.LIC"; do
         [[ ! -f $path ]] || mcopy -o -i "$volume" "$path" ::HHBIOS/
     done
+    remove_guest_lsetup
     mcopy -s -o -i "$volume" "$drive/PROBES" "$drive"/*.BAT ::QA/
     if [[ $mouse_driver == vbmouse ]]; then
         mcopy -o -i "$volume" "$mouse" ::DOS/VBMOUSE.EXE

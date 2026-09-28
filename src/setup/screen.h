@@ -2,6 +2,8 @@
 #ifndef HHBIOS_SRC_SETUP_SCREEN_H_
 #define HHBIOS_SRC_SETUP_SCREEN_H_
 void ConfigureScreen(int use_graphics);
+void ConfigureResidentText(int use_chinese);
+unsigned ScreenTextCharacterWidth(const char* text);
 void StopScreen();
 int IsScreenActive();
 const char* EncodeScreenText(const char* gb2312);
