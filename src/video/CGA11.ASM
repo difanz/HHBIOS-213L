@@ -18,6 +18,7 @@ D_SXQ		EQU	D_ZFQ+7D0H		;属性区
 D_BZQ		EQU	D_SXQ+7D0H
 
 		ORG	1880H
+IN_INT10	DB	0
 D_49		DB	6			;显示方式
 D_4A		DB	80, 0			;每行字符数
 D_50		DW	0			;光标位置
@@ -63,13 +64,17 @@ D_AH01		DW	OFFSET L_AH01		;AH=1
 		DW	OFFSET L_AH18		;AH=18H
 
 INT_10		PROC	FAR
+		CLI
+		CMP	AX,1416H
+		JZ	S_VIDEO_BUSY
+		INC	CS:IN_INT10
 		STI
 		CLD
 		CMP	AH,-1			;判安装?		2.10
 		JNZ	L_00
 		MOV	AL,'c'                  ;CGA11
 		CBW
-		IRET
+		JMP	S_VIDEO_RETURN
 L_00:
 		OR	AH,AH
 		JZ	L_01
@@ -110,7 +115,7 @@ L_INT10:
 		POP	ES
 		POP	DS
 L_10:
-		JMP	CS:D_INT10
+		JMP	S_VIDEO_CHAIN
 
 ;子程序:执行原INT10
 S_INT10 	PROC	NEAR
@@ -121,6 +126,9 @@ S_INT10 	ENDP
 
 ;AH=0 设置显示方式
 L_AH00:
+		MOV	BL,AL
+		AND	BL,80H			; Keep the BIOS preserve flag.
+		AND	AL,7FH
 		MOV	D_49,AL
 		MOV	ES,D_INT16		;键盘模块段
 
@@ -133,14 +141,18 @@ L_0001:
 		JBE	L_0010
 		MOV	AL,6
 L_0010:
+		MOV	D_49,AL			; Geometry follows the physical fallback.
 		MOV	ES:[100H],AL
 		MOV	ES:[101H],AL
+		OR	AL,BL
+		PUSH	BX
 		CALL	S_INT10 		;设置显示方式
 
 		MOV	AH,0BH
 		MOV	BX,102H
 		CALL	S_INT10 		;设置颜色:绿
 L_0020:
+		POP	BX
 		MOV	AL,80
 		CMP	D_49,6
 		JZ	L_0030
@@ -155,6 +167,8 @@ L_0030:
 
 		MOV	D_A5,AL
 		MOV	D_A6,E_HS		;9
+		TEST	BL,80H
+		JNZ	L_MODE_KEEP
 
 		PUSH	CS
 		POP	ES
@@ -168,6 +182,7 @@ L_0030:
 		MOV	DI,D_SXQ
 		MOV	AL,3
 		REP	STOSB
+L_MODE_KEEP:
 
 		XOR	BP,BP
 		CALL	S_XSGB			;显示光标
@@ -185,8 +200,10 @@ L_RET3:
 L_RET1406:
 		POP	ES
 		POP	DS
-		IRET
+		JMP	S_VIDEO_RETURN
 INT_10		ENDP
+
+		INCLUDE VIDEOIRQ.INC
 
 ;AH=1 设置光标大小 CH=起始扫描线,CL=终止线
 L_AH01:

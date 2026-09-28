@@ -3,7 +3,7 @@ import re
 import struct
 
 import pytest
-from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
+from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_CODE
 from unicorn import x86_const as reg
 
 from qa.spec.build import build_mixed, source_file
@@ -19,7 +19,9 @@ def menu_binary(assembler, source_dir, tmp_path_factory, request):
     source = source_file(source_dir, 'CKBD.ASM').read_bytes()
     names = ('INT_28', 'D_EXIT', 'D_INT28', 'D_INDOS', 'D_CRITERR',
              'D_INKEY', 'D_INT16', 'L_XTK1D', 'S_QTXS', 'S_CXTUX', 'S_SETINT',
-             'INT_9', 'D_INT9', 'K_SHIFT', 'K_DEL')
+             'INT_9', 'D_INT9', 'K_SHIFT', 'K_DEL', 'INT_16', 'D_DEFER',
+             'D_PUMP', 'D_IRQ', 'S_FOREGROUND_EXIT', 'S_JRCL', 'D_95D5',
+             'D_KEYCONSUMED', 'D_2BAA', 'D_KBDBUF')
     # Export addresses for observation, without replacing production code.
     source = source.replace(b'SEG_A ENDS',
                             ('PUBLIC ' + ','.join(names) + '\r\nSEG_A ENDS').encode())
@@ -191,6 +193,12 @@ def test_idle_unload_preserves_caller_and_retries_when_busy(
     calls = []
 
     def services(uc, number, _):
+        if number == 0x10:
+            assert machine.get('AX') == 0x1416
+            assert machine.get('BX') == 0
+            machine.set('AX', 0)
+            machine.set('BX', 0x4b48)
+            return
         if number == 0x61:
             for name, value in machine.initial.items():
                 if name not in ('CS', 'SS', 'SP', 'EFLAGS'):
@@ -215,3 +223,226 @@ def test_idle_unload_preserves_caller_and_retries_when_busy(
     eligible = pending and indos <= 1 and not error and not in_key
     assert calls == ([0, 3] if eligible else [])
     assert machine.byte('D_EXIT') == (2 if eligible and busy else 0 if eligible else pending)
+
+
+def dos_flags(machine, indos=0):
+    machine.write('D_INDOS', struct.pack('<HH', 0x321, 0x8000))
+    machine.write('D_CRITERR', struct.pack('<HH', 0x320, 0x8000))
+    machine.uc.mem_write(0x80320, bytes([0, indos]))
+
+
+@pytest.mark.parametrize('function', [0, 1, 0x10, 0x11])
+@pytest.mark.parametrize('initially_pending', [False, True])
+def test_bios_only_foreground_completes_unload(menu_binary, function, initially_pending):
+    machine = KeyboardModule(menu_binary)
+    dos_flags(machine)
+    machine.write('D_EXIT', bytes([2 if initially_pending else 0]))
+    machine.write('D_INT16', struct.pack('<HH', 0xf000, BASE//16))
+    machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
+    calls = []
+    unloaded = []
+    machine.set('AX', function << 8)
+
+    def services(uc, number, _):
+        if number == 0x10:
+            assert machine.get('AX') == 0x1416 and machine.get('BX') == 0
+            machine.set('AX', 0)
+            machine.set('BX', 0x4b48)
+        elif number == 0x2f:
+            if machine.get('SI') == 0:
+                assert machine.get('SS') == BASE//16
+                unloaded.append(True)
+            else:
+                assert machine.get('SI') == 3
+                machine.set('BX', 0)
+        else:
+            assert number == 0x60
+            operation = machine.get('AX') >> 8
+            calls.append(operation)
+            if not unloaded:
+                assert operation in (function | 1, 0x11)
+                # Simulate Y arriving while the original BIOS read is waiting.
+                machine.write('D_EXIT', b'\2')
+            else:
+                assert operation == function
+                # No return address in freed CKBD may survive the BIOS call.
+                assert machine.get('SP') == machine.initial['SP']
+                machine.set('AX', 0x342e)
+            flags_at = machine.get('SS')*16+machine.get('SP')+4
+            flags = int.from_bytes(uc.mem_read(flags_at, 2), 'little')
+            uc.mem_write(flags_at, struct.pack('<H', flags & ~64 if unloaded else flags | 64))
+
+    def timer(uc, address, size, _):
+        if uc.mem_read(address, 1) == b'\xf4':
+            # Wake the actual wait loop as a timer IRQ would, without replacing it.
+            machine.set('IP', machine.get('IP')+1)
+
+    machine.uc.hook_add(UC_HOOK_INTR, services)
+    machine.uc.hook_add(UC_HOOK_CODE, timer)
+    machine.call('INT_16', interrupt=True)
+    if function & 1 and not initially_pending:
+        assert not unloaded and machine.get('EFLAGS') & 64
+        machine.set('SP', machine.initial['SP'])
+        machine.set('AX', function << 8)
+        machine.set('EFLAGS', machine.initial['EFLAGS'])
+        machine.call('INT_16', interrupt=True)
+    assert unloaded == [True]
+    assert machine.get('AX') == 0x342e
+    assert calls[-1] == function
+    assert machine.get('EFLAGS') & 0x600 == 0x600
+
+
+@pytest.mark.parametrize('guard', ['D_INKEY', 'D_PUMP', 'D_IRQ', 'indos', 'video'])
+def test_foreground_never_unloads_a_live_interrupt_or_display_frame(menu_binary, guard):
+    machine = KeyboardModule(menu_binary)
+    dos_flags(machine, int(guard == 'indos'))
+    machine.write('D_EXIT', b'\2')
+    if guard.startswith('D_'):
+        machine.write(guard, b'\1')
+
+    def query(uc, number, _):
+        assert number == 0x10 and guard == 'video'
+        machine.set('AX', 1)
+        machine.set('BX', 0x4b48)
+
+    machine.uc.hook_add(UC_HOOK_INTR, query)
+    machine.call('S_FOREGROUND_EXIT')
+    assert machine.byte('D_EXIT') == 2
+    assert not machine.get('EFLAGS') & 1
+
+
+def test_busy_irq_drains_consumed_keys_and_preserves_foreground_typeahead(menu_binary):
+    machine = KeyboardModule(menu_binary)
+    machine.write('D_INT9', struct.pack('<HH', 0xf000, BASE//16))
+    machine.uc.mem_write(BASE+0xf000, b'\xcf')
+    machine.uc.mem_write(0x41a, struct.pack('<HH', 0x1e, 0x24))
+    machine.uc.mem_write(0x480, struct.pack('<HH', 0x1e, 0x3e))
+    machine.uc.mem_write(0x41e, struct.pack('<3H', 0x316e, 0x1769, 0x342e))
+    # Keep IRQ deferral, buffer ownership and dispatch production instructions;
+    # substitute only IME lookup, whose separate tests cover character choices.
+    machine.write('S_JRCL', b'\xcd\x61\xc3')
+    busy = [True]
+    consumed = []
+
+    def service(uc, number, _):
+        if number == 0x10:
+            assert machine.get('AX') == 0x1416
+            machine.set('BX', 0x4b48)
+            machine.set('AX', int(busy[0]))
+        else:
+            assert number == 0x61 and not busy[0]
+            consumed.append(machine.get('AX') & 255)
+            machine.write('D_95D5', bytes([int(consumed[-1] == ord('.'))]))
+
+    machine.uc.hook_add(UC_HOOK_INTR, service)
+    machine.call('INT_9', interrupt=True)
+    assert not consumed and machine.byte('D_DEFER') == 1
+    assert machine.uc.mem_read(0x41a, 2) == b'\x1e\0'
+    busy[0] = False
+    machine.set('SP', machine.initial['SP'])
+    machine.set('AX', 0x2d00)
+    machine.set('BX', 0x4b48)
+    machine.call('INT_16', interrupt=True)
+    assert consumed == list(b'ni.')
+    assert machine.uc.mem_read(0x41a, 4) == struct.pack('<HH', 0x22, 0x24)
+    assert machine.byte('D_PUMP') == 0 and machine.byte('D_INKEY') == 0
+
+
+def test_keys_typed_during_modal_repaint_are_not_discarded(menu_binary):
+    machine = KeyboardModule(menu_binary)
+    machine.write('D_INT9', struct.pack('<HH', 0xf000, BASE//16))
+    machine.uc.mem_write(BASE+0xf000, b'\xcf')
+    machine.uc.mem_write(0x41a, struct.pack('<HH', 0x1e, 0x20))
+    machine.uc.mem_write(0x480, struct.pack('<HH', 0x1e, 0x3e))
+    machine.uc.mem_write(0x41e, struct.pack('<H', 0x6200))
+    machine.write('S_JRCL', b'\xcd\x61\xc3')
+
+    def service(uc, number, _):
+        if number == 0x10:
+            assert machine.get('BX') == 0
+            return  # An older driver does not implement the busy query.
+        assert number == 0x61
+        machine.write('D_KEYCONSUMED', b'\1')
+        # The menu consumed its keys; a later key arrived during final repaint.
+        # Include a complete ring wrap back to the original head address.
+        machine.uc.mem_write(0x41e, struct.pack('<H', 0x342e))
+        machine.write('D_95D5', b'\0')
+
+    machine.uc.hook_add(UC_HOOK_INTR, service)
+    machine.call('INT_9', interrupt=True)
+    assert machine.uc.mem_read(0x41a, 4) == struct.pack('<HH', 0x1e, 0x20)
+    assert machine.uc.mem_read(0x41e, 2) == b'.4'
+
+
+def test_capability_query_does_not_drain_keys(menu_binary):
+    machine = KeyboardModule(menu_binary)
+    machine.write('D_DEFER', b'\1')
+    machine.set('AX', 0x2d01)
+    machine.set('BX', 0x4b48)
+    machine.call('INT_16', interrupt=True)
+    assert machine.get('AX') == 0x4b48
+    assert machine.byte('D_DEFER') == 1
+    assert machine.get('EFLAGS') & 0x601 == 0x601
+
+
+def test_unload_preserves_32bit_registers(menu_binary, request):
+    if request.node.callspec.params['menu_binary'] == '8086':
+        pytest.skip('The 8086 variant cannot call a 32-bit DOS or extender.')
+    machine = KeyboardModule(menu_binary)
+    dos_flags(machine)
+    machine.write('D_EXIT', b'\2')
+    saved = {}
+    for index, name in enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP')):
+        saved[name] = 0x87650000+index*0x10000+machine.get(name)
+        machine.set(name, saved[name])
+
+    def services(uc, number, _):
+        if number == 0x10:
+            machine.set('AX', 0)
+            machine.set('BX', 0x4b48)
+        else:
+            assert number == 0x2f
+            if machine.get('SI') == 0:
+                for name in saved:
+                    machine.set(name, 0xbaad9876)
+            else:
+                assert machine.get('SI') == 3
+                machine.set('BX', 0)
+
+    machine.uc.hook_add(UC_HOOK_INTR, services)
+    machine.call('S_FOREGROUND_EXIT')
+    assert machine.get('EFLAGS') & 1
+    assert {name: machine.get(name) for name in saved} == saved
+
+
+@pytest.mark.parametrize('function', [0, 0x10])
+def test_blocking_read_refills_an_ime_phrase_remainder(menu_binary, function):
+    machine = KeyboardModule(menu_binary)
+    machine.write('D_INT16', struct.pack('<HH', 0xf000, BASE//16))
+    machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
+    machine.write('D_95D5', b'\2')
+    machine.write('D_2BAA', struct.pack('<H', 0xe000))
+    machine.write('D_KBDBUF', struct.pack('<H', 16))
+    machine.uc.mem_write(BASE+0xe000, b'ab')
+    machine.uc.mem_write(0x41a, struct.pack('<HH', 0x1e, 0x1e))
+    machine.uc.mem_write(0x480, struct.pack('<HH', 0x1e, 0x3e))
+    machine.set('AX', function << 8)
+
+    def bios(uc, number, _):
+        assert number == 0x60
+        head, tail = struct.unpack('<HH', uc.mem_read(0x41a, 4))
+        function = machine.get('AX') >> 8
+        if head != tail:
+            machine.set('AX', int.from_bytes(uc.mem_read(0x400+head, 2), 'little'))
+        if not function & 1:
+            assert head != tail, 'phrase refill must precede the blocking BIOS read'
+            uc.mem_write(0x41a, struct.pack('<H', head+2))
+        flags_at = machine.get('SS')*16+machine.get('SP')+4
+        flags = int.from_bytes(uc.mem_read(flags_at, 2), 'little')
+        uc.mem_write(flags_at, struct.pack('<H', flags | 64 if head == tail else flags & ~64))
+
+    machine.uc.hook_add(UC_HOOK_INTR, bios)
+    machine.call('INT_16', interrupt=True)
+    assert machine.get('AX') == ord('a')
+    assert machine.uc.mem_read(0x41a, 4) == struct.pack('<HH', 0x20, 0x22)
+    assert machine.byte('D_95D5') == 0

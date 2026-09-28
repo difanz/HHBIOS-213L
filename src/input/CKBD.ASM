@@ -150,6 +150,12 @@ D_DB		DW	0			;电报码表地址
 
 ;---键盘管理中断---------------------------------
 INT_16		PROC	FAR
+		CMP	AH,2DH
+		JNZ	L_KEYENTRY
+		CMP	BX,4B48H
+		JNZ	L_KEYENTRY
+		JMP	KEY_DRAIN
+L_KEYENTRY:
 		CLD
 		STI
 		PUSH	DS
@@ -162,6 +168,50 @@ INT_16		PROC	FAR
 		PUSH	BP
 		PUSH	CS
 		POP	DS
+		CMP	AH,0
+		JE	L_KEYWAIT
+		CMP	AH,10H
+		JE	L_KEYWAIT
+		CMP	AH,1
+		JE	L_KEYIDLE
+		CMP	AH,11H
+		JNE	L_KEYDISPATCH
+L_KEYIDLE:
+		CALL	S_FOREGROUND_EXIT
+		JC	L_INT16
+		JMP	SHORT L_KEYDISPATCH
+L_KEYWAIT:
+; Keep control while BIOS waits: an IRQ can request unload after this call.
+		PUSH	AX
+L_KEYPOLL:
+		CALL	S_FOREGROUND_EXIT
+		JC	L_KEYUNLOADED
+		MOV	BP,SP
+		MOV	AX,[BP]
+		OR	AH,1
+		MOV	D_AH,AH
+		CALL	S_EDIT
+		JC	L_KEYCHECK
+		CALL	L_INT16_1
+		JNZ	L_KEYCHECK
+		CMP	D_95D5,0
+		JZ	L_KEYCHECK
+		MOV	AX,40H
+		MOV	ES,AX
+		MOV	SI,D_2BAA
+		CALL	S_XBUF1
+		CALL	S_INT16_1
+L_KEYCHECK:
+		JNZ	L_KEYREADY
+		STI
+		HLT
+		JMP	SHORT L_KEYPOLL
+L_KEYUNLOADED:
+		POP	AX
+		JMP	L_INT16
+L_KEYREADY:
+		POP	AX
+L_KEYDISPATCH:
 		MOV	D_AH,AH
 		CALL	S_EDIT
 		JC	L_0010
@@ -217,7 +267,15 @@ L_AH01:
 		CALL	S_XBUF1 		;写到键盘缓冲区
 		CALL	S_INT16_1		;再判
 L_0010:
-		STI
+; BIOS key queries return arithmetic flags but retain caller control flags.
+		PUSH	AX
+		PUSHF
+		POP	AX
+		MOV	BP,SP
+		AND	AX,08D5H
+		AND	WORD PTR SS:[BP+22],0F72AH
+		OR	SS:[BP+22],AX
+		POP	AX
 		POP	BP
 		POP	SI
 		POP	DI
@@ -226,7 +284,7 @@ L_0010:
 		POP	BX
 		POP	ES
 		POP	DS
-		RET	2			;保存标志寄存器返回
+		IRET
 
 ;AH=25H *** 显示版本信息 BL=显示属性
 L_AH25:
@@ -425,9 +483,16 @@ S_XSBB		ENDP
 ;---键盘硬中断-----------------------------------
 INT_9		PROC	FAR
 		CLD
+		INC	CS:D_IRQ
 		PUSHF
 		CALL	CS:D_INT9		;执行原INT9
-
+		PUSHF
+		PUSH	CS
+		CALL	KEY_PUMP
+		DEC	CS:D_IRQ
+		IRET
+KEY_PUMP:
+		CLD
 		PUSH	DS
 		PUSH	ES
 		PUSH	AX
@@ -441,7 +506,45 @@ INT_9		PROC	FAR
 		POP	DS
 		MOV	AX,40H
 		MOV	ES,AX
+		CALL	S_KEY_MODIFIERS
+		CMP	D_INKEY,0
+		JNZ	L_9030
+		CALL	S_VIDEO_BUSY
+		JNC	L_KEYSAFE
+		MOV	D_DEFER,1
+		JMP	SHORT L_9030
+L_KEYSAFE:
+		MOV	D_DEFER,0
+		MOV	D_INKEY,1
+		CMP	D_SHIFT_TOGGLE,0
+		JZ	L_9020
+		MOV	D_SHIFT_TOGGLE,0
+		XOR	K_DEL,0FFH
+		JZ	L_9003
+		CALL	L_1404
+		JMP	SHORT L_9020
+L_9003:
+		CALL	S_CXTUX
+L_9020:
+		MOV	BX,40H
+		MOV	ES,BX
+		MOV	BX,ES:[1AH]
+		CMP	BX,ES:[1CH]
+		JNZ	L_9040
+		MOV	D_INKEY,0
+L_9030:
+		POP	BP
+		POP	DI
+		POP	SI
+		POP	DX
+		POP	CX
+		POP	BX
+		POP	AX
+		POP	ES
+		POP	DS
+		IRET
 
+S_KEY_MODIFIERS:
 		MOV	AX,ES:[17H]
 		MOV	BL,K_SHIFT		;=1右,=2左,=10H-SCROLL LOCK
 		CMP	BL,10H
@@ -459,41 +562,20 @@ L_9002:
 		JNZ	L_9010
 		CMP	D_INKEY,0
 		JNZ	L_9010
-		XOR	K_DEL,0FFH		;转换
-		JZ	L_9003
-		CALL	L_1404			;关提示行
-		JMP	SHORT L_9030
-L_9003:
-		CALL	S_CXTUX 		;重显提示行
-		JMP	SHORT L_9030
+		XOR	D_SHIFT_TOGGLE,1
+		RETN
 L_900UP:
 		MOV	D_SHIFT_DOWN,0
 L_9010:
 		AND	AL,0FH
 		CMP	AL,0FH			;判CTRL+ALT+双SHIFT?
-		JNZ	L_9020
+		JNZ	L_MODDONE
 		MOV	CS:D_EXIT,1
-		JMP	SHORT L_9030
-L_9020:
-		CMP	D_INKEY,0		;判重入?
-		JNZ	L_9030
-
-		MOV	BX,ES:[1AH]		;键盘缓冲区首址
-		CMP	BX,ES:[1CH]		;=键盘缓冲区尾?
-		JNZ	L_9040
-L_9030:
-		POP	BP
-		POP	DI
-		POP	SI
-		POP	DX
-		POP	CX
-		POP	BX
-		POP	AX
-		POP	ES
-		POP	DS
-		IRET
+L_MODDONE:
+		RETN
 L_9040:
-		MOV	D_INKEY,1		;置标志
+		MOV	D_KEYHEAD,BX
+		MOV	D_KEYCONSUMED,0
 		MOV	AX,ES:[BX]		;取键入字符
 		CMP	AL,80H			;键入字符ASCII码>80H?
 		JB	L_9042
@@ -518,13 +600,30 @@ L_9043:
 		MOV	ES,BX
 		CMP	D_95D5,0		;无返回键?
 		JNZ	L_9048
-		MOV	DI,ES:[1CH]		;键盘缓冲区尾址
-		MOV	ES:[1AH],DI		;=键盘缓冲区首址
+; Remove only the triggering key. Modal BIOS reads already advanced the head;
+; keys typed during the closing repaint belong to the foreground application.
+		CMP	D_KEYCONSUMED,0
+		JNE	L_9044
+		MOV	DI,ES:[1AH]
+		CMP	DI,D_KEYHEAD
+		JNE	L_9044
+		ADD	DI,2
+		CMP	DI,ES:[82H]
+		JB	L_KEYHEAD
+		MOV	DI,ES:[80H]
+L_KEYHEAD:
+		MOV	ES:[1AH],DI
+		CMP	DI,ES:[1CH]
+		JE	L_9044
+; Deferred IRQs can leave several IME letters queued. Consume the next one
+; now, stopping as soon as a key or completed character belongs to the caller.
+		MOV	BX,DI
+		JMP	L_9040
 L_9044:
 		MOV	D_95D5,0
 L_9046:
 		MOV	D_INKEY,0		;清标志
-		JMP	SHORT L_9030
+		JMP	L_9030
 L_9048:
 		CMP	D_95D5,1		;1个返回码?
 		JZ	L_9044
@@ -2442,6 +2541,7 @@ S_INT16_1:
 INT16_AH1	EQU	$-1
 		JMP	SHORT L_INT16_1
 S_INT16:
+		MOV	CS:D_KEYCONSUMED,1
 		MOV	AH,10H
 INT16_AH0	EQU	$-1
 L_INT16_1:
@@ -3904,6 +4004,12 @@ S_JRCL		ENDP
 		INCLUDE	KEYTABLE.INC
 
 D_SHIFT_DOWN	DB	0
+D_SHIFT_TOGGLE	DB	0
+D_DEFER		DB	0
+D_PUMP		DB	0
+D_IRQ		DB	0
+D_KEYCONSUMED	DB	0
+D_KEYHEAD	DW	0
 D_EXIT		DB	0
 D_INT28		DD	0
 D_INDOS		DD	0
@@ -3912,6 +4018,7 @@ D_28SS		DW	0
 D_28SP		DW	0
 		DW	80H DUP(0)
 D_28STK		EQU	$
+		INCLUDE KEYIDLE.INC
 
 INT_28		PROC	FAR
 		PUSHF
@@ -3928,40 +4035,20 @@ INT_28		PROC	FAR
 		PUSH	ES
 		CMP	CS:D_INKEY,0
 		JNZ	L_28RET
+		CMP	CS:D_PUMP,0
+		JNZ	L_28RET
+		CMP	CS:D_IRQ,0
+		JNZ	L_28RET
 		LES	BX,CS:D_INDOS
 		CMP	BYTE PTR ES:[BX],1
 		JA	L_28RET
 		LES	BX,CS:D_CRITERR
 		CMP	BYTE PTR ES:[BX],0
 		JNZ	L_28RET
+		CALL	S_VIDEO_BUSY
+		JC	L_28RET
 		MOV	AL,CS:D_EXIT
-		MOV	CS:D_EXIT,0
-		CLI
-		MOV	CS:D_28SS,SS
-		MOV	CS:D_28SP,SP
-		PUSH	CS
-		POP	SS
-		MOV	SP,OFFSET D_28STK
-		CLD
-		STI
-		CMP	AL,1
-		JZ	L_28EX
-		XOR	SI,SI
-		MOV	AX,4A06H
-		INT	2FH
-; A busy display driver can defer unloading. Retry at the next DOS idle.
-		MOV	AX,4A06H
-		MOV	SI,3
-		XOR	BX,BX
-		INT	2FH
-		CMP	BX,4A06H
-		JNZ	L_28DONE
-		MOV	CS:D_EXIT,2
-L_28DONE:
-; The reader frees CKBD without erasing it. Leave before another allocation.
-		CLI
-		MOV	SS,CS:D_28SS
-		MOV	SP,CS:D_28SP
+		CALL	S_EXIT_REQUEST
 L_28RET:
 		POP	ES
 		POP	DS
@@ -3975,10 +4062,6 @@ L_28RET:
 L_28C:
 		POPF
 		JMP	CS:D_INT28
-L_28EX:
-; Only the emergency key chord terminates the foreground process.
-		MOV	AX,4CFFH
-		INT	21H
 INT_28		ENDP
 
 A_BUF		DW	0			;公用缓冲区指针

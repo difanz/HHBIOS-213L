@@ -25,14 +25,14 @@ def keymenu_build(tmp_path_factory):
     return output
 
 
-def press(keyboard, chord):
+def press(keyboard, chord, settle=.15):
     keys = chord.split('+')
     for key in keys:
         keyboard.event(key, True)
         time.sleep(.06)
     for key in reversed(keys):
         keyboard.event(key, False)
-    time.sleep(.15)
+    time.sleep(settle)
 
 
 def operate_menu(keyboard, process):
@@ -59,21 +59,28 @@ def operate_menu(keyboard, process):
                 time.sleep(1)
                 if keyboard.screenshots:
                     keyboard.capture(f'confirmation-{cycle}-{step}')
-                for key in answer:
-                    press(keyboard, key)
-                # The modal IRQ returns after repainting its status line.
-                # Keep the foreground sentinel outside that consumed input.
-                time.sleep(1)
-                if keyboard.screenshots:
-                    keyboard.capture(f'answer-{cycle}-{step}')
+                for index, key in enumerate(answer):
+                    press(keyboard, key, settle=0 if index == len(answer)-1 else .15)
+                # Type immediately while cancellation can still be repainting.
+                # The menu must preserve this foreground key, not clear the queue.
                 press(keyboard, 'period')
+                if keyboard.screenshots and (cycle, step) != (1, 4):
+                    keyboard.capture(f'answer-{cycle}-{step}')
         assert process.wait(timeout=20) == 0
 
 
 @pytest.mark.parametrize('display', ['VGA', 'VESA'])
 @pytest.mark.parametrize('low', [False, True], ids=['umb', 'conventional'])
+@pytest.mark.parametrize('input_mode', ['dos', 'bios', 'poll'])
 def test_menu_cancel_unload_and_reload(dosbox_binary, msdos_image, memory_build,
-                                     keymenu_build, tmp_path, pytestconfig, display, low):
+                                     keymenu_build, tmp_path, pytestconfig, display, low,
+                                     input_mode):
+    run_menu_case(dosbox_binary, msdos_image, memory_build, keymenu_build,
+                  tmp_path, pytestconfig, display, low, input_mode)
+
+
+def run_menu_case(dosbox_binary, msdos_image, memory_build, keymenu_build,
+                  tmp_path, pytestconfig, display, low, input_mode, machine='svga_s3'):
     image, copy_in, read = copy_disk(msdos_image, tmp_path)
     for name in ('READ5', 'CKBD', display):
         copy_in(memory_build / (name+'.COM'), '::HHBIOS/'+name+'.COM')
@@ -95,7 +102,7 @@ def test_menu_cancel_unload_and_reload(dosbox_binary, msdos_image, memory_build,
     commands = ['@ECHO OFF', 'CD \\', 'MEMORY BEFORE.TXT']
     for cycle in range(2):
         commands += ['CD \\HHBIOS', 'READ5'+suffix, 'CKBD /E'+suffix, display+suffix,
-                     'CD \\', f'MEMORY LIVE{cycle}.TXT', 'KEYMENU',
+                     'CD \\', f'MEMORY LIVE{cycle}.TXT', 'KEYMENU '+input_mode,
                      'IF ERRORLEVEL 1 GOTO FAILED', f'MEMORY FREE{cycle}.TXT']
     commands += ['ECHO complete>DONE.TXT', ':FAILED', 'C:\\DOS\\SHUTDOWN /S']
     (tmp_path/'AUTOEXEC.BAT').write_bytes(startup+b'\r\n'+('\r\n'.join(commands)+'\r\n').encode())
@@ -103,7 +110,7 @@ def test_menu_cancel_unload_and_reload(dosbox_binary, msdos_image, memory_build,
     with PhysicalKeyboard(tmp_path, pytestconfig.getoption('--screenshots')) as keyboard:
         config = ('[sdl]\noutput=surface\nautolock=false\n'
                   f'mapperfile={ROOT}/qa/dosbox-x.map\n'
-                  '[dosbox]\nmachine=svga_s3\nmemsize=16\n[cpu]\ncycles=30000\n')
+                  f'[dosbox]\nmachine={machine}\nmemsize=16\n[cpu]\ncycles=30000\n')
         config += keyboard.config + ('\n[autoexec]\nimgmount 0 empty -fs none -t floppy\n'
                                       f'imgmount c "{image}" -ide 1m\nboot c:\n')
         (tmp_path/'dosbox.conf').write_text(config)

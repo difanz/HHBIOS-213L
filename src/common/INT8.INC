@@ -19,14 +19,18 @@ D_8		DB	2			;INT8忙标志
 INT_8		PROC	FAR
 		PUSHF
 		CALL	CS:D_INT8		;原INT8
-		STI				;1.24
+		CLI				; Check ownership and acquire it atomically.
 		CLD
+		CMP	CS:IN_INT10,0
+		JNZ	L_8001
 		TEST	CS:D_8,80H		;判忙?
 K_INT8	EQU	$
 		JNZ	L_8001
 		DEC	CS:D_8
 		TEST	CS:D_8,7
 		JNZ	L_8001
+		INC	CS:IN_INT10
+		STI
 		CALL	S_0800			;执行INT8
 L_8001:
 		IRET
@@ -89,8 +93,6 @@ L_0825:
 		CALL	S_QGB			;清光标
 		CALL	S_XR			;处理直接写屏
 L_0830:
-		CMP	CS:IN_INT10,0FFH	;在INT10中?
-		JZ	L_0840
 		CALL	S_GBSS
 L_0840:
 		AND	CS:D_8,7FH		;3.16
@@ -103,6 +105,9 @@ L_0840:
 		POP	AX
 		POP	ES
 		POP	DS
+		CLI
+		DEC	CS:IN_INT10
+		CALL	S_VIDEO_IDLE
 		RET
 S_0800		ENDP
 

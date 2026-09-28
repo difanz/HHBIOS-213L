@@ -178,6 +178,8 @@ u8 CALL direct = 1;
 static u8 vbe_mode;
 static u8 allow_mode = 1;
 static u8 logical_mode = 3;
+static u8 translate_text = 1;
+static u8 native_mode = 0xff;
 static u8 counter;
 static u8 period = 2;
 static u8 cursor_on = 1;
@@ -239,7 +241,7 @@ static int IsTextPosition(u16 text_position) {
 static void UpdateKeyboardState(void) {
   if (keyboard_segment) {
     *PTR(u8, keyboard_segment, 0x100) = 0x12;
-    *PTR(u8, keyboard_segment, 0x101) = active ? 0x12 : 0xff;
+    *PTR(u8, keyboard_segment, 0x101) = active ? 0x12 : native_mode;
     *PTR(u8, keyboard_segment, 0x102) = direct;
   }
 }
@@ -333,6 +335,7 @@ static int ActivateConsole(u16 preserve) {
   if (vbe_mode && bios_registers.ax != 0x004f) {
     return 0;
   }
+  native_mode = 0xff;
   hardware_mode = ReadBdaByte(0x49);
   /* Start at graphics bank zero. The aperture probe isolates B800 text
    * from every bank occupied by the visible plane. */
@@ -892,6 +895,9 @@ static void TransferVideoState(void) {
     record[48] = (u8)text_bank;
     record[49] = (u8)(text_bank >> 8);
     record[50] = hardware_mode;
+    record[51] = translate_text;
+    record[52] = native_mode;
+    record[53] = 1;  /* Text-policy extension; older records leave this zero. */
     if (was_cursor) {
       ShowCursor();
     }
@@ -902,6 +908,8 @@ static void TransferVideoState(void) {
       active = record[4];
       logical_mode = record[5];
       direct = record[6];
+      translate_text = record[53] == 1 ? record[51] != 0 : 1;
+      native_mode = record[53] == 1 ? record[52] : 0xff;
       active_page = record[7];
       policy = record[8];
       hanzi = record[9];
@@ -1195,7 +1203,8 @@ u16 CALL dispatch(void) {
       previous = SuspendConsole();
       bios(&request);
       if (request.ax == 0x004f) {
-        if (mode <= 3) {
+        native_mode = 0xff;
+        if (mode <= 3 && translate_text) {
           logical_mode = 3;
           direct = 1;
           if (text_rows != 25 && banked_text) {
@@ -1205,6 +1214,9 @@ u16 CALL dispatch(void) {
           } else if (!ActivateConsole(0)) {
             request.ax = 0x014f;
           }
+        } else if (mode <= 3 || mode == 7) {
+          native_mode = (u8)mode;
+          UpdateKeyboardState();
         }
       } else {
         active = previous;
@@ -1258,12 +1270,24 @@ u16 CALL dispatch(void) {
     }
     return 1;
   }
+  /* These policies also apply while a native application owns the screen. */
+  if (function == 0x18 && (subfunction == 4 || subfunction == 5 ||
+                           subfunction == 10 || subfunction == 11)) {
+    if (subfunction == 4 || subfunction == 5) {
+      allow_mode = (u8)(subfunction == 5);
+    } else {
+      translate_text = direct = (u8)(subfunction == 11);
+      UpdateKeyboardState();
+    }
+    return 1;
+  }
   if (!function) {
     if (!allow_mode) {
       return 1;
     }
     SuspendConsole();
-    if ((subfunction & 127) <= 3 || (subfunction & 127) == 0x12) {
+    if (((subfunction & 127) <= 3 && translate_text) ||
+        (subfunction & 127) == 0x12) {
       logical_mode = (subfunction & 127) == 0x12 ? 0x12 : 3;
       direct = logical_mode == 3;
       if (text_rows != 25 && banked_text) {
@@ -1274,7 +1298,12 @@ u16 CALL dispatch(void) {
       }
     } else {
       bios(&request);
+      native_mode = 0xff;
+      if ((subfunction & 127) <= 3 || (subfunction & 127) == 7) {
+        native_mode = (u8)(subfunction & 127);
+      }
     }
+    UpdateKeyboardState();
     return 1;
   }
   if (!active) {
@@ -1487,11 +1516,6 @@ u16 CALL dispatch(void) {
       if (subfunction < 2) {
         hanzi = (u8)!subfunction;
         invalidate();
-      } else if (subfunction == 4 || subfunction == 5) {
-        allow_mode = (u8)(subfunction == 5);
-      } else if (subfunction == 10 || subfunction == 11) {
-        direct = (u8)(subfunction == 11);
-        UpdateKeyboardState();
       } else if (subfunction == 12) {
         policy = (u8)page_number;
         invalidate();

@@ -77,8 +77,20 @@ class PhysicalKeyboard:
                 os.close(r)
                 if w is not None:
                     os.close(w)
-            self.display = self.x.XOpenDisplay(self.name.encode())
-            assert self.display, f'Cannot open private X display {self.name}'
+            # displayfd can become readable before XOpenDisplay accepts a
+            # connection when several isolated guests start at once.
+            deadline = time.monotonic() + 2
+            while not self.display:
+                assert self.xvfb.poll() is None, (
+                    f'Xvfb exited with {self.xvfb.returncode}; '
+                    f'see {self.directory / "xvfb.log"}')
+                self.display = self.x.XOpenDisplay(self.name.encode())
+                if self.display:
+                    break
+                assert time.monotonic() < deadline, (
+                    f'Cannot open private X display {self.name}; '
+                    f'see {self.directory / "xvfb.log"}')
+                time.sleep(.05)
             (self.directory / 'IRQ.KEY').touch()
             return self
         except BaseException:

@@ -7,7 +7,7 @@
 include vesa_cpu.inc
 org 100h
 public start
-public int10_handler, int8_handler, old10, old8, stack_bottom, stack_top
+public int10_handler, int8_handler, int2f_handler, old10, old8, stack_bottom, stack_top
 public image_end, resident_end, S_UMB, umb_segment, resident_paragraphs
 public font_checking
 extrn initialize:near, dispatch:near, tick:near
@@ -41,6 +41,9 @@ old2f dd 0
 saved_ss dw 0
 saved_sp dw 0
 handled dw 0
+keyboard_service_segment dw 0
+keyboard_service db 0
+return_depth db 0
 public policy, hanzi, shadow, frame_alias_offset
 hanzi db 1
 D_B800 dw 0b800h
@@ -101,6 +104,8 @@ load_regs macro
 endm
 
 int10_handler proc far
+    cmp ax,1416h
+    je query_busy
     cmp cs:mouse_native,0
     jne chain10
     cmp ax,1410h
@@ -145,6 +150,7 @@ dispatch_interrupts:
     mov es:[di+36],ax
     mov ss,cs:saved_ss
     mov sp,cs:saved_sp
+    inc cs:return_depth
     mov cs:busy,0
     cmp cs:handled,0
     je pass10
@@ -160,10 +166,16 @@ dispatch_interrupts:
     int 16h
     load_regs
 prompt_notified:
+    call notify_keyboard
+    cli
+    dec cs:return_depth
     iret
 pass10:
     load_regs
     restore_dword_regs
+    call notify_keyboard
+    cli
+    dec cs:return_depth
     jmp short chain10
 busy10:
     ; Capture may be requested by another timer TSR while rendering. It must
@@ -177,6 +189,19 @@ capture_busy:
     iret
 chain10:
     jmp cs:old10
+query_busy:
+    ; IRQ1 cannot wait for the renderer it interrupted. CKBD leaves the key
+    ; queued until notify_keyboard runs on the restored caller's stack.
+    xor ax,ax
+    cmp cs:busy,0
+    jne query_occupied
+    cmp cs:mouse_native,0
+    je query_ready
+query_occupied:
+    inc ax
+query_ready:
+    mov bx,4b48h
+    iret
 query_boundary:
     ; Keyboard IRQ handlers may ask while a font read has interrupted drawing.
     ; Use the current text snapshot without entering the occupied C stack.
@@ -249,13 +274,56 @@ int8_handler proc far
     cli
     mov ss,cs:saved_ss
     mov sp,cs:saved_sp
+    inc cs:return_depth
     mov cs:busy,0
     load_regs
     restore_dword_regs
+    call notify_keyboard
+    cli
+    dec cs:return_depth
 timer_done:
     popf
     iret
 int8_handler endp
+
+notify_keyboard proc near
+    pushfd
+    pushad
+    push ds
+    push es
+    mov ax,cs:keyboard_segment
+    or ax,ax
+    jz keyboard_notified
+    mov ds,ax
+    cmp word ptr ds:[103h],0cdefh
+    jne keyboard_notified
+    cmp ax,cs:keyboard_service_segment
+    je keyboard_service_known
+    mov cs:keyboard_service_segment,ax
+    mov cs:keyboard_service,0
+    ; CDEF also identifies old CKBD releases. Negotiate this new service once
+    ; so an older module does not forward an unknown call on every redraw.
+    mov ax,2d01h
+    mov bx,4b48h
+    int 16h
+    cmp ax,4b48h
+    jne keyboard_notified
+    mov cs:keyboard_service,1
+keyboard_service_known:
+    cmp cs:keyboard_service,0
+    je keyboard_notified
+    ; This service only drains input. Unload is forbidden while a display
+    ; driver's return address remains on the stack.
+    mov ax,2d00h
+    mov bx,4b48h
+    int 16h
+keyboard_notified:
+    pop es
+    pop ds
+    popad
+    popfd
+    ret
+notify_keyboard endp
 
 ; The relocated UMB image exits its loader normally, so the font reader's
 ; INT 21h/AH=31h registry does not own it. Release our resources before chaining
@@ -267,6 +335,10 @@ int2f_handler proc far
     or si,si
     jne chain2f
     cmp cs:busy,0
+    jne unload_busy
+    ; Rendering is released before CKBD can draw a deferred menu. That does
+    ; not release our return frames, including nested status notifications.
+    cmp cs:return_depth,0
     jne unload_busy
     mov cs:busy,1
     pushad

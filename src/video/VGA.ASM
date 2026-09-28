@@ -69,19 +69,22 @@ D_AH10		DW	OFFSET L_AH10		;AH=10H
 		DW	OFFSET L_AH18		;AH=18H
 
 INT_10		PROC	FAR
+		CLI
+		CMP	AX,1416H
+		JZ	S_VIDEO_BUSY
+		INC	CS:IN_INT10
 		STI
 		CLD
 		CMP	AH,-1			;判安装?
 		JNZ	L_00
 		MOV	AL,'V'                  ;VGA
 		CBW
-		IRET
+		JMP	S_VIDEO_RETURN
 L_00:
 		CMP	CS:D_VBEBUSY,0
 		JNZ	L_10
 		CMP	AX,4F02H
 		JZ	L_VBESET
-		MOV	CS:IN_INT10,0FFH
 		OR	AH,AH
 		JZ	L_01
 		CMP	AH,18H			;功能号>18H?
@@ -136,8 +139,8 @@ L_INT10:
 		POP	BP
 		POP	ES
 		POP	DS
-L_10:		MOV	CS:IN_INT10,0
-		JMP	CS:D_INT10		;执行原INT10
+L_10:
+		JMP	S_VIDEO_CHAIN		;执行原INT10
 L_RET:
 		POP	AX			;恢复现场并返回
 L_RET1:
@@ -151,9 +154,10 @@ L_RET3:
 L_RET2:
 		POP	ES
 		POP	DS
-		MOV	CS:IN_INT10,0
-		IRET
+		JMP	S_VIDEO_RETURN
 INT_10		ENDP
+
+		INCLUDE VIDEOIRQ.INC
 
 ; Let the VBE BIOS own its modes. Suspend VGA refresh during the BIOS call;
 ; failed mode sets must leave the previous HHBIOS display state unchanged.
@@ -182,7 +186,7 @@ L_VBERET:
 		POP	BP
 		POP	BX
 		ADD	SP,2
-		IRET
+		JMP	S_VIDEO_RETURN
 
 ;AH=0 设置显示方式
 L_AH00:

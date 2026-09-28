@@ -174,7 +174,7 @@ def test_vesa_umb_allocator_restores_dos_state(vesa_driver,failure,initial):
 
 class Driver:
     """Linked production code; only the external BIOS is substituted."""
-    def __init__(self, image, bios, keyboard=None):
+    def __init__(self, image, bios, keyboard=None, software_interrupt=None):
         raw,self.symbols=image
         self.uc=Uc(UC_ARCH_X86,UC_MODE_16); self.uc.mem_map(0,0x100000)
         self.uc.mem_write(0x10100,raw)
@@ -184,6 +184,9 @@ class Driver:
         def interrupt(uc,number,_):
             if number == 0x16 and keyboard is not None:
                 keyboard(self)
+                return
+            if number != 0xf1 and software_interrupt is not None:
+                software_interrupt(self, number)
                 return
             assert number==0xf1, f'unexpected interrupt {number:02x}'
             bios(self)
