@@ -54,7 +54,15 @@ def operate_menu(keyboard, process):
                 # Release the guest into DOS's blocking read before IRQ1.
                 client.sendall(b'\xa5')
                 time.sleep(.15)
-                for key in ['Control_L+F5'] + ['Right']*4 + ['Return']:
+                press(keyboard, 'Control_L+F5')
+                if step == 0:
+                    press(keyboard, 'Down')
+                    if keyboard.screenshots:
+                        keyboard.capture(f'menu-page2-{cycle}')
+                    press(keyboard, 'Up')
+                    if keyboard.screenshots:
+                        keyboard.capture(f'menu-page1-{cycle}')
+                for key in ['Right']*4 + ['Return']:
                     press(keyboard, key)
                 time.sleep(1)
                 if keyboard.screenshots:

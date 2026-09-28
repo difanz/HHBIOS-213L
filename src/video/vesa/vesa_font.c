@@ -381,6 +381,7 @@ void CALL font_sync(void) {
     ClearBytes(font_custom, sizeof(font_custom));
     ClearBytes(valid, sizeof(valid));
     invalidate();
+    invalidate_prompt();
     return;
   }
   if (custom_active &&
@@ -409,7 +410,11 @@ void CALL font_sync(void) {
   if (any && !TransferFontBytes(text_storage + 32768UL, current, 4096, 1)) {
     font_fault = 1;
     ClearBytes(font_custom, sizeof(font_custom));
+    invalidate_prompt();
     return;
+  }
+  if (any) {
+    invalidate_prompt();
   }
   for (i = 0; i < FONT_CACHE; ++i) {
     if (valid[i] && (keys[i] & 0x8000) && (font_custom[keys[i] & 255] & 2)) {

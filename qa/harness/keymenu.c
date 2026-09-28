@@ -50,7 +50,8 @@ static int CheckMenu(const char* mode) {
   }
   regs.h.ah = 0x0f;
   intr(0x10, &regs);
-  if (regs.h.al != 3 && regs.h.al != 7) return 5;
+  /* BIOS may retain the mode-set "do not clear" flag in AL bit 7. */
+  if ((regs.h.al & 0x7f) != 3 && (regs.h.al & 0x7f) != 7) return 5;
   puts("Keyboard menu completed; foreground program resumed.");
   return 0;
 }

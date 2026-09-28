@@ -438,6 +438,10 @@ def test_record_map_tail_and_failed_replacement(vesa_driver, kind):
 @pytest.mark.parametrize('kind',['xms','ems'])
 def test_downloaded_glyph_updates_without_invalidating_unrelated_cells(vesa_driver,kind):
     m=FontMachine(vesa_driver,kind); assert m.call('font_open')==1
+    invalidations=[]
+    entry=0x10000+m.symbols['invalidate_prompt']
+    m.uc.hook_add(UC_HOOK_CODE,lambda uc,address,size,data: invalidations.append(address),
+                 begin=entry,end=entry)
     # Replace only the hardware observation boundary; execute the real cache,
     # change detection, external-memory transfers and bitmap raster preparation.
     m.uc.mem_write(0x10000+m.symbols['font_snapshot'],b'\xb8\x01\x00\xc3')
@@ -454,12 +458,16 @@ def test_downloaded_glyph_updates_without_invalidating_unrelated_cells(vesa_driv
     expected=sum(((0x81>>(7-x*8//10))&1)<<(15-x) for x in range(10))
     assert struct.unpack('<46H',m.uc.mem_read(0x10000+m.buffer,92))==(expected,)*23+(0,)*23
     moves=m.moves
+    assert len(invalidations)==1
+    invalidations.clear()
     m.uc.mem_write(address,bytes(bitmap)); m.call('font_sync'); m.call('font_get',code,m.buffer)
     assert m.moves==moves+1, 'Unchanged glyph must reuse its decoded cache entry'
+    assert invalidations==[]
     screen=bytes([code,7,65,7])*1000
     m.write('shadow',screen)
     bitmap[code*16:code*16+16]=bytes([0xff]*16)
     m.uc.mem_write(address,bytes(bitmap)); m.call('font_sync')
+    assert len(invalidations)==1
     shadow=bytes(m.uc.mem_read(0x10000+m.symbols['shadow'],4000))
     assert shadow[2::4]==screen[2::4] and shadow[3::4]==screen[3::4]
     assert shadow[1::4]==bytes([0xf8])*1000

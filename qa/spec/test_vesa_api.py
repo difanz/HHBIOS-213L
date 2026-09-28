@@ -6,7 +6,7 @@ import struct
 import subprocess
 
 import pytest
-from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn import x86_const as reg
 
 from qa.spec.dos import ROOT
@@ -199,8 +199,10 @@ class Driver:
 
     def run(self,entry='int10_handler',limit=300000,**registers):
         near=entry not in ('int10_handler','int33_handler','int8_handler')
+        # Installation code extends past E000h; keep its C stack above the
+        # complete COM image, as the DOS loader does.
         context=dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
-                     SP=0xe000,EFLAGS=0x202)
+                     SP=0xfe00 if near else 0xe000,EFLAGS=0x202)
         context.update(registers)
         for name,value in context.items(): self.put(name,value)
         address=(self.get('SS')<<4)+self.get('SP')
@@ -597,6 +599,102 @@ def test_open_prompt_does_not_add_idle_timer_pixel_writes(vesa_driver):
     for _ in range(4):
         m.run('tick',limit=10000000)
     assert writes==[]
+
+
+@pytest.fixture
+def status_renderer(vesa_driver):
+    banks = []
+    def bios(machine):
+        assert machine.get('AX') == 0x4f05
+        banks.append(machine.get('DX'))
+        machine.put('AX', 0x004f)
+    machine = Driver(vesa_driver, bios)
+    machine.write('screen', struct.pack('<4H', 800, 600, 100, 0xa000))
+    machine.write('active', b'\1')
+    machine.write('banked_text', b'\1')
+    machine.write('text_bank', b'\1\0')
+    glyphs = []
+    def observe_draw(uc, address, size, data):
+        stack = (machine.get('SS') << 4) + machine.get('SP') + 2
+        glyphs.append(struct.unpack('<3H', uc.mem_read(stack, 6)))
+    # Observe calls to the real rasterizer; do not replace it with a stub.
+    draw = 0x10000 + machine.symbols['draw']
+    machine.uc.hook_add(UC_HOOK_CODE, observe_draw, begin=draw, end=draw)
+    machine.run(AX=0x1400, limit=1000000)
+    glyphs.clear(); banks.clear()
+    return machine, glyphs, banks
+
+
+def test_status_pair_reclassification_and_attributes(status_renderer):
+    machine, glyphs, banks = status_renderer
+    def put(column, byte, attribute=0x1e):
+        glyphs.clear()
+        machine.run(AX=0x1402, DX=column)
+        machine.run(AX=0x1403, DX=byte, BX=attribute, limit=1000000)
+        return [(code, attr, position & 255) for code, attr, position in glyphs]
+    assert put(0, 0xd6) == [(0xd6, 0x1e, 0)]
+    assert put(1, 0xd0) == [(0xd6d0, 0x1e1e, 0)]
+    assert put(2, 0xce) == [(0xce, 0x1e, 2)]
+    assert put(3, 0xc4) == [(0xcec4, 0x1e1e, 2)]
+    # An attribute-only edit redraws both halves with their own colors.
+    assert put(1, 0xd0, 0x4f) == [(0xd6d0, 0x1e4f, 0)]
+    # Removing the first lead shifts every pair to its right, including the
+    # unchanged last byte which was previously a trail.
+    assert put(0, ord('A')) == [(ord('A'), 0x1e, 0), (0xd0ce, 0x4f1e, 1),
+                               (0xc4, 0x1e, 3)]
+    banks.clear()
+    assert put(0, ord('A')) == []
+    assert banks == []
+    assert put(79, 0xd6) == [(0xd6, 0x1e, 79)]
+    assert put(78, 0xd0) == [(0xd0d6, 0x1e1e, 78)]
+    assert put(79, ord('B')) == [(0xd0, 0x1e, 78), (ord('B'), 0x1e, 79)]
+
+
+def test_status_bitmap_replacement_and_noop_updates(status_renderer):
+    machine, glyphs, banks = status_renderer
+    writes = set()
+    machine.uc.hook_add(UC_HOOK_MEM_WRITE,
+                       lambda uc, kind, address, size, value, data:
+                       writes.update(range(address, address+size)),
+                       begin=0xa0000, end=0xaffff)
+    bits = bytes(range(64))
+    def bitmap(data):
+        machine.uc.mem_write(0x30000, data)
+        writes.clear(); banks.clear()
+        machine.run(AX=0x140a, DX=76, BX=0x4b, BP=0x3000, SI=0, limit=1000000)
+    bitmap(bits)
+    assert writes and banks == [0, 1]
+    bitmap(bits)
+    assert not writes and not banks
+    # Same character/attribute, new pixels in only the last bitmap cell.
+    bitmap(bits[:-1]+b'\xff')
+    assert writes == {0xa0000+y*100+x for y in range(575, 598) for x in (98, 99)}
+    assert banks == [0, 1]
+    machine.run(AX=0x1404, limit=1000000)
+    writes.clear(); banks.clear()
+    machine.run(AX=0x1404, limit=1000000)
+    assert not writes and not banks
+    # Reopening must restore the row even though the retained bitmap is equal.
+    bitmap(bits[:-1]+b'\xff')
+    assert writes and banks == [0, 1]
+
+
+@pytest.mark.parametrize('operation', ['wide-string', 'pixel'])
+def test_status_restore_after_direct_drawing_and_forced_repaint(status_renderer, operation):
+    machine, glyphs, banks = status_renderer
+    machine.run(AX=0x1403, DX=ord('A'), BX=0x1e)
+    machine.uc.mem_write(0x30000, b'Wide\0')
+    if operation == 'wide-string':
+        machine.run(AX=0x140f, DX=0x1900, BX=0x4f, ES=0x3000, SI=0, limit=1000000)
+    else:
+        machine.run(AX=0x0c0f, CX=1, DX=577)
+    glyphs.clear()
+    machine.run(AX=0x1402, DX=0)
+    machine.run(AX=0x1403, DX=ord('A'), BX=0x1e, limit=1000000)
+    assert len(glyphs) == 80 and glyphs[0] == (ord('A'), 0x1e, 0x1900)
+    glyphs.clear()
+    machine.run(AX=0x1813, limit=10000000)
+    assert len([call for call in glyphs if call[2] >> 8 == 25]) == 80
 
 
 def test_zero_length_capture_checks_availability_without_bank_switch(vesa_driver):

@@ -122,3 +122,42 @@ def test_msdos_repeated_paint(dosbox_binary, guest_build, msdos_image, tmp_path,
     for name, budget in zip(('ASCII_8', 'CHINESE_8', 'SCROLL_16'),
                             budgets[width, height, rows]):
         assert counts[name] <= budget, counts
+
+
+@pytest.mark.dos
+@pytest.mark.parametrize('mode,rows', [('102', 25), ('104', 25), ('242', 25), ('242', 50)])
+def test_msdos_status_page_budget(dosbox_binary, guest_build, msdos_image, tmp_path,
+                                 mode, rows):
+    image, copy_in, read = copy_disk(msdos_image, tmp_path)
+    for name in ('READ5.COM', 'CKBD.COM', 'VESA.COM'):
+        copy_in(guest_build/name, '::HHBIOS/'+name)
+    for path in (ROOT/'fonts/large').glob('F????.FNT'):
+        copy_in(path, '::HHBIOS/'+path.name)
+    keyboard_config(tmp_path)
+    copy_in(tmp_path/'213L.INI', '::HHBIOS/213L.INI')
+    subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/promptperf.c',
+                    str(tmp_path/'PRMPERF.COM')], cwd=ROOT, check=True, capture_output=True)
+    copy_in(tmp_path/'PRMPERF.COM', '::HHBIOS/PRMPERF.COM')
+    commands = ['@ECHO OFF', 'CD \\HHBIOS', 'READ5', 'CKBD /E',
+                f'VESA /M:{mode} /R:{rows}', 'IF ERRORLEVEL 1 GOTO END', 'PRMPERF',
+                'IF ERRORLEVEL 1 GOTO END', 'ECHO complete>C:\\DONE.TXT',
+                ':END', 'C:\\DOS\\SHUTDOWN /S']
+    (tmp_path/'AUTOEXEC.BAT').write_bytes(('\r\n'.join(commands)+'\r\n').encode())
+    copy_in(tmp_path/'AUTOEXEC.BAT', '::AUTOEXEC.BAT')
+    config = ('[sdl]\noutput=surface\n[dosbox]\nmemsize=16\n'
+              '[cpu]\ncore=normal\ncycles=30000\n'+HD_SETTINGS+
+              '\n[autoexec]\nimgmount 0 empty -fs none -t floppy\n'
+              f'imgmount c "{image}" -ide 1m\nboot c:\n')
+    (tmp_path/'dosbox.conf').write_text(config)
+    run_process([str(dosbox_binary), '-conf', str(tmp_path/'dosbox.conf')], tmp_path,
+                180, dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy'))
+    assert read('DONE.TXT').strip() == b'complete'
+    counts = {key: int(value) for key, value in
+              (line.split('=') for line in read('HHBIOS/PRMPERF.TXT').decode().splitlines())}
+    (tmp_path/'timings.json').write_text(json.dumps(counts, indent=2)+'\n')
+    print(mode, rows, counts)
+    # Real Ctrl+F5 menu paging, status strings and the CKBD title/bitmap writer.
+    # A per-byte repaint of the whole row exceeds these by a wide margin.
+    for name, budget in dict(CONTROL_FLIPS_4=12, ASCII_PAGES_4=8, HANZI_PAGES_4=10,
+                             CKBD_TITLE_8=12, UNCHANGED_64=2).items():
+        assert counts[name] <= budget, counts

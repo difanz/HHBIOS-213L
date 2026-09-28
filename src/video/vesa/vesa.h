@@ -141,6 +141,7 @@ void CALL refresh_dirty(void);
 u16 CALL text_ready(void);
 void CALL scroll_pixels(u16 first, u16 last, u16 count, u16 down);
 void CALL invalidate(void);
+void CALL invalidate_prompt(void);
 void CALL boundary(struct BiosRegisters* r);
 u16 CALL aperture(void);
 void CALL reprobe(void);

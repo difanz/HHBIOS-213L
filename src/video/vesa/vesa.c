@@ -188,6 +188,17 @@ static u8 blink = 1;
 static u16 cursor_position;
 static u16 cursor_shape = 0x0d0e;
 static u16 prompt[80];
+enum StatusCellKind {
+  kStatusInvalid,
+  kStatusCharacter,
+  kStatusLead,
+  kStatusTrail,
+  kStatusBitmap
+};
+/* Retain what is on screen, including Hanzi pairing. Replacing one byte can
+ * change the interpretation of its neighbours without changing their bytes. */
+static u16 prompt_shown[80];
+static u8 prompt_kind[80];
 /* AH=14h bitmaps are caller-owned: retain their pixels, never their pointer. */
 static u8 prompt_bits[80][16];
 static u8 prompt_bitmap[10];
@@ -203,6 +214,12 @@ static void ClearBytes(void* buffer, u16 byte_count) {
   while (byte_count--) {
     *bytes++ = 0;
   }
+}
+
+void CALL invalidate_prompt(void) {
+  /* Redraw on the next status request; do not erase an application's direct
+   * graphics or wide string merely because a timer interrupt occurred. */
+  ClearBytes(prompt_kind, sizeof(prompt_kind));
 }
 static void CallVideoBios(u16 ax, u16 bx, u16 cx, u16 dx) {
   struct BiosRegisters bios_registers;
@@ -970,28 +987,57 @@ static void TransferVideoState(void) {
 
 static void DrawStatusBar(void) {
   u16 i;
-  if (!begin_draw()) {
-    return;
-  }
+  u16 drawing = 0;
   for (i = 0; i < 80; ++i) {
-    u16 c = prompt[i] & 255;
-    u16 attr = prompt[i] >> 8;
-    if (!prompt_open) {
-      draw(32, 0, (text_rows << 8) + i);
-    } else if (prompt_bitmap[i / 8] & (1 << (i & 7))) {
-      bitmap(resident_segment, (u16)prompt_bits[i], attr, (text_rows << 8) + i,
-             1);
-    } else if (c >= 0xa1 && c <= 0xf7 && i < 79 &&
-               !(prompt_bitmap[(i + 1) / 8] & (1 << ((i + 1) & 7))) &&
-               (prompt[i + 1] & 255) >= 0xa1 && (prompt[i + 1] & 255) <= 0xfe) {
-      draw((c << 8) | (prompt[i + 1] & 255), (attr << 8) | (prompt[i + 1] >> 8),
-           (text_rows << 8) + i);
+    u16 cell = prompt_open ? prompt[i] : 32;
+    u16 character = cell & 255;
+    u16 attribute = cell >> 8;
+    u16 kind = kStatusCharacter;
+    u16 changed;
+    if (prompt_open) {
+      if (prompt_bitmap[i / 8] & (1 << (i & 7))) {
+        kind = kStatusBitmap;
+      } else if (character >= 0xa1 && character <= 0xf7 && i < 79 &&
+                 !(prompt_bitmap[(i + 1) / 8] & (1 << ((i + 1) & 7))) &&
+                 (prompt[i + 1] & 255) >= 0xa1 &&
+                 (prompt[i + 1] & 255) <= 0xfe) {
+        kind = kStatusLead;
+        character = (character << 8) | (prompt[i + 1] & 255);
+        attribute = (attribute << 8) | (prompt[i + 1] >> 8);
+      }
+    }
+    changed = prompt_dirty || prompt_shown[i] != cell || prompt_kind[i] != kind;
+    if (kind == kStatusLead &&
+        (prompt_shown[i + 1] != prompt[i + 1] ||
+         prompt_kind[i + 1] != kStatusTrail)) {
+      changed = 1;
+    }
+    if (changed) {
+      if (!drawing) {
+        if (!begin_draw()) {
+          prompt_dirty = 1;
+          return;
+        }
+        drawing = 1;
+      }
+      if (kind == kStatusBitmap) {
+        bitmap(resident_segment, (u16)prompt_bits[i], attribute,
+               (text_rows << 8) + i, 1);
+      } else {
+        draw(character, attribute, (text_rows << 8) + i);
+      }
+      prompt_shown[i] = cell;
+      prompt_kind[i] = (u8)kind;
+    }
+    if (kind == kStatusLead) {
       ++i;
-    } else {
-      draw(c, attr, (text_rows << 8) + i);
+      prompt_shown[i] = prompt[i];
+      prompt_kind[i] = kStatusTrail;
     }
   }
-  end_draw();
+  if (drawing) {
+    end_draw();
+  }
   prompt_dirty = 0;
 }
 static void ClearStatusBar(void) {
@@ -1076,8 +1122,11 @@ static void DispatchHhbiosRequest(void) {
       }
       for (i = 0; i < 4 && col + i < 80; ++i) {
         for (j = 0; j < 16; ++j) {
-          prompt_bits[col + i][j] =
-              *PTR(u8, request.bp, request.si + i * 16 + j);
+          u8 bits = *PTR(u8, request.bp, request.si + i * 16 + j);
+          if (prompt_bits[col + i][j] != bits) {
+            prompt_bits[col + i][j] = bits;
+            prompt_kind[col + i] = kStatusInvalid;
+          }
         }
         prompt[col + i] = request.bx << 8;
         prompt_bitmap[(col + i) / 8] |= 1 << ((col + i) & 7);
@@ -1102,6 +1151,11 @@ static void DispatchHhbiosRequest(void) {
     u16 character;
     if (!begin_draw()) {
       return;
+    }
+    if ((text_position >> 8) == text_rows) {
+      /* Wide strings bypass the retained row. Keep them visible until the
+       * next status request, which must restore any overwritten cells. */
+      invalidate_prompt();
     }
     while (text_offset < 0xfffe && (text_position & 255) < 80) {
       character = *PTR(u8, request.es, text_offset++);
@@ -1405,6 +1459,12 @@ u16 CALL dispatch(void) {
                 : pixel(request.cx, request.dx, subfunction, function == 0x0c);
         if (function == 0x0d) {
           request.ax = (request.ax & 0xff00) | i;
+        } else {
+          u16 status_top = viewport_y + text_rows * raster_height * pixel_scale;
+          if (request.dx >= status_top &&
+              request.dx - status_top < raster_height * pixel_scale) {
+            invalidate_prompt();
+          }
         }
       }
       break;
