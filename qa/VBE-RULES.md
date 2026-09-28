@@ -166,8 +166,9 @@ mapping without spare banked VRAM cannot expose B800 and is rejected. Failed
 installation restores the previous mode. A later failed bank selection disables
 rendering before further graphics access.
 
-The COM contains no CRT and both compiler and assembler target 8086. INT 10h and
-IRQ0 use a 2 KiB private stack with CS=DS=SS, preserving the interrupted stack,
+The COM contains no CRT and requires a 386. It uses 16-bit code segments with
+32-bit register loops. INT 10h and IRQ0 use a 2 KiB private stack with CS=DS=SS,
+preserving the interrupted stack,
 segment registers and interrupt/direction flags. A busy guard prevents nested
 rendering. Rendering restores all GC registers, the sequencer plane mask and
 selected register indexes. BIOS/font calls run on the resident stack; resident
