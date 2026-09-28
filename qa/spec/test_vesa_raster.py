@@ -133,6 +133,53 @@ def test_raster_preparation_across_bank_edges(vesa_driver, width, height, scale,
         assert memory.planes[plane] == expected, plane
 
 
+@pytest.mark.parametrize('width,shift', [(8, 0), (16, 0), (24, 0),
+                                        (10, 0), (10, 2), (10, 4), (10, 6),
+                                        (12, 4), (24, 7)])
+@pytest.mark.parametrize('attribute', [0x00, 0xff, 0x07, 0x70, 0x1e, 0x2f, 0xa5, 0x5a])
+@pytest.mark.parametrize('rows', [1, 39])
+def test_native_stencil_colors_and_neighbors(vesa_driver, width, shift, attribute, rows):
+    m = Driver(vesa_driver, lambda m: pytest.fail('no BIOS call inside a bank span'))
+    pitch = 240
+    byte_count = (width + shift + 7) // 8
+    offset = 65536 - byte_count - (rows - 1) * pitch
+    initial = [bytes((i * 53 + i // pitch + plane * 71) & 255
+                     for i in range(65536)) for plane in range(4)]
+    memory = PlanarMemory(m, initial)
+    memory.gc[0] = 9
+    m.write('screen', struct.pack('<4H', 1920, 1080, pitch, 0xa000))
+    m.write('display_pitch', struct.pack('<H', pitch))
+    masks = bytearray(byte_count)
+    source_pitch = 2 if width == 10 else 16
+    ink = bytearray(rows * source_pitch)
+    for x in range(width):
+        masks[(shift + x) // 8] |= 128 >> ((shift + x) % 8)
+        for y in range(rows):
+            if (x * 3 + y * 5) % 11 < 4:
+                ink[y * source_pitch + (shift + x) // 8] |= 128 >> ((shift + x) % 8)
+    m.uc.mem_write(0x1d000, bytes(ink))
+    m.uc.mem_write(0x1d400, bytes(masks))
+    m.uc.mem_write(0x1e002, struct.pack('<7H', 0xd000, offset, rows,
+                                     byte_count, 0xd400, attribute, source_pitch))
+    registers = {name: 0xa1234567 + i for i, name in
+                 enumerate(('EAX', 'EBX', 'ECX', 'EDX', 'ESI', 'EDI', 'EBP'))}
+    m.run('raster_stencil', ES=0x3000, **registers)
+    for plane in range(4):
+        expected = bytearray(initial[plane])
+        for y in range(rows):
+            for x in range(width):
+                index = offset + y * pitch + (shift + x) // 8
+                mask = 128 >> ((shift + x) % 8)
+                foreground = (x * 3 + y * 5) % 11 < 4
+                color = attribute & (1 << (plane if foreground else plane + 4))
+                expected[index] = (expected[index] & ~mask) | (mask if color else 0)
+        assert memory.planes[plane] == expected, plane
+    assert all(m.get(name) == value for name, value in registers.items())
+    assert m.get('ES') == 0x3000
+    assert (memory.gc[0], memory.gc[1], memory.gc[5], memory.gc[8]) == (9, 0, 0, 255)
+    assert memory.mask == 15
+
+
 @pytest.mark.parametrize('width', [1, 3, 4, 5, 13])
 @pytest.mark.parametrize('repeats,phase', [(1, 0), (2, 0), (2, 1), (4, 3)])
 @pytest.mark.parametrize('foreground,background', [(0, 0), (0, 65535), (65535, 0), (65535, 65535)])
@@ -163,3 +210,22 @@ def test_dword_spans_and_byte_tails(vesa_driver, width, repeats, phase, foregrou
     assert bytes(m.uc.mem_read(0xa0000, 65536)) == expected
     assert all(m.get(name) == value for name, value in registers.items())
     assert m.get('ES') == 0x3000
+
+
+@pytest.mark.parametrize('row,column', [(0, 0), (15, 2), (25, 79)])
+def test_fixed_cells_use_relocated_aperture(vesa_driver, row, column):
+    m = Driver(vesa_driver, lambda m: pytest.fail('unbanked drawing needs no BIOS call'))
+    m.write('active', b'\1')
+    m.write('screen', struct.pack('<4H', 800, 600, 100, 0xa000))
+    # The one-image layout places scanout around the reserved B800 text page.
+    segment = 0xa943
+    m.write('framebuffer', struct.pack('<H', segment))
+    m.uc.mem_write(0x1d000, struct.pack('<23H', *([0xa540] * 23)))
+    m.uc.mem_write(0x1e002, struct.pack('<3H', 0xd000, 0x1e, row * 256 + column))
+    written = set()
+    m.uc.hook_add(UC_HOOK_MEM_WRITE,
+                 lambda uc, access, address, size, value, _: written.update(range(address, address + size)),
+                 begin=0xa0000, end=0xbffff)
+    m.run('draw_half')
+    start = segment * 16 + row * 23 * 100 + column * 10 // 8
+    assert written == {start + y * 100 + x for y in range(23) for x in range(2)}

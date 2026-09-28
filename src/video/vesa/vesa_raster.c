@@ -29,7 +29,7 @@ void CALL raster_span(const u8* source, u16 offset, u16 rows, u16 width,
                       const u8* masks, u16 foreground, u16 background,
                       u16 repeats, u16 phase);
 void CALL raster_stencil(const u8* source, u16 offset, u16 rows, u16 width,
-                         const u8* masks, u16 attribute);
+                         const u8* masks, u16 attribute, u16 source_pitch);
 
 static u8 FAR* MapFramebufferByte(u32 offset) {
   u16 block = (u16)(offset >> 16);
@@ -222,9 +222,10 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
       if (rows > raster_height * pixel_scale - done) {
         rows = raster_height * pixel_scale - done;
       }
-      if (pixel_scale == 1 && (shift || (width & 7))) {
+      if (pixel_scale == 1) {
         raster_stencil(scratch.glyph.ink[done], (u16)offset, rows, bytes,
-                       scratch.glyph.masks, attribute);
+                       scratch.glyph.masks, attribute,
+                       sizeof(scratch.glyph.ink[0]));
       } else {
         for (plane_index = 0; plane_index < 4; ++plane_index) {
           if (!SelectGlyphPlanes(plane_index, attribute,

@@ -20,7 +20,7 @@ extrn requested_mode:word, requested_rows:word
 extrn plane_bytes:dword, bank_step:word, large_surface:byte
 extrn mode_selected:byte
 extrn text_rows:word, text_cells:word, page_bytes:word, last_row:byte
-extrn raster_cell:near
+extrn raster_cell:near, raster_stencil:near
 extrn old33:dword, int33_handler:far
 extrn mouse_resume:near, mouse_suspend:near
 extrn mouse_native:byte
@@ -53,14 +53,11 @@ glyph_bits dw CELL_HEIGHT*2 dup (0)
 wide_bits dw CELL_HEIGHT*2 dup (0)
 legacy_bits db 16 dup (0)
 raster_rows dw CELL_HEIGHT dup (0)
-cell_keep dw 0
+cell_mask dw 0
 cell_shift db 0
 cursor_bits dw 0
 cell_attr db 0
-plane_number db 0
 glyph_width db 1
-plane_xor dw 0
-plane_background dw 0
 saved_gc db 9 dup (0)
 saved_seq db 0
 saved_memory_mode db 0
@@ -1183,8 +1180,8 @@ half_done:
     ret
 draw_half endp
 
-; Ten-pixel cells share framebuffer bytes. Select the read plane as well as
-; the write plane, and preserve the neighbor bits on every word store.
+; Ten-pixel cells share framebuffer bytes. The common stencil routine keeps
+; their edge pixels while writing all four planes together.
 blit_narrow proc near
     save_regs
     cmp cs:large_surface,0
@@ -1213,8 +1210,7 @@ blit_fixed:
     mov dx,0ffc0h
     shr dx,cl
     xchg dh,dl
-    not dx
-    mov cs:cell_keep,dx
+    mov cs:cell_mask,dx
     shr ax,1
     shr ax,1
     shr ax,1
@@ -1238,59 +1234,17 @@ blit_prepare:
     inc bx
     cmp bx,CELL_HEIGHT
     jb blit_prepare
-    mov es,cs:framebuffer
-    mov cs:plane_number,0
-blit_plane:
+    push 2                     ; source row pitch
+    xor ax,ax
+    mov al,cs:cell_attr
+    push ax
+    push offset cell_mask
+    push 2                     ; destination bytes per row
+    push CELL_HEIGHT
     push di
-    mov dx,3ceh
-    mov al,4
-    mov ah,cs:plane_number
-    out dx,ax
-    mov cl,ah
-    mov ah,1
-    shl ah,cl
-    mov dx,3c4h
-    mov al,2
-    out dx,ax
-    mov bl,cs:cell_attr
-    xor dx,dx
-    test bl,ah
-    jz blit_fg
-    not dx
-blit_fg:
-    mov cl,4
-    shr bl,cl
-    xor cx,cx
-    test bl,ah
-    jz blit_bg
-    not cx
-blit_bg:
-    xor dx,cx
-    mov cs:plane_xor,dx
-    mov cs:plane_background,cx
-    mov bp,offset raster_rows
-    mov cx,CELL_HEIGHT
-blit_line:
-    mov ax,cs:[bp]
-    and ax,cs:plane_xor
-    xor ax,cs:plane_background
-    mov bx,cs:cell_keep
-    not bx
-    and ax,bx
-    mov bx,es:[di]
-    and bx,cs:cell_keep
-    or ax,bx
-    mov es:[di],ax
-    add bp,2
-    add di,cs:display_pitch
-    loop blit_line
-    pop di
-    inc cs:plane_number
-    cmp cs:plane_number,4
-    jb blit_plane
-    mov dx,3c4h
-    mov ax,0f02h
-    out dx,ax
+    push offset raster_rows
+    call raster_stencil
+    add sp,14
 blit_done:
     load_regs
     ret

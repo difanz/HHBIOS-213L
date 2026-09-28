@@ -3,7 +3,7 @@
 .model tiny,c
 .code
 .386
-extrn display_pitch:word, screen:byte
+extrn display_pitch:word, screen:byte, framebuffer:word
 
 ; Two left-aligned ten-bit rows fit in EAX. Their six low zero bits keep
 ; shifts from carrying pixels into the next row. No read crosses a bank.
@@ -238,8 +238,8 @@ span_done:
     ret
 raster_span endp
 
-; Native masked cells: fill their background, then stencil the foreground
-; into all four planes. Latch reads retain every pixel outside the edge masks.
+; Native cells: write all four planes with the VGA set/reset colors. Fully
+; covered bytes share one background latch value; only edges need row reads.
 public raster_stencil
 raster_stencil proc near
     push bp
@@ -247,7 +247,8 @@ raster_stencil proc near
     sub sp,2
     pushad
     push es
-    mov ax,word ptr screen+6
+    ; The unbanked 800x600 aperture may move scanout around B800 text RAM.
+    mov ax,framebuffer
     mov es,ax
     mov dx,3ceh
     xor al,al
@@ -271,6 +272,10 @@ raster_stencil proc near
     mov bx,[bp+12]
     mov si,[bp+10]
     mov di,[bp+6]
+    cmp byte ptr [bx],0ffh
+    jne stencil_background_column
+    cmp byte ptr [bx+si-1],0ffh
+    je stencil_opaque
 stencil_background_column:
     mov al,8
     mov ah,[bx]
@@ -286,9 +291,9 @@ stencil_background_masked:
     loop stencil_background_masked
     jmp short stencil_background_next
 stencil_background_full:
+    ; Seed one byte for the foreground pass. VGA writes leave latches intact,
+    ; so every row in this column can subsequently use that same background.
     mov es:[di],al
-    add di,cs:display_pitch
-    loop stencil_background_full
 stencil_background_next:
     pop di
     inc di
@@ -313,13 +318,24 @@ stencil_foreground_column:
     mov cx,[bp+8]
     push si
     push di
+    cmp ah,0ffh
+    jne stencil_foreground_row
+    mov al,es:[di]
+stencil_foreground_full:
+    mov al,[si]
+    mov es:[di],al
+    add si,[bp+16]
+    add di,cs:display_pitch
+    loop stencil_foreground_full
+    jmp short stencil_foreground_next
 stencil_foreground_row:
     mov al,es:[di]
     mov al,[si]
     mov es:[di],al
-    add si,16
+    add si,[bp+16]
     add di,cs:display_pitch
     loop stencil_foreground_row
+stencil_foreground_next:
     pop di
     pop si
     inc di
@@ -327,6 +343,49 @@ stencil_foreground_row:
     inc bx
     dec word ptr [bp-2]
     jnz stencil_foreground_column
+    jmp short stencil_done
+stencil_opaque:
+    ; Aligned 8/16/24-pixel cells have no neighboring pixels to preserve.
+    ; Seed all four background latches once, then write each glyph byte once.
+    mov ax,0ff08h
+    out dx,ax
+    mov es:[di],al
+    mov al,es:[di]
+    mov ax,[bp+14]
+    and ax,0fh
+    shl ax,8
+    out dx,ax
+    mov ax,0305h
+    out dx,ax
+    mov si,[bp+4]
+    mov cx,[bp+8]
+    mov bx,[bp+16]
+    cmp word ptr [bp+10],2
+    jb stencil_opaque_byte
+    je stencil_opaque_word
+stencil_opaque_three:
+    mov ax,[si]
+    mov es:[di],ax
+    mov al,[si+2]
+    mov es:[di+2],al
+    add si,bx
+    add di,cs:display_pitch
+    loop stencil_opaque_three
+    jmp short stencil_done
+stencil_opaque_word:
+    mov ax,[si]
+    mov es:[di],ax
+    add si,bx
+    add di,cs:display_pitch
+    loop stencil_opaque_word
+    jmp short stencil_done
+stencil_opaque_byte:
+    mov al,[si]
+    mov es:[di],al
+    add si,bx
+    add di,cs:display_pitch
+    loop stencil_opaque_byte
+stencil_done:
     mov ax,1                   ; normal plane writes for the next glyph
     out dx,ax
     mov ax,5

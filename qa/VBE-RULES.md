@@ -35,9 +35,13 @@ from 1 through 4 that fits. If necessary to fit a larger integer scale, only
 the three spacing rows are removed; the complete 20-row font ink is retained.
 `/F:file` selects an alternative font and cell geometry. Version 2 fonts keep
 every row; only the default HH20 font permits removing its three spacing rows.
-The 800x600 assembly path remains separate from the bank-spanning rasterizer.
-The latter maps a bank once per glyph span and uses 386 word/dword loops,
-preserving neighboring pixels and splitting stores exactly at bank boundaries.
+The fixed 800x600 path and native variable fonts share a planar stencil loop.
+VGA set/reset supplies the foreground and background colors to all four planes.
+Fully covered bytes reuse a uniform background latch; partial edges read each
+destination byte to preserve neighboring pixels. Only uniform latches may be
+reused for word stores. The bank-spanning rasterizer maps a bank once per glyph
+span and splits stores exactly at bank boundaries. Enlarged glyphs retain
+their separate 386 word/dword loops.
 Full-width scrolling copies retained pixels and their text shadow; same-bank
 copies use byte-wide VGA latches across all four planes, while cross-bank
 scanlines pass through a 2 KiB buffer. No latch copy uses MOVSW or MOVSD.

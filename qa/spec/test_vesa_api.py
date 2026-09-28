@@ -561,28 +561,30 @@ def test_state_buffer_overflow_is_rejected_before_bios_save(vesa_driver,blocks,o
 
 
 def test_refresh_batches_banks_and_avoids_idle_pixel_writes(vesa_driver):
-    banks=[]; writes=[]
+    banks=[]; writes=set()
     def bios(m):
         assert m.get('AX')==0x4f05
         banks.append(m.get('DX')); m.put('AX',0x004f)
     m=Driver(vesa_driver,bios)
+    m.write('screen',struct.pack('<4H',800,600,100,0xa000))
     m.write('active',b'\1'); m.write('banked_text',b'\1'); m.write('text_bank',b'\1\0')
     m.uc.mem_write(0xb8000,b' \x07'*2000)
     m.uc.hook_add(UC_HOOK_MEM_WRITE,
-                  lambda uc,access,address,size,value,_: writes.append(size),
+                  lambda uc,access,address,size,value,_: writes.update(range(address,address+size)),
                   begin=0xa0000,end=0xaffff)
     m.run('refresh',limit=20000000)
-    assert banks==[0,1] and sum(writes)==2000*23*4*2
+    assert banks==[0,1] and writes==set(range(0xa0000,0xa0000+57500))
     banks.clear(); writes.clear()
     m.run('refresh',limit=10000000)
-    assert banks==[] and writes==[]
+    assert banks==[] and not writes
     banks.clear(); writes.clear(); m.uc.mem_write(0xb8000,b'A')
     m.run('refresh',limit=10000000)
-    assert banks==[0,1] and sum(writes)==23*4*2
+    assert banks==[0,1] and writes=={0xa0000+y*100+x for y in range(23) for x in range(2)}
 
 
 def test_open_prompt_does_not_add_idle_timer_pixel_writes(vesa_driver):
     m=Driver(vesa_driver,lambda m: pytest.fail('unexpected BIOS call'))
+    m.write('screen',struct.pack('<4H',800,600,100,0xa000))
     m.write('active',b'\1')
     m.uc.mem_write(0xb8000,b' \x07'*2000)
     m.run(AX=0x1700)  # Suppress the blinking caret.

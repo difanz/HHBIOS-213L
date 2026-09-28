@@ -43,8 +43,8 @@ class PlanarMemory:
             return
         mode = self.gc[5] & 3
         assert mode in (0, 3)
-        if mode == 3 or self.gc[8] != 255:
-            assert size == 1, 'Masked VGA writes require a fresh latch for each byte'
+        # A word/dword store repeats the same latch value for every byte.
+        # This preserves a uniform background, but not distinct neighbors.
         for column, data in enumerate(value.to_bytes(size, 'little')):
             mask = self.gc[8] & (data if mode == 3 else 255)
             for plane in range(4):
