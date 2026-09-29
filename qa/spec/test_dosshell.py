@@ -138,7 +138,7 @@ def screen_pixels(directory, frame, rows):
         glyph(cell, frame_chars[cell])
         glyph(cell+1, 0xc4)
     # The system IME row is separate from the application's last text row.
-    for col, char in ((0, '英'), (2, '文')):
+    for col, char in ((1, '英'), (3, '文')):
         code = int.from_bytes(char.encode('gb2312'), 'big')
         for half in (0, 1):
             glyph(rows*80+col+half, code, half)

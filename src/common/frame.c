@@ -98,31 +98,57 @@ static int IsTreeNode(const TextWord TEXT_FAR* cell) {
          (TextByte)cell[4] == ']';
 }
 
-/* Follow a directory's vertical stem back to its ASCII parent. C3 C4 also
- * spells a Hanzi, so an isolated pair followed by brackets is insufficient.
+/* C3 C4 also spells a Hanzi: require a connected parent or sibling, not
+ * just a pair followed by brackets. A scrolled tree can hide its parent.
  * Earlier rows may already contain HHBIOS's unambiguous frame aliases. */
 static int IsDirectoryBranch(const TextWord TEXT_FAR* cell, TextWord column,
-                              TextWord row) {
+                             TextWord row, TextWord last_row) {
+  const TextWord TEXT_FAR* neighbor;
+  TextWord above = row;
   TextByte ch = (TextByte)*cell;
   if (ch == 0xc4 && column) {
     --cell;
     --column;
     ch = (TextByte)*cell;
   }
-  if (!column || column > 75 || (ch != 0xc0 && ch != 0xc3 &&
-                                ch != 0x8a && ch != 0x8d) || !IsTreeNode(cell)) {
+  if (column > 75 || (ch != 0xc0 && ch != 0xc3 &&
+                      ch != 0x8a && ch != 0x8d) || !IsTreeNode(cell)) {
     return 0;
   }
-  while (row--) {
-    cell -= 80;
-    ch = (TextByte)*cell;
-    if ((ch == '+' || ch == '-') && (TextByte)cell[-1] == '[' &&
-        (TextByte)cell[1] == ']') {
+  neighbor = cell;
+  while (above--) {
+    neighbor -= 80;
+    ch = (TextByte)*neighbor;
+    if (column && (ch == '+' || ch == '-') &&
+        (TextByte)neighbor[-1] == '[' && (TextByte)neighbor[1] == ']') {
       return 1;
     }
-    if (ch != 0xb3 && ch != 0x14 &&
-        !((ch == 0xc3 || ch == 0x8d) && IsTreeNode(cell))) {
-      return 0;
+    /* PC Tools indents a child under '['; DOS Shell uses its center. */
+    if (ch == '[' && ((TextByte)neighbor[1] == '+' ||
+                     (TextByte)neighbor[1] == '-') &&
+        (TextByte)neighbor[2] == ']') {
+      return 1;
+    }
+    if ((ch == 0xc3 || ch == 0x8d) && IsTreeNode(neighbor)) {
+      return 1;
+    }
+    if (ch != 0xb3 && ch != 0x14) {
+      break;
+    }
+  }
+  ch = (TextByte)*cell;
+  if (ch == 0xc3 || ch == 0x8d) {
+    while (row < last_row) {
+      ++row;
+      cell += 80;
+      ch = (TextByte)*cell;
+      if ((ch == 0xc3 || ch == 0x8d || ch == 0xc0 || ch == 0x8a) &&
+          IsTreeNode(cell)) {
+        return 1;
+      }
+      if (ch != 0xb3 && ch != 0x14) {
+        break;
+      }
     }
   }
   return 0;
@@ -136,7 +162,7 @@ int TextIsFrame(const TextWord TEXT_FAR* cell, TextWord position,
   TextByte corner;
 
   if ((ch == 0xc0 || ch == 0xc3 || ch == 0xc4) &&
-      IsDirectoryBranch(cell, column, row)) {
+      IsDirectoryBranch(cell, column, row, last_row)) {
     return 1;
   }
 

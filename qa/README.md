@@ -253,6 +253,10 @@ therefore separately selected with `--pctools`. The keyboard implementation
 has no emulator-name or version checks. PC Tools uses the existing `READ5`
 XMS font loader to leave conventional memory available, and `/NF /25 /IM`
 to retain the display font and use the 25-row keyboard interface.
+`test_pctools.py` also checks its initial dialog, directory tree and File menu
+under native text, VGA and VESA. Supply `--msdos-image` and `--screenshots` with
+`--pctools`; it boots disposable copies of the QA disk and checks the rendered
+tree glyphs as well as the text buffer.
 Turbo C 2.01 also uses READ5 so its real-mode IDE has enough conventional memory.
 `test_borland_dpmi_font_memory` exercises Borland C++ 3.1 and Turbo C++ 3.0
 with each of READ4 and READ5, checking Chinese cursor movement, deletion and

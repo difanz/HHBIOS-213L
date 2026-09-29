@@ -384,11 +384,59 @@ def test_directory_siblings_and_last_branch(machine, column, parent):
     machine.scan(screen)
     for row in range(1, 25):
         branch = 0xc0 if row == 24 else 0xc3
-        if parent == b'   ':
-            assert machine.cell(row, column) == ('hanzi-left', branch*256+0xc4, 7)
-        else:
-            assert machine.cell(row, column) == ('char', branch, 7)
-            assert machine.cell(row, column+1) == ('char', 0xc4, 7)
+        # A connected set of siblings remains a tree when scrolling hides
+        # its parent above the viewport.
+        assert machine.cell(row, column) == ('char', branch, 7)
+        assert machine.cell(row, column+1) == ('char', 0xc4, 7)
+
+
+@pytest.mark.parametrize('row,column', [(0, 0), (4, 8), (21, 75)])
+@pytest.mark.parametrize('gap', [False, True])
+def test_clipped_directory_siblings(machine, row, column, gap):
+    from qa.spec.machine import SCREEN
+    screen = blank()
+    put(screen, row, column, b'\xc3\xc4[ ]')
+    if gap:
+        put(screen, row+1, column, b'\xb3')
+    last = row+1+gap
+    put(screen, last, column, b'\xc0\xc4[ ]')
+    put(screen, 24, 20, '媚[ ] 滥[ ] 中文')
+    # The keyboard boundary API can run before the renderer converts frames.
+    machine.uc.mem_write(SCREEN, bytes(screen))
+    for r in (row, last):
+        for c in (column, column+1):
+            machine.call('keypos', DX=(r << 8)+c)
+            assert machine.read('AX') == 0
+    assert bytes(machine.uc.mem_read(SCREEN, 4000)) == screen
+    machine.scan(screen)
+    for r, code in ((row, 0xc3), (last, 0xc0)):
+        assert machine.cell(r, column) == ('char', code, 7)
+        assert machine.cell(r, column+1) == ('char', 0xc4, 7)
+    assert machine.cell(24, 20) == ('hanzi-left', 0xc3c4, 7)
+    assert machine.cell(24, 26) == ('hanzi-left', 0xc0c4, 7)
+
+
+@pytest.mark.parametrize('marker', ['+', '-'])
+@pytest.mark.parametrize('column', [0, 8, 75])
+def test_pctools_child_under_parent_bracket(machine, marker, column):
+    screen = blank()
+    put(screen, 5, column, f'[{marker}]')
+    put(screen, 6, column, b'\xc0\xc4[ ]')
+    machine.scan(screen)
+    assert machine.cell(6, column) == ('char', 0xc0, 7)
+    assert machine.cell(6, column+1) == ('char', 0xc4, 7)
+
+
+@pytest.mark.parametrize('top,bottom,gap', [(0xc0, 0xc0, 0), (0xc0, 0xc3, 0),
+                                         (0xc0, 0xc0, 1), (0xc3, 0xc0, 1)])
+def test_directory_branches_need_an_unbroken_connection(machine, top, bottom, gap):
+    screen = blank()
+    put(screen, 3, 8, bytes([top, 0xc4])+b'[ ]')
+    # A terminal branch cannot lead down; a blank row breaks a valid stem.
+    put(screen, 4+gap, 8, bytes([bottom, 0xc4])+b'[ ]')
+    machine.scan(screen)
+    assert machine.cell(3, 8) == ('hanzi-left', top*256+0xc4, 7)
+    assert machine.cell(4+gap, 8) == ('hanzi-left', bottom*256+0xc4, 7)
 
 
 @pytest.mark.parametrize('arrow', [0x18, 0x1e])
