@@ -34,7 +34,8 @@ def make_driver(image, classified, rows=25, page=0):
     machine = Driver(image, bios)
     machine.uc.mem_write(0x10000, classified)
     for name, value in dict(text_rows=rows, text_cells=rows * 80,
-                            page_bytes=8192, active_page=page, text_bank=6).items():
+                            page_bytes=8192, active_page=page, text_bank=6,
+                            raster_height=600 // (rows + 1)).items():
         machine.write(name, struct.pack('<H', value))
     machine.write('last_row', bytes([rows - 1]))
     text = bytearray(b' \x07' * (rows * 80))
@@ -51,8 +52,8 @@ def make_driver(image, classified, rows=25, page=0):
         glyphs.append(struct.unpack('<H', uc.mem_read(stack + 2, 2))[0])
 
     machine.uc.hook_add(UC_HOOK_CODE, glyph,
-                        begin=0x10000 + machine.symbols['font_get'],
-                        end=0x10000 + machine.symbols['font_get'])
+                        begin=0x10000 + machine.symbols['font_draw'],
+                        end=0x10000 + machine.symbols['font_draw'])
     machine.uc.hook_add(UC_HOOK_MEM_WRITE,
                         lambda uc, access, address, size, value, _: writes.append(size),
                         begin=base, end=base + len(text) - 1)
@@ -125,7 +126,7 @@ def test_ascii_directory_anchor_reclassifies_unchanged_branch(vesa_driver, class
     machine, text, base, glyphs, writes, _ = make_driver(vesa_driver, classified_page)
     # The raw C0 C4 pair gains a tree anchor from ASCII characters above it.
     text[20:26] = b'[\x07A\x07]\x07'
-    text[182:192] = b'\xc0\x07\xc4\x07[\x07X\x07]\x07'
+    text[182:192] = b'\xc0\x07\xc4\x07[\x07 \x07]\x07'
     machine.write('shadow', bytes(text))
     text[22] = ord('+')
     machine.uc.mem_write(base, bytes(text))

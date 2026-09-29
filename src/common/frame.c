@@ -154,6 +154,54 @@ static int IsDirectoryBranch(const TextWord TEXT_FAR* cell, TextWord column,
   return 0;
 }
 
+/* Half blocks form the bevels of shaded DOS panels. Their old aliases share
+ * the shading glyph B2, so recognize these edges without rewriting them. */
+static int HasBlockCap(const TextWord TEXT_FAR* left, TextWord width,
+                       TextWord rows, int row_step, TextByte cap) {
+  TextWord x;
+  TextByte alias = cap == 0xdf ? 0xa0 : 0x9f;
+  while (rows--) {
+    left += row_step;
+    if ((TextByte)*left != 0xde || (TextByte)left[width] != 0xdd) {
+      return 0;
+    }
+    for (x = 1; x < width; ++x) {
+      TextByte ch = (TextByte)left[x];
+      if (ch != cap && ch != alias) {
+        break;
+      }
+    }
+    if (x == width) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int IsHalfBlockEdge(const TextWord TEXT_FAR* cell, TextWord column,
+                           TextWord row, TextWord last_row) {
+  TextWord width = 1;
+  TextByte ch = (TextByte)*cell;
+  TextWord room = ch == 0xde ? 79 - column : column;
+  int step = ch == 0xde ? 1 : -1;
+  TextByte other = ch == 0xde ? 0xdd : 0xde;
+  if (!row || row >= last_row || (TextByte)cell[-80] != ch ||
+      (TextByte)cell[80] != ch) {
+    return 0;
+  }
+  while (width <= room && (TextByte)cell[step * (int)width] != other) {
+    ++width;
+  }
+  if (width < 3 || width > room) {
+    return 0;
+  }
+  if (step < 0) {
+    cell -= width;
+  }
+  return HasBlockCap(cell, width, row, -80, 0xdf) ||
+         HasBlockCap(cell, width, last_row - row, 80, 0xdc);
+}
+
 int TextIsFrame(const TextWord TEXT_FAR* cell, TextWord position,
                 TextWord last_row) {
   TextWord column = position & 255;
@@ -161,6 +209,9 @@ int TextIsFrame(const TextWord TEXT_FAR* cell, TextWord position,
   TextByte ch = (TextByte)*cell;
   TextByte corner;
 
+  if (ch == 0xdd || ch == 0xde) {
+    return IsHalfBlockEdge(cell, column, row, last_row);
+  }
   if ((ch == 0xc0 || ch == 0xc3 || ch == 0xc4) &&
       IsDirectoryBranch(cell, column, row, last_row)) {
     return 1;

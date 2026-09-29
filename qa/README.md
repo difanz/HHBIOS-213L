@@ -215,6 +215,7 @@ repository. Supply copies you can use via these options or environment variables
 | `--borland-bin` / `BORLAND_BIN` | BC 3.1 BIN directory with BC.EXE, DPMI16BI.OVL, DPMILOAD.EXE and DPMIMEM.DLL |
 | `--qbasic` / `QBASIC_EXE` | QBASIC 1.1 executable, used as the IDE and with `/EDITOR` |
 | `--msedit2` / `MSEDIT2_COM` | Standalone MS-DOS Editor 2.0.026 EDIT.COM |
+| `--pedit` / `PEDIT_EXE` | PEDIT executable, with the Tables / ASCII Chart menu |
 | `--dos-apps` / `DOS_APPS` | Root containing `tc201/TC.EXE` and `tc30/TC.EXE`; tc30 also needs the three DPMI files above |
 | `--pctools` / `PCTOOLS_DIR` | Unpacked PC Tools 9 directory, including PCSHELL.EXE, its configuration and overlays |
 | `--dosshell` / `DOSSHELL_DIR` | MS-DOS Shell with DOSSHELL.EXE, DOSSHELL.VID, DOSSHELL.INI and DOSSHELL.HLP; use the standard VGA configuration |
@@ -257,6 +258,11 @@ to retain the display font and use the 25-row keyboard interface.
 under native text, VGA and VESA. Supply `--msdos-image` and `--screenshots` with
 `--pctools`; it boots disposable copies of the QA disk and checks the rendered
 tree glyphs as well as the text buffer.
+`test_pedit.py` checks half-block menu borders and dotted separators with the
+same MS-DOS and screenshot options, deleting its temporary disk after each
+case. Interactive preparation keeps `EDIT2` (Microsoft Editor) and `PEDIT`
+as separate launchers; their default fixture locations are
+`dos-apps/edit2/EDIT.COM` and `dos-apps/pedit/PEDIT.EXE` under the cache.
 Turbo C 2.01 also uses READ5 so its real-mode IDE has enough conventional memory.
 `test_borland_dpmi_font_memory` exercises Borland C++ 3.1 and Turbo C++ 3.0
 with each of READ4 and READ5, checking Chinese cursor movement, deletion and

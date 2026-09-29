@@ -449,6 +449,47 @@ def test_qbasic_short_scrollbar_cap(machine, arrow):
         assert machine.cell(1, column) == ('char', code, 0x1f)
 
 
+@pytest.mark.parametrize('row,column', [(0, 0), (5, 21), (20, 72)])
+@pytest.mark.parametrize('cap', ['top', 'bottom'])
+def test_half_block_panel_keeps_separator_and_chinese(machine, row, column, cap):
+    from qa.spec.machine import SCREEN
+    screen = blank()
+    top = b'\xdf'*6 if cap == 'top' else b' title'
+    bottom = b'\xdc'*6 if cap == 'bottom' else b' label'
+    lines = [b'\xde'+top+b'\xdd', b'\xde\xfa\xfa\xfa\xfa\xfa\xfa\xdd',
+             b'\xde'+'中文'.encode('gb2312')+b'  \xdd', b'\xde'+bottom+b'\xdd']
+    for i, line in enumerate(lines):
+        put(screen, row+i, column, line, 0x70+i)
+    machine.uc.mem_write(SCREEN, bytes(screen))
+    # Query before aliases exist, as the whole-Hanzi keyboard filter does.
+    for c in (column, column+1, column+7):
+        machine.call('keypos', DX=((row+1) << 8)+c)
+        assert machine.read('AX') == 0
+    machine.scan(screen)
+    for c, code in enumerate(lines[1]):
+        assert machine.cell(row+1, column+c) == ('char', code, 0x71)
+    assert machine.cell(row+2, column+1) == ('hanzi-left', 0xd6d0, 0x72)
+    assert machine.cell(row+2, column+3) == ('hanzi-left', 0xcec4, 0x72)
+    actual = bytearray(machine.uc.mem_read(SCREEN, 4000))
+    for r in (row+1, row+2):
+        assert actual[2*(r*80+column)] == 0xde
+        assert actual[2*(r*80+column+7)] == 0xdd
+    machine.scan(actual)
+    assert not machine.draws, 'Unchanged bevels must not repaint'
+
+
+@pytest.mark.parametrize('row,column', [(0, 0), (5, 21), (22, 68)])
+def test_repeated_half_block_bytes_in_chinese_are_not_a_panel(machine, row, column):
+    screen = blank()
+    for i, line in enumerate(('搡 中文 甍', '薨 中文 萃', '弈 中文 菽')):
+        put(screen, row+i, column, line)
+    machine.scan(screen)
+    for i, line in enumerate(('搡 中文 甍', '薨 中文 萃', '弈 中文 菽')):
+        raw = line.encode('gb2312')
+        for c in (0, 3, 5, 8):
+            assert machine.cell(row+i, column+c) == ('hanzi-left', int.from_bytes(raw[c:c+2], 'big'), 7)
+
+
 @pytest.mark.parametrize('mode', [1, 2])
 def test_connected_corners_do_not_override_explicit_modes(machine, mode):
     screen = blank()

@@ -144,7 +144,20 @@ stage_app BC31 "$borland"
 stage_app TC201 "$apps/tc201"
 stage_app TC30 "$apps/tc30"
 stage_app EDIT1 "$(dirname "${QBASIC_EXE:-$cache/msedit/QBASIC.EXE}")"
-stage_app EDIT2 "$(dirname "${MSEDIT2_COM:-$cache/edit/EDIT.COM}")"
+edit2=${MSEDIT2_COM:-"$apps/edit2/EDIT.COM"}
+if [[ -f $edit2 ]]; then
+    stage_app EDIT2 "$(dirname "$edit2")"
+    cp "$edit2" "$drive/EDIT2/EDIT.COM"
+else
+    missing+=(EDIT2)
+fi
+pedit=${PEDIT_EXE:-"$apps/pedit/PEDIT.EXE"}
+if [[ -f $pedit ]]; then
+    stage_app PEDIT "$(dirname "$pedit")"
+    cp "$pedit" "$drive/PEDIT/PEDIT.EXE"
+else
+    missing+=(PEDIT)
+fi
 stage_app DOSSHELL "${DOSSHELL_DIR:-$apps/dosshell622}"
 stage_app PCTOOLS "${PCTOOLS_DIR:-$apps/pct9}"
 stage_app CWSDPMI "$(dirname "${CWSDPMI_EXE:-$cache/extenders/cwsdpmi7/bin/CWSDPMI.EXE}")"
@@ -172,6 +185,7 @@ TC201 TC201 TC.EXE
 TC30 TC30 TC.EXE
 EDIT1 EDIT1 QBASIC.EXE /EDITOR
 EDIT2 EDIT2 EDIT.COM
+PEDIT PEDIT PEDIT.EXE
 DOSSHELL DOSSHELL DOSSHELL.EXE /T
 PCTOOLS PCTOOLS PCSHELL.EXE C: /NF /25 /IM
 TVEDIT TVEDIT TVEDIT.EXE

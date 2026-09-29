@@ -38,6 +38,8 @@ def pytest_addoption(parser):
                      help='Optional QBASIC.EXE for the classic MS-DOS EDIT application test.')
     parser.addoption('--msedit2', type=Path, default=os.environ.get('MSEDIT2_COM'),
                      help='Optional standalone MS-DOS Editor 2.x EDIT.COM.')
+    parser.addoption('--pedit', type=Path, default=os.environ.get('PEDIT_EXE'),
+                     help='Optional PEDIT executable for its Tables menu regression.')
     parser.addoption('--dos-apps', type=Path, default=os.environ.get('DOS_APPS'),
                      help='Optional unpacked application fixtures: tc201/, tc30/.')
     parser.addoption('--pctools', type=Path, default=os.environ.get('PCTOOLS_DIR'),

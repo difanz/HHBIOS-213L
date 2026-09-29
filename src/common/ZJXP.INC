@@ -110,6 +110,9 @@ L_XR5:
 		POP	BX
 		POP	ES
 		JNZ	L_XRPROP
+        ; Half-block bevels have no lossless legacy alias. Keep their bytes.
+        CMP AL,0DBH
+        JAE L_XR8
 		MOV	CX,1
 		CALL	S_ZJZF
 		JMP	SHORT L_XR8
