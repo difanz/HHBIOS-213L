@@ -1771,6 +1771,25 @@ boundary proc near
     ret
 boundary endp
 
+; Return the displayed single-byte character before applying a mouse mask.
+; Use the same alias policy and custom-font exception as S_XRXS.
+public text_character
+text_character proc near
+    push bp
+    mov bp,sp
+    push bx
+    mov ax,[bp+4]
+    cmp cs:policy,1
+    jbe text_character_done
+    call S_CUSTOM
+    jnz text_character_done
+    call S_ALVB
+text_character_done:
+    pop bx
+    pop bp
+    ret
+text_character endp
+
 policy label byte
 XR_CUSTOM equ 1
 XR_ROWS TEXTEQU <cs:text_rows>

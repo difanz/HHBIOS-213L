@@ -263,6 +263,9 @@ same MS-DOS and screenshot options, deleting its temporary disk after each
 case. Interactive preparation keeps `EDIT2` (Microsoft Editor) and `PEDIT`
 as separate launchers; their default fixture locations are
 `dos-apps/edit2/EDIT.COM` and `dos-apps/pedit/PEDIT.EXE` under the cache.
+`test_edit_mouse.py` checks the classic EDIT welcome dialog with `--qbasic`,
+`--vbmouse`, `--msdos-image` and `--screenshots`. It compares the border pixels
+before, under and after the mouse cursor in native text, VGA and VESA modes.
 Turbo C 2.01 also uses READ5 so its real-mode IDE has enough conventional memory.
 `test_borland_dpmi_font_memory` exercises Borland C++ 3.1 and Turbo C++ 3.0
 with each of READ4 and READ5, checking Chinese cursor movement, deletion and

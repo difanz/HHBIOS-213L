@@ -437,6 +437,9 @@ void CALL mouse_paint(void) {
   text = PTR(u16, 0xb800, active_page * page_bytes);
   i = mouse_y * 80 + mouse_x;
   value = text[i];
+  if (!bios_registers.ax) {
+    value = (value & 0xff00) | text_character(value & 255);
+  }
   changed = cursor_type ? value : (value & screen_mask) ^ cursor_mask;
   code = changed & 255;
   if ((changed & 255) == (value & 255)) {

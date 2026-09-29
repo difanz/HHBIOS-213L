@@ -2,7 +2,7 @@
 import struct
 
 import pytest
-from unicorn import UC_HOOK_MEM_WRITE
+from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_WRITE
 
 from qa.spec.test_vesa_api import Driver, vesa_driver
 
@@ -190,3 +190,45 @@ def test_stationary_mouse_and_caret_do_not_redraw_on_idle_ticks(vesa_driver):
         writes.clear()
         m.run('tick', limit=20000000)
         assert not writes, operation
+
+
+@pytest.mark.parametrize('policy,byte,custom,and_mask,xor_mask,expected', [
+    (3, 0x14, False, 0xffff, 0x7700, 0xb3),
+    (2, 0x12, False, 0xffff, 0x7700, 0xc4),
+    (3, 0x13, False, 0xffff, 0x7700, 0xcd),
+    (3, 0x80, False, 0xffff, 0x7700, 0xb0),
+    (0, 0x14, False, 0xffff, 0x7700, 0x14),
+    (1, 0x14, False, 0xffff, 0x7700, 0x14),
+    (3, 0x14, True, 0xffff, 0x7700, 0x14),
+    (3, 0xde, False, 0xffff, 0x7700, 0xde),
+    (3, 0x14, False, 0xff00, 0x7714, 0x14),
+    (3, 0x14, False, 0xffff, 0x7701, 0xb2),
+])
+@pytest.mark.parametrize('extended', [False, True])
+def test_mouse_masks_apply_to_displayed_character(vesa_driver, policy, byte,
+                                                 custom, and_mask, xor_mask,
+                                                 expected, extended):
+    m, state = mouse(vesa_driver, rows=25)
+    m.write('policy', bytes([policy]))
+    m.write('font_extended', bytes([extended]))
+    if custom:
+        m.uc.mem_write(0x10000+m.symbols['font_custom']+byte, b'\1')
+    original = bytes([byte, 0x70])+b' \x70'*1999
+    m.uc.mem_write(0xb8000, original)
+    m.run('int33_handler', AX=4, CX=0, DX=0)
+    m.run('int33_handler', AX=10, BX=0, CX=and_mask, DX=xor_mask)
+    m.run('int33_handler', AX=1)
+    m.run('mouse_poll')
+    glyphs = []
+
+    def observe(uc, address, size, _):
+        stack = m.get('SS')*16+m.get('SP')
+        glyphs.append(struct.unpack('<H', uc.mem_read(stack+2, 2))[0])
+
+    function = 'font_get_large' if extended else 'font_get'
+    address = 0x10000+m.symbols[function]
+    m.uc.hook_add(UC_HOOK_CODE, observe, begin=address, end=address)
+    m.run('mouse_paint', limit=1000000)
+    assert glyphs == [expected]
+    m.run('mouse_erase')
+    assert bytes(m.uc.mem_read(0xb8000, len(original))) == original
