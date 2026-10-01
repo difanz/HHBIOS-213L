@@ -187,6 +187,7 @@ u16 CALL linear_use_bank(void);
 u16 CALL linear_bind_text(void);
 u16 CALL linear_text_isolated(void);
 void CALL linear_hline(u16 x, u16 y, u16 width, u16 color);
+void CALL linear_paint_spaces(void);
 void CALL linear_packed(const u8* source, u16 attribute, u16 position,
                         u16 source_pitch, u16 source_bit);
 void CALL linear_words(const u16* bits, u16 attribute, u16 position);

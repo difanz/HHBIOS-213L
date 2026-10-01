@@ -275,7 +275,9 @@ selector admits planar 4 bpp and direct 15/16/32 bpp with a linear address.
 DOSBox runtime fixtures cover VBE 1.2 and later; 1.0/1.1 field handling has
 unit coverage only. `test_vesa_lfb.py` installs one BIOS-selected 16 bpp
 linear console under `qa/profiles/vesa-hd.conf` and checks Chinese pixels,
-blank cells and the 1418h byte counter.
+blank cells and the 1418h byte counter. The same test times dirty refresh in
+modes 114h and 245h and checks the byte counter: idle stays 0, and a few
+cells write fewer bytes than one line, which writes fewer than a full frame.
 
 ## Evidence
 
@@ -342,10 +344,16 @@ private GDT has a 16-bit 64 KiB code selector based at the resident segment and
 one 4 GB data selector based at physical 0. CR0.PE is set for the copy and
 cleared before the real-mode far jump back. `SMSW` already reporting PE (V86,
 including EMM386) fails the transfer and the console does not stay installed.
-Interrupts stay off for at most 4096 bytes. The byte counter behind AX=1418h
-counts those stores, not loads. There is no persistent unreal-mode segment
-cache and no DPMI client. A20 is enabled, via INT 15h AX=2401h and port 92h
-bit 1, only when the framebuffer's physical range has bit 20 set.
+Interrupts stay off for at most 4096 bytes. That cap stayed after timing the
+console: a full blank frame wrote about as many bytes as a scroll, but took
+far longer, so the cost was one protected-mode entry per glyph run rather
+than copy bandwidth. Dirty spaces are now filled as horizontal runs, and each
+glyph scanline is one entry. A longer chunk would not speed the glyph path,
+and 4096 bytes still bounds the interrupt-off window. The byte counter behind
+AX=1418h counts those stores, not loads. There is no persistent unreal-mode
+segment cache and no DPMI client. A20 is enabled, via INT 15h AX=2401h and
+port 92h bit 1, only when the framebuffer's physical range has bit 20 set.
+PIT samples for modes 114h, 117h and 245h are in `qa/lfb-bench.md`.
 
 Attributes use a fixed CGA/EGA 16-color table. The low nibble is foreground
 and the high nibble is background, including bright background in bit 7.

@@ -386,6 +386,11 @@ static void RefreshConsole(u16 show_cursor) {
   if (changed) {
     /* Mouse erasure can dirty the text row beneath a retained caret. */
     HideCursor();
+    /* Spaces share a background. Fill each dirty run once, then let the
+     * glyph path repaint only the cells that still differ. */
+    if (linear_color) {
+      linear_paint_spaces();
+    }
     refresh_dirty();
   }
   if (prompt_dirty) {

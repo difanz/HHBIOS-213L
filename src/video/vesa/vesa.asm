@@ -1857,10 +1857,10 @@ include HZPOS.INC
 shadow label word
 D_XPQ db 8000 dup (0)
 stack_bottom dw 0a55ah
-; Resident handlers switch here. 1536 covers dispatch plus the VGA
-; palette snapshot in RestoreSurface. Install borrows the shadow until
-; initialize returns, then a disposable INIT label above that code.
-db 1536 dup (0)
+; Resident handlers switch here. 1312 covers dispatch plus the VGA
+; palette snapshot in RestoreSurface (about 1022 bytes) with spare.
+; Install borrows the shadow until initialize returns.
+db 1312 dup (0)
 stack_top label word
 
 ; A runtime font/row change may select a different physical surface. Re-probe
@@ -2340,14 +2340,12 @@ old_link dw 0
 umb_segment dw 0
 resident_paragraphs dw 0
 force_low db 0
-msg_loaded db 'A HHBIOS display driver is already installed.',13,10,'$'
+msg_loaded db 'VESA already installed.',13,10,'$'
 msg_cpu db 'VESA requires a 386.',13,10,'$'
-msg_font db 'Load a HHBIOS font reader before VESA.',13,10,'$'
-msg_font20 db 'Cannot load font file into XMS or EMS 4.0 memory.',13,10,'$'
-msg_vbe db 'No usable VBE mode.',13,10,'$'
-msg_usage db 'VESA [/N] [/M:hex] [/F:file] [/R:25|43|50]',13,10
-          db 'Defaults: mode 102, automatic font size, 80x25 text.',13,10
-          db '/N keeps the driver in conventional memory.',13,10,'$'
+msg_font db 'No font reader.',13,10,'$'
+msg_font20 db 'No XMS/EMS font.',13,10,'$'
+msg_vbe db 'No VBE mode.',13,10,'$'
+msg_usage db 'VESA [/N] [/M:hex] [/F:file] [/R:25|43|50]',13,10,'$'
 INIT_TEXT ends
 ; Last byte of the image. Install uses it as stack after initialize returns.
 ZZINIT segment byte public 'ZZINIT'

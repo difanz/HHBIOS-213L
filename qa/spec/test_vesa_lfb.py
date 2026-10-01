@@ -109,3 +109,68 @@ def test_vesa_direct_color_linear_console(dosbox_binary, linear_guest, tmp_path)
         background = pack_color(1, masks)
         seen = {value_at(row, x) for row in cell(1) for x in range(cell_w)}
         assert foreground in seen and background in seen
+
+
+def _bench_fields(text):
+    header = {}
+    rows = {}
+    for line in text.splitlines():
+        if line.startswith('STATUS='):
+            for part in line.split():
+                key, value = part.split('=', 1)
+                header[key] = value
+        elif ' ' in line:
+            name, rest = line.split(' ', 1)
+            rows[name] = {key: int(value) for key, value in
+                          (part.split('=') for part in rest.split())}
+    return header, rows
+
+
+def test_lfb_dirty_refresh_byte_budget(dosbox_binary, linear_guest, tmp_path):
+    """Idle stores nothing, and dirty work grows from a few cells to a full frame.
+
+    Absolute milliseconds are not asserted: the PIT sample is for the note in
+    qa/lfb-bench.md, while the byte counter is the stable contract.
+    """
+    for name in ('READ5.COM', 'VESA.COM'):
+        shutil.copy2(linear_guest / name, tmp_path)
+    shutil.copy2(ROOT / 'fonts/HZK16', tmp_path)
+    shutil.copy2(ROOT / 'fonts/HH20.FNT', tmp_path)
+    built = subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/lfbbench.c',
+                            str(tmp_path / 'LFBBEN.COM')], cwd=ROOT, capture_output=True, text=True)
+    assert built.returncode == 0, built.stdout + built.stderr
+    listed = subprocess.run(['bash', 'tools/build-watcom-com.sh', 'qa/harness/lfblist.c',
+                             str(tmp_path / 'LFBLIST.COM')], cwd=ROOT, capture_output=True, text=True)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    settings = '\n' + (ROOT / 'qa/profiles/vesa-hd.conf').read_text()
+    modes = run_dos(dosbox_binary, tmp_path, ['LFBLIST'], timeout=30, settings=settings)
+    catalog = modes['MODES.TXT'].read_text().lower() if 'MODES.TXT' in modes else ''
+    saw = False
+    for mode in ('114', '245'):
+        if f'mode={mode} ' not in catalog and f'mode={mode}\n' not in catalog:
+            continue
+        saw = True
+        case = tmp_path / mode
+        case.mkdir()
+        for name in ('READ5.COM', 'VESA.COM', 'LFBBEN.COM', 'HZK16', 'HH20.FNT'):
+            shutil.copy2(tmp_path / name, case)
+        files = run_dos(dosbox_binary, case,
+                        ['READ5', f'VESA /M:{mode} /F:HH20.FNT', 'LFBBEN'],
+                        timeout=120, settings=settings)
+        header, rows = _bench_fields(files['BENCH.TXT'].read_text())
+        assert header.get('STATUS') == 'ok', header
+        assert header.get('MODE') == mode
+        assert int(header['BPP']) in (15, 16, 32)
+        pitch = int(header['PITCH'])
+        height = int(header['H'])
+        idle = rows['IDLE8']['bytes']
+        sparse = rows['SPARSE4']['bytes']
+        line = rows['LINE80']['bytes']
+        full = rows['FULL_BLANK']['bytes']
+        hanzi = rows['FULL_HANZI']['bytes']
+        assert idle == 0
+        assert 0 < sparse < line < full
+        assert full == hanzi == rows['FULL_BLANK2']['bytes']
+        assert full < pitch * height
+    if not saw:
+        pytest.skip('BIOS published neither mode 114h nor 245h')
