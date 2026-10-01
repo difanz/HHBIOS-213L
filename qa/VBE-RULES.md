@@ -344,16 +344,18 @@ private GDT has a 16-bit 64 KiB code selector based at the resident segment and
 one 4 GB data selector based at physical 0. CR0.PE is set for the copy and
 cleared before the real-mode far jump back. `SMSW` already reporting PE (V86,
 including EMM386) fails the transfer and the console does not stay installed.
-Interrupts stay off for at most 4096 bytes. That cap stayed after timing the
-console: a full blank frame wrote about as many bytes as a scroll, but took
-far longer, so the cost was one protected-mode entry per glyph run rather
-than copy bandwidth. Dirty spaces are now filled as horizontal runs, and each
-glyph scanline is one entry. A longer chunk would not speed the glyph path,
-and 4096 bytes still bounds the interrupt-off window. The byte counter behind
-AX=1418h counts those stores, not loads. There is no persistent unreal-mode
-segment cache and no DPMI client. A20 is enabled, via INT 15h AX=2401h and
-port 92h bit 1, only when the framebuffer's physical range has bit 20 set.
-PIT samples for modes 114h, 117h and 245h are in `qa/lfb-bench.md`.
+Interrupts stay off for at most 4096 bytes, then PE is cleared before any
+DOS or BIOS interrupt. Dirty spaces are one horizontal fill per run. A glyph
+chunk is one entry covering every framebuffer line of that chunk, split by
+source row only when the store would pass 4096 bytes. Packed rows are
+run-length filled inside the entry. Holding PE for a whole frame would leave
+interrupts off for hundreds of milliseconds to save only the leftover
+per-glyph entries. The byte counter behind AX=1418h counts those stores, not
+loads. There is no persistent unreal-mode segment cache, no VCPI client and
+no DPMI client. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
+when the framebuffer's physical range has bit 20 set. Why the other access
+paths were rejected is in `qa/lfb-fastpath.md`. PIT samples for modes 114h,
+117h and 245h are in `qa/lfb-bench.md`.
 
 Attributes use a fixed CGA/EGA 16-color table. The low nibble is foreground
 and the high nibble is background, including bright background in bit 7.
@@ -379,7 +381,7 @@ compared using the same pixels and update regions:
 | 16-bit banked, `WinFuncPtr` | BIOS advertising a callable entry | Same geometry, reduced call overhead; no per-pixel banking |
 | Short real/protected/real LFB copy | 386+ real mode, PE clear on entry | One flat data selector per transfer of at most 4096 bytes; V86 cannot enter it |
 | 32-bit LFB via DPMI | Not used | A client selector does not survive as a TSR resource across mode switches |
-| Unreal-mode LFB | Not used | Leaving FS/GS limits raised across timer and BIOS calls was rejected |
+| Unreal-mode LFB | Not used | After per-glyph batching the leftover entry cost is about 12 ms; an FS limit left raised still faults if an interrupt reloads FS |
 
 DPMI's [physical mapping API](https://www.delorie.com/djgpp/doc/dpmi/api/310800.html)
 returns a linear address for device memory. It does not, by itself, make that

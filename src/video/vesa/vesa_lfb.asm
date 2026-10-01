@@ -2,7 +2,8 @@
 ; Each transfer enters protected mode only long enough to use a 4 GB data
 ; descriptor, then returns to real mode. V86 (CR0.PE already set) fails.
 ; Copies stay at or below 4096 bytes so interrupts are off for one chunk.
-; Glyph rows use one entry (op 7) instead of one entry per color run.
+; One glyph chunk is one entry (op 7): every framebuffer line of that chunk.
+; Packed rows are run-length filled with REP STOS inside the entry.
 ; Dirty space runs are filled with linear_hline before the glyph walk.
 ; Real-mode callers run with DS = CS. Protected-mode code uses CS overrides.
 .model tiny,c
@@ -121,25 +122,85 @@ flat_pm:
     je pm_paint
     jmp pm_exit
 
-; Op 7: one glyph scanline. ESI is the glyph row, EDI the framebuffer.
-; Horizontal scale repeats each column. No stack: SS is still a real selector.
+; Op 7: every framebuffer line of one glyph chunk. ESI is the first glyph
+; row, EDI the first pixel. A source row is repeated gscale times, then ESI
+; advances by gpitch. No stack: SS is still a real selector. At most 4096
+; bytes are stored before pm_exit clears PE.
 pm_scan:
+    mov ax,cs:gscale
+    mov cs:row_px,ax
+    mov ax,cs:pix_lines
+    mov cs:cnt,ax
+    mov dword ptr cs:origin,edi
+pm_line:
+    cmp word ptr cs:gkind,0
+    jne pm_gen
+    movzx ecx,word ptr cs:gbit
+    mov eax,ecx
+    shr eax,3
+    mov ebx,esi
+    add ebx,eax
+    and cl,7
+    db 67h,8ah,03h
+    mov ah,80h
+    shr ah,cl
+    movzx ecx,word ptr cs:gwidth
+pf_run:
+    or ecx,ecx
+    jz pm_eol
+    test al,ah
+    mov edx,dword ptr cs:gbg
+    jz pf_len
+    mov edx,dword ptr cs:gfg
+pf_len:
+    xor ebp,ebp
+pf_more:
+    inc ebp
+    dec ecx
+    jz pf_emit
+    shr ah,1
+    jnz pf_same
+    inc ebx
+    db 67h,8ah,03h
+    mov ah,80h
+pf_same:
+    test al,ah
+    jz pf_off
+    cmp edx,dword ptr cs:gfg
+    je pf_more
+    jmp short pf_emit
+pf_off:
+    cmp edx,dword ptr cs:gbg
+    je pf_more
+pf_emit:
+    mov byte ptr cs:line_bytes,al
+    mov byte ptr cs:line_bytes+1,ah
+    mov dword ptr cs:distance,ecx
+    movzx eax,word ptr cs:gscale
+    imul eax,ebp
+    mov ecx,eax
+    mov eax,edx
+    cmp byte ptr cs:pixsz,2
+    jne pf_d32
+    db 67h,0f3h,0abh
+    jmp short pf_back
+pf_d32:
+    db 67h,66h,0f3h,0abh
+pf_back:
+    mov al,byte ptr cs:line_bytes
+    mov ah,byte ptr cs:line_bytes+1
+    mov ecx,dword ptr cs:distance
+    jmp pf_run
+pm_gen:
     movzx ebp,word ptr cs:gwidth
     movzx edx,word ptr cs:gscale
-    test edx,edx
-    jnz pm_scale
-    inc edx
-pm_scale:
     xor ebx,ebx
 pm_col:
     cmp ebx,ebp
     jb pm_bit
-    jmp pm_exit
+    jmp pm_eol
 pm_bit:
-    movzx ecx,word ptr cs:gkind
-    or ecx,ecx
-    jz pm_packed
-    cmp ecx,1
+    cmp word ptr cs:gkind,1
     je pm_word
     cmp ebx,32
     jae pm_bg
@@ -156,18 +217,6 @@ pm_word:
     shl ax,cl
     test ah,80h
     jmp short pm_pick
-pm_packed:
-    movzx eax,word ptr cs:gbit
-    add eax,ebx
-    mov ecx,eax
-    shr ecx,3
-    and al,7
-    mov ah,al
-    db 67h,8ah,04h,0eh
-    mov cl,ah
-    mov ch,80h
-    shr ch,cl
-    test al,ch
 pm_pick:
     mov eax,cs:gbg
     jz pm_reps
@@ -191,6 +240,21 @@ pm_pixn:
     jnz pm_pix
     db 66h,43h
     jmp pm_col
+pm_eol:
+    movzx eax,word ptr cs:display_pitch
+    add eax,dword ptr cs:origin
+    mov dword ptr cs:origin,eax
+    mov edi,eax
+    dec word ptr cs:row_px
+    jnz pm_src_ok
+    mov ax,cs:gscale
+    mov cs:row_px,ax
+    movzx eax,word ptr cs:gpitch
+    add esi,eax
+pm_src_ok:
+    dec word ptr cs:cnt
+    jz pm_done
+    jmp pm_line
 
 pm_exit:
     mov eax,cr0
@@ -479,10 +543,10 @@ xy_dest proc near
     ret
 xy_dest endp
 
-; One scanline of gwidth columns at gaddr, in a single protected-mode entry.
-; SI is the glyph row and is not advanced. The next line is the saved start
-; plus the BIOS pitch. A cell line is at most 24*4*4 bytes, under the 4096 cap.
-paint_line proc near
+; pix_lines framebuffer rows at gaddr from the glyph row SI. One protected-mode
+; entry. SI is preserved. gaddr advances by pitch times the line count.
+; Bytes stored are width * scale * lines * bytes per pixel, and must be <= 4096.
+paint_span proc near
     push si
     mov eax,gaddr
     mov dest,eax
@@ -494,28 +558,30 @@ paint_line proc near
     mov src,eax
     mov ax,gwidth
     mul word ptr gscale
-    jc pl_bad
     mul word ptr pixsz
-    jc pl_bad
+    mov bx,ax
+    mov ax,pix_lines
+    mul bx
     cmp ax,4096
-    ja pl_bad
+    ja ps_bad
     mov nbytes,ax
     mov op,7
     call flat_run
     or ax,ax
-    jz pl_bad
-    movzx eax,display_pitch
-    add eax,dest
-    mov gaddr,eax
+    jz ps_bad
+    movzx eax,word ptr pix_lines
+    movzx edx,display_pitch
+    mul edx
+    add dword ptr gaddr,eax
     mov ax,1
-pl_leave:
+ps_leave:
     pop si
     ret
-pl_bad:
+ps_bad:
     mov active,0
     xor ax,ax
-    jmp pl_leave
-paint_line endp
+    jmp ps_leave
+paint_span endp
 
 ; BL = column, BH = row, CX = scale. Returns AX = x, BX = y. Preserves CX, SI.
 cell_xy proc near
@@ -579,24 +645,47 @@ gg_sc:
     mov eax,dest
     mov gaddr,eax
     mov si,[bp+4]
-    mov cx,raster_height
-    jcxz gg_out
-gg_row:
-    push cx
-    mov cx,gscale
-gg_vert:
-    push cx
-    call paint_line
-    pop cx
-    cmp active,0
-    je gg_pop
-    loop gg_vert
-    pop cx
+    mov di,raster_height
+    or di,di
+    jz gg_out
+    mov ax,gwidth
+    mul word ptr gscale
+    jc gg_fail
+    mul word ptr pixsz
+    jc gg_fail
+    or ax,ax
+    jz gg_fail
+    mov bx,ax
+    mov ax,di
+    mul word ptr gscale
+    jc gg_rows
+    or dx,dx
+    jnz gg_rows
+    mov cx,ax
+    mul bx
+    jc gg_rows
+    or dx,dx
+    jnz gg_rows
+    cmp ax,4096
+    ja gg_rows
+    mov pix_lines,cx
+    call paint_span
+    jmp short gg_check
+gg_rows:
+    mov ax,gscale
+    mov pix_lines,ax
+    call paint_span
+    or ax,ax
+    jz gg_fail
     add si,gpitch
-    loop gg_row
+    dec di
+    jnz gg_rows
     jmp short gg_out
-gg_pop:
-    pop cx
+gg_check:
+    or ax,ax
+    jnz gg_out
+gg_fail:
+    mov active,0
 gg_out:
     pop di
     pop si

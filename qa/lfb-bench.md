@@ -14,12 +14,16 @@ full hanzi frame both cover the text grid plus the status row, so their byte
 counts match. Scroll bytes are the pixel move plus the cleared row and do not
 include a status-row repaint.
 
-Before this change, a blank frame wrote about as many bytes as a scroll and
-took much longer. The cost was one protected-mode entry per glyph run, not
-the 4096-byte copy cap. Spaces are now one horizontal fill per run, and each
-glyph scanline is one entry. The cap is unchanged: a longer interrupt-off
-chunk would not remove the remaining per-glyph entries. Hanzi is still one
-entry per cell scanline, which is the time left on a full frame.
+Before the space-run change, a blank frame wrote about as many bytes as a
+scroll and took much longer. The cost was one protected-mode entry per glyph
+run, not the 4096-byte copy cap. Spaces are one horizontal fill per run.
+The tables below that heading record the following step, one entry per glyph
+scanline. A later step paints a whole glyph chunk in one entry and
+run-length-fills packed rows; those samples are in the last section.
+`qa/lfb-fastpath.md` records why unreal mode, a long protected-mode session,
+and a conventional staging buffer were not used.
+
+## One entry per glyph scanline
 
 ## 114h, 800×600×16, pitch 1600, scale 1
 
@@ -61,3 +65,19 @@ that latch. Adding the missed period gives 31216 counts, 26 ms.
 | Scroll one row | 73202 | 61 | 3200000 | 28666 | 24 | 3200000 |
 | Full hanzi | 2264118 | 1897 | 3334400 | 1503056 | 1259 | 3334400 |
 | Idle, 8 ticks | 509248 | 426 | 0 | 517264 | 433 | 0 |
+
+## One glyph chunk, packed runs
+
+Same harness, after painting every framebuffer line of one glyph chunk in a
+single protected-mode entry and filling packed rows with `REP STOS`. "Before"
+is the scanline-entry sample above. Hanzi repeats agreed within 1 ms. Blank
+and scroll samples on this run still drop or add one 65536-count PIT period;
+the two blank readings in a mode differ by that period, and the corrected
+scroll matches the previous 26 ms (114h/117h) or 24 ms (245h). Byte counts
+did not change. Idle stayed 0.
+
+| Mode | Blank before ms | Blank after counts | Hanzi before ms | Hanzi after counts | Hanzi after ms | Bytes |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| 114h | 42 | 16898 and 82434 | 640 | 399978 and 398774 | 335 and 334 | 956800 |
+| 117h | 42 | 17084 and 82622 | 695 | 400166 and 398960 | 335 and 334 | 960000 |
+| 245h | 141 | 76134 and 141668 | 1259 | 1131224 and 1130016 | 948 and 947 | 3334400 |
