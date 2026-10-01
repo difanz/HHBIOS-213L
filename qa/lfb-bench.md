@@ -81,3 +81,25 @@ did not change. Idle stayed 0.
 | 114h | 42 | 16898 and 82434 | 640 | 399978 and 398774 | 335 and 334 | 956800 |
 | 117h | 42 | 17084 and 82622 | 695 | 400166 and 398960 | 335 and 334 | 960000 |
 | 245h | 141 | 76134 and 141668 | 1259 | 1131224 and 1130016 | 948 and 947 | 3334400 |
+
+## 32-bit code segment
+
+Same harness, after the glyph painter moved to a 32-bit code selector and
+measured packed runs with `BSR`. "Before" is the one-chunk `REP STOS` sample
+above. Hanzi bytes did not change. Idle stayed 0. Scroll stayed 26 ms
+(114h/117h) and 24 ms (245h). Two boots produced the same hanzi pair. On
+245h the second pass is repeatably 64336 counts slower, just under one PIT
+period, with the same byte count.
+
+Blank on 114h/117h is still one PIT period apart (70902 vs 5362, 71092 vs
+5552). 245h blank agrees at 124230 counts, 104 ms. Spaces are still the
+16-bit horizontal fill, so those blank readings are not attributed to the
+painter. One ASCII line on 114h/117h latches one period low
+(`counts=4294941190` and `4294941378`); adding that period gives 39430 and
+39618 counts, 33 ms, with the same 73600 and 76800 bytes.
+
+| Mode | Hanzi before ms | Hanzi after counts | Hanzi after ms | Bytes |
+| --- | ---: | --- | ---: | ---: |
+| 114h | 335 and 334 | 298018 and 296812 | 249 and 248 | 956800 |
+| 117h | 335 and 334 | 298214 and 297006 | 249 and 248 | 960000 |
+| 245h | 948 and 947 | 878690 and 943026 | 736 and 790 | 3334400 |

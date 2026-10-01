@@ -2,8 +2,8 @@
 ; Each transfer enters protected mode only long enough to use a 4 GB data
 ; descriptor, then returns to real mode. V86 (CR0.PE already set) fails.
 ; Copies stay at or below 4096 bytes so interrupts are off for one chunk.
-; One glyph chunk is one entry (op 7): every framebuffer line of that chunk.
-; Packed rows are run-length filled with REP STOS inside the entry.
+; Op 7 runs in a 32-bit code segment: packed rows are expanded there and
+; stored with REP STOS. PE is cleared before any DOS or BIOS interrupt.
 ; Dirty space runs are filled with linear_hline before the glyph walk.
 ; Real-mode callers run with DS = CS. Protected-mode code uses CS overrides.
 .model tiny,c
@@ -45,6 +45,45 @@ pix_lines dw 0
 origin dd 0
 distance dd 0
 pix    dd 0
+if (offset gfg - offset counting) NE 1
+.err
+endif
+if (offset gbg - offset gfg) NE 4
+.err
+endif
+if (offset gpitch - offset gfg) NE 12
+.err
+endif
+if (offset gbit - offset gfg) NE 14
+.err
+endif
+if (offset gwidth - offset gfg) NE 16
+.err
+endif
+if (offset gkind - offset gfg) NE 18
+.err
+endif
+if (offset gscale - offset gfg) NE 20
+.err
+endif
+if (offset line_bytes - offset gfg) NE 22
+.err
+endif
+if (offset row_px - offset gfg) NE 24
+.err
+endif
+if (offset pix_lines - offset gfg) NE 26
+.err
+endif
+if (offset origin - offset gfg) NE 28
+.err
+endif
+if (offset distance - offset gfg) NE 32
+.err
+endif
+if (offset pix - offset gfg) NE 36
+.err
+endif
 text_saved dw 0
 linear_bpp_bytes db 2
 linear_xor_mask dd 0
@@ -57,6 +96,7 @@ rgb db 000h,000h,000h, 000h,000h,0aah, 000h,0aah,000h, 000h,0aah,0aah
 gdt       dq 0
 gdt_code  dw 0ffffh, 0, 9a00h, 0
 gdt_data  dw 0ffffh, 0, 9200h, 00cfh
+gdt_code32 dw 0ffffh, 0, 9a00h, 00cfh
 gdt_end   label byte
 gdtr      dw gdt_end - gdt - 1
           dd 0
@@ -115,146 +155,35 @@ flat_pm:
     cmp bx,1
     je pm_copy
     cmp bx,7
-    je pm_scan
+    jne pm_other
+    movzx eax,word ptr cs:flat_cs_slot
+    shl eax,4
+    add eax,offset gfg
+    mov ebp,eax
+    mov ax,cs:display_pitch
+    mov cs:line_bytes,ax
+    mov al,byte ptr cs:pixsz
+    mov cs:counting,al
+    mov ax,10h
+    mov ss,ax
+    db 0eah
+    dw offset pm32_scan
+    dw 18h
+pm_other:
     cmp bx,3
     je pm_paint
     cmp bx,5
     je pm_paint
     jmp pm_exit
 
-; Op 7: every framebuffer line of one glyph chunk. ESI is the first glyph
-; row, EDI the first pixel. A source row is repeated gscale times, then ESI
-; advances by gpitch. No stack: SS is still a real selector. At most 4096
-; bytes are stored before pm_exit clears PE.
-pm_scan:
-    mov ax,cs:gscale
-    mov cs:row_px,ax
-    mov ax,cs:pix_lines
-    mov cs:cnt,ax
-    mov dword ptr cs:origin,edi
-pm_line:
-    cmp word ptr cs:gkind,0
-    jne pm_gen
-    movzx ecx,word ptr cs:gbit
-    mov eax,ecx
-    shr eax,3
-    mov ebx,esi
-    add ebx,eax
-    and cl,7
-    db 67h,8ah,03h
-    mov ah,80h
-    shr ah,cl
-    movzx ecx,word ptr cs:gwidth
-pf_run:
-    or ecx,ecx
-    jz pm_eol
-    test al,ah
-    mov edx,dword ptr cs:gbg
-    jz pf_len
-    mov edx,dword ptr cs:gfg
-pf_len:
-    xor ebp,ebp
-pf_more:
-    inc ebp
-    dec ecx
-    jz pf_emit
-    shr ah,1
-    jnz pf_same
-    inc ebx
-    db 67h,8ah,03h
-    mov ah,80h
-pf_same:
-    test al,ah
-    jz pf_off
-    cmp edx,dword ptr cs:gfg
-    je pf_more
-    jmp short pf_emit
-pf_off:
-    cmp edx,dword ptr cs:gbg
-    je pf_more
-pf_emit:
-    mov byte ptr cs:line_bytes,al
-    mov byte ptr cs:line_bytes+1,ah
-    mov dword ptr cs:distance,ecx
-    movzx eax,word ptr cs:gscale
-    imul eax,ebp
-    mov ecx,eax
-    mov eax,edx
-    cmp byte ptr cs:pixsz,2
-    jne pf_d32
-    db 67h,0f3h,0abh
-    jmp short pf_back
-pf_d32:
-    db 67h,66h,0f3h,0abh
-pf_back:
-    mov al,byte ptr cs:line_bytes
-    mov ah,byte ptr cs:line_bytes+1
-    mov ecx,dword ptr cs:distance
-    jmp pf_run
-pm_gen:
-    movzx ebp,word ptr cs:gwidth
-    movzx edx,word ptr cs:gscale
-    xor ebx,ebx
-pm_col:
-    cmp ebx,ebp
-    jb pm_bit
-    jmp pm_eol
-pm_bit:
-    cmp word ptr cs:gkind,1
-    je pm_word
-    cmp ebx,32
-    jae pm_bg
-    db 67h,66h,8bh,06h
-    mov cl,bl
-    shl eax,cl
-    test eax,80000000h
-    jmp short pm_pick
-pm_word:
-    cmp ebx,16
-    jae pm_bg
-    db 67h,8bh,06h
-    mov cl,bl
-    shl ax,cl
-    test ah,80h
-    jmp short pm_pick
-pm_pick:
-    mov eax,cs:gbg
-    jz pm_reps
-    mov eax,cs:gfg
-    jmp short pm_reps
-pm_bg:
-    mov eax,cs:gbg
-pm_reps:
-    mov ecx,edx
-pm_pix:
-    cmp byte ptr cs:pixsz,2
-    jne pm_pix32
-    db 67h,89h,07h
-    db 66h,83h,0c7h,02h
-    jmp short pm_pixn
-pm_pix32:
-    db 67h,66h,89h,07h
-    db 66h,83h,0c7h,04h
-pm_pixn:
-    db 66h,49h
-    jnz pm_pix
-    db 66h,43h
-    jmp pm_col
-pm_eol:
-    movzx eax,word ptr cs:display_pitch
-    add eax,dword ptr cs:origin
-    mov dword ptr cs:origin,eax
-    mov edi,eax
-    dec word ptr cs:row_px
-    jnz pm_src_ok
-    mov ax,cs:gscale
-    mov cs:row_px,ax
-    movzx eax,word ptr cs:gpitch
-    add esi,eax
-pm_src_ok:
-    dec word ptr cs:cnt
-    jz pm_done
-    jmp pm_line
+; Op 7 continues in vesa_pm32.asm (32-bit CS). EBP is the flat address of
+; gfg and SS is the flat data selector, because [ebp] uses SS. The blob
+; falls into the far jump back to 16-bit pm_exit.
+pm32_scan:
+incbin "pm32.bin"
+    db 0eah
+    dd offset pm_exit
+    dw 8
 
 pm_exit:
     mov eax,cr0
@@ -263,6 +192,7 @@ pm_exit:
     db 0eah
     dw offset flat_back
 flat_cs_slot dw 0
+saved_ss dw 0
 
 flat_run proc near
     push si
@@ -270,6 +200,7 @@ flat_run proc near
     push ds
     pushf
     cli
+    mov cs:saved_ss,ss
     smsw ax
     test al,1
     jnz flat_denied
@@ -282,9 +213,12 @@ flat_run proc near
     add eax,offset gdt
     mov dword ptr cs:gdtr+2,eax
     mov word ptr cs:gdt_code+2,bx
+    mov word ptr cs:gdt_code32+2,bx
     shr ebx,16
     mov byte ptr cs:gdt_code+4,bl
+    mov byte ptr cs:gdt_code32+4,bl
     mov byte ptr cs:gdt_code+7,bh
+    mov byte ptr cs:gdt_code32+7,bh
     lgdt fword ptr cs:gdtr
     mov eax,cr0
     or al,1
@@ -295,6 +229,8 @@ flat_run proc near
 flat_back:
     mov ax,cs
     mov ds,ax
+    mov ax,cs:saved_ss
+    mov ss,ax
     mov ax,cs:nbytes
     add word ptr cs:lfb_bytes,ax
     adc word ptr cs:lfb_bytes+2,0

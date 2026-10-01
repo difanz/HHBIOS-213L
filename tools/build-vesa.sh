@@ -39,7 +39,8 @@ trap 'rm -rf "$work"' EXIT
     env -u JWASM "$assembler" -q -0 -Zm -omf -DHH_CPU=3 "${asm_includes[@]}" -Fovesaa.obj "$source_dir/vesa.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Fofonta.obj "$source_dir/vesa_font.asm"
     env -u JWASM "$assembler" -q -0 -Zm -omf -Forastera.obj "$source_dir/vesa_raster.asm"
-    env -u JWASM "$assembler" -q -3 -Zm -omf -Folfba.obj "$source_dir/vesa_lfb.asm"
+    env -u JWASM "$assembler" -q -3 -bin -Fo"$work/pm32.bin" "$source_dir/vesa_pm32.asm"
+    env -u JWASM "$assembler" -q -3 -Zm -omf -I"$work" -Folfba.obj "$source_dir/vesa_lfb.asm"
     wlink option quiet option nodefaultlibs format dos com option map=vesa.map name vesa.com file vesaa.obj,vesac.obj,fonta.obj,fontc.obj,rasterc.obj,rastera.obj,lfba.obj,mousea.obj,mousec.obj,framec.obj,fontfile.obj,fontlayout.obj order clname CODE clname DATA clname BSS clname ZZEND clname TAIL clname INIT clname ZZINIT
     cp vesa.com "$out"
     cp vesa.map "${out%.*}.map"

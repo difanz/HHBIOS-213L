@@ -338,21 +338,25 @@ Software cursor blinking adds its own small draws outside that text-refresh test
 At that size, prompt clear/output and wide strings also share a bank transaction across all
 their glyphs; their work-count tests require just two bank calls per operation.
 
-Direct-color drawing keeps the same dirty cells. Each store, fill, move or XOR
-enters protected mode only for that transfer, then returns to real mode. The
-private GDT has a 16-bit 64 KiB code selector based at the resident segment and
-one 4 GB data selector based at physical 0. CR0.PE is set for the copy and
+Direct-color drawing keeps the same dirty cells. Each store, fill, move, XOR,
+or glyph enters protected mode only for that transfer, then returns to real
+mode. The private GDT has a 16-bit 64 KiB code selector based at the resident
+segment, one 4 GB data selector based at physical 0, and a 32-bit 4 GB code
+selector at that same resident base. Copies, fills, and XOR run on the 16-bit
+code selector. The glyph painter far-jumps to the 32-bit selector, expands
+packed rows there, and stores with `REP STOS`. For that painter the flat data
+selector is also SS, because `[ebp+disp]` uses SS; the saved real-mode SS is
+restored before registers are popped. CR0.PE is set for the transfer and
 cleared before the real-mode far jump back. `SMSW` already reporting PE (V86,
 including EMM386) fails the transfer and the console does not stay installed.
-Interrupts stay off for at most 4096 bytes, then PE is cleared before any
-DOS or BIOS interrupt. Dirty spaces are one horizontal fill per run. A glyph
-chunk is one entry covering every framebuffer line of that chunk, split by
-source row only when the store would pass 4096 bytes. Packed rows are
-run-length filled inside the entry. Holding PE for a whole frame would leave
-interrupts off for hundreds of milliseconds to save only the leftover
-per-glyph entries. The byte counter behind AX=1418h counts those stores, not
-loads. There is no persistent unreal-mode segment cache, no VCPI client and
-no DPMI client. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
+Interrupts stay off for at most 4096 bytes. There is no STI while PE is set:
+the real-mode IVT is not an IDT. Dirty spaces are one horizontal fill per run,
+still on the 16-bit path. A glyph chunk is one entry covering every
+framebuffer line of that chunk, split by source row only when the store would
+pass 4096 bytes. Holding PE for a whole frame would leave interrupts off for
+the whole hanzi repaint to save only the leftover per-glyph entries. The byte
+counter behind AX=1418h counts those stores, not loads. There is no persistent
+unreal-mode segment cache, no VCPI client and no DPMI client. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
 when the framebuffer's physical range has bit 20 set. Why the other access
 paths were rejected is in `qa/lfb-fastpath.md`. PIT samples for modes 114h,
 117h and 245h are in `qa/lfb-bench.md`.
