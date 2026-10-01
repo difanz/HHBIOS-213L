@@ -45,18 +45,27 @@ their separate 386 word/dword loops.
 Full-width scrolling copies retained pixels and their text shadow; same-bank
 copies use byte-wide VGA latches across all four planes, while cross-bank
 scanlines pass through a 2 KiB buffer. No latch copy uses MOVSW or MOVSD.
-No protected-mode switch or framebuffer-sized conventional-memory allocation
-is needed. Vendor widescreen mode numbers must be discovered, not assumed.
+The planar path needs no protected-mode switch and no framebuffer-sized
+conventional buffer. Vendor widescreen mode numbers must be discovered, not assumed.
 
-By default VESA queries mode 102h, then a bounded BIOS mode list. An explicit
-`/M` requests exactly that mode. It requires VGA-compatible planar 4-bpp
-graphics, 800x600 through 4096x2160, an even pitch up to 512 bytes, and a
-readable/writable 64 KiB A000 window whose granularity divides 64 KiB.
+By default VESA queries mode 102h, then a bounded BIOS mode list, and keeps the
+first planar console mode. An explicit `/M` requests exactly that mode and
+accepts it when it is planar or a supported direct-color linear mode. Planar
+modes require VGA-compatible 4-bpp graphics, 800x600 through 4096x2160, an even
+pitch up to 512 bytes, and a readable/writable 64 KiB A000 window whose
+granularity divides 64 KiB.
 Physical widths need not be byte aligned: 1366 pixels require at least 171
 bytes per plane row, rounded up to an even BIOS pitch of at least 172.
-Larger surfaces require isolated banked text storage. It rejects unsupported
-layouts without hooking interrupts. This is a
-specific backend requirement, not a claim that all VBE modes use VGA registers.
+Larger planar surfaces require isolated banked text storage. Direct-color
+consoles are selected only when no planar console mode is available, or when
+`/M` names one. They require memory model 6, 15/16/32 bpp, a non-zero
+PhysBasePtr, VBE 2.0 linear attribute, an even pitch that covers the width,
+and the same 800x600 through 4096x2160 range. 16 bpp ranks ahead of 15 bpp and
+32 bpp; the smaller surface wins inside a depth. 24 bpp and packed 8 bpp are
+decoded and then rejected by the console selector. Mode set uses BX bit 14 so
+the BIOS exposes the linear map. Unsupported layouts are rejected without
+hooking interrupts. This is a specific backend requirement, not a claim that
+all VBE modes use VGA registers.
 The [VBE specification](https://www.phatcode.net/res/221/files/vbe20.pdf) defines
 the geometry, stride, window permissions/granularity and format fields used here.
 
@@ -241,10 +250,11 @@ checks do not establish compatibility with every hardware mouse driver.
 | VESA extension | Contract |
 | --- | --- |
 | `AX=1411h` | Returns AX=5356h, BX=ABI version 1, CX=descriptor size, ES:DI=read-only packed `struct surface` from `vesa.h`, SI=resident bytes, BP=banked-text flag, DX=framebuffer segment. Available while suspended. |
-| `AX=1412h` | Read plane BX=0..3, 16-bit starting byte offset SI, byte count CX, destination ES:DI. Returns AX=0 on success, 1 on invalid bounds/inactive/bank failure, 2 when busy (retry). Source must remain within the complete plane (60000 bytes at 800x600); destination must not wrap. Zero count checks availability without bank changes. Caller serializes subsequent direct text reads against interrupts. |
+| `AX=1412h` | Read plane BX=0..3, 16-bit starting byte offset SI, byte count CX, destination ES:DI. Returns AX=0 on success, 1 on invalid bounds/inactive/bank failure, 2 when busy (retry). Source must remain within the complete plane (60000 bytes at 800x600); destination must not wrap. Zero count checks availability without bank changes. Caller serializes subsequent direct text reads against interrupts. On a direct-color console BX must be 0 and the offset is a byte offset into the linear framebuffer. |
 | `AX=1413h` | Returns AX=4632h, BX=font storage (1 XMS, 2 EMS), CX=payload size rounded up to KiB, DX=sticky font-read error flag, SI=cell width, DI=cell height. EMS allocation rounds further to 16 KiB pages. |
-| `AX=1414h` | Bank-spanning raw plane read: same plane, destination, count and status as 1412h, with a 32-bit byte offset in DX:SI. No redraw. A failed bank switch disables rendering and keyboard interception. |
+| `AX=1414h` | Bank-spanning raw plane read: same plane, destination, count and status as 1412h, with a 32-bit byte offset in DX:SI. No redraw. A failed bank switch disables rendering and keyboard interception. On a direct-color console BX must be 0; DX:SI is a byte offset from the linear framebuffer base. INT 10h AH=0Dh pixel readback is not implemented on that console; use this call. |
 | `AX=1415h` | Returns AX=5650h, BX/CX=physical viewport x/y, DX=integer scale, DI:SI=bytes per complete plane. AX=1406h reports the unscaled raster cell height; BDA character height remains logical. |
+| `AX=1418h` | Returns DX:AX = bytes stored, filled, moved or XOR-written to the linear map since the previous clear. BX=1 when the console is direct-color. CX=1 clears the counter after the report. Planar drawing leaves the counter at zero. Loads do not count. |
 
 ## API sequence
 
@@ -255,14 +265,17 @@ distinguishes the interfaces below. Implement and validate them separately:
 | --- | --- |
 | 1.0 core | Controller/mode query, set/get mode, bank control and state ownership. VESA uses optional geometry only when advertised. |
 | 1.1 | External scanline/display-start calls are forwarded; successful layout changes suspend rendering. |
-| 1.2 | Mandatory extended mode fields and image-page capacity used for banked text. Direct-color masks are decoded, but no high-color rasterizer is selected. |
-| 2.0 | LFB address retained in the descriptor when advertised. Protected-mode/LFB rendering is not enabled. |
-| 3.0 | Calls pass to BIOS. No CRTC refresh selection, linear-layout backend or protected entry is installed. |
+| 1.2 | Mandatory extended mode fields and image-page capacity used for banked text. Direct-color masks are decoded and, on a linear console, pack the fixed 16-color attribute table. |
+| 2.0 | LFB address and bit 14 of the mode-set request select the linear map. Rendering uses a private real/protected/real transition, not a DPMI mapping. |
+| 3.0 | LinBytesPerScanLine and the linear RGB masks replace the banked fields when the mode is linear. No CRTC refresh selection is installed. |
 
 The descriptor decoder also accepts other dimensions, padded strides, packed
 8-bit and direct 15/16/24/32-bit formats with validated RGB masks. The console
-selector admits only the implemented planar layout. DOSBox runtime fixtures
-cover VBE 1.2 and later; 1.0/1.1 field handling has unit coverage only.
+selector admits planar 4 bpp and direct 15/16/32 bpp with a linear address.
+DOSBox runtime fixtures cover VBE 1.2 and later; 1.0/1.1 field handling has
+unit coverage only. `test_vesa_lfb.py` installs one BIOS-selected 16 bpp
+linear console under `qa/profiles/vesa-hd.conf` and checks Chinese pixels,
+blank cells and the 1418h byte counter.
 
 ## Evidence
 
@@ -308,18 +321,46 @@ mode restored. VGA memory mapping and ports remain the emulator's own.
 `vesa.c` owns mode discovery, geometry validation, BIOS policy and ownership.
 `vesa.asm` owns interrupt entry, VGA/bank access and the 800x600 planar fast path.
 `vesa_raster.c` owns bank-spanning drawing, viewport placement and integer scaling.
-`vesa_font.c` and `vesa_font.asm` own font loading, XMS/EMS moves and the glyph cache.
+`vesa_lfb.asm` owns direct-color stores. `vesa_font.c` and `vesa_font.asm` own
+font loading, XMS/EMS moves and the glyph cache.
 The classifier supplies character/cell coordinates independently of framebuffer
-stride. Drawing batches changed text cells between bank selections, writes four
-planes directly and makes no per-pixel BIOS calls. `VGA.ASM` is unchanged by this
-implementation. Both rasterizers use 386 instructions and banked access;
-larger planes do not themselves require unreal mode or DPMI.
+stride. Drawing batches changed text cells, writes only those cells, and makes
+no per-pixel BIOS calls. `VGA.ASM` is unchanged by this
+implementation. Planar drawing uses 386 banked access. A missing planar mode
+does not by itself require unreal mode or DPMI; the linear path below is
+separate.
 At 800x600, an instruction-level work-count test observes two bank calls per refresh for
 idle, single-cell edits and full redraws, and no framebuffer writes on idle
 refresh. This bounds work, not elapsed time on a particular graphics card.
 Software cursor blinking adds its own small draws outside that text-refresh test.
 At that size, prompt clear/output and wide strings also share a bank transaction across all
 their glyphs; their work-count tests require just two bank calls per operation.
+
+Direct-color drawing keeps the same dirty cells. Each store, fill, move or XOR
+enters protected mode only for that transfer, then returns to real mode. The
+private GDT has a 16-bit 64 KiB code selector based at the resident segment and
+one 4 GB data selector based at physical 0. CR0.PE is set for the copy and
+cleared before the real-mode far jump back. `SMSW` already reporting PE (V86,
+including EMM386) fails the transfer and the console does not stay installed.
+Interrupts stay off for at most 4096 bytes. The byte counter behind AX=1418h
+counts those stores, not loads. There is no persistent unreal-mode segment
+cache and no DPMI client. A20 is enabled, via INT 15h AX=2401h and port 92h
+bit 1, only when the framebuffer's physical range has bit 20 set.
+
+Attributes use a fixed CGA/EGA 16-color table. The low nibble is foreground
+and the high nibble is background, including bright background in bit 7.
+Channel values are shifted and masked with the BIOS size and position fields
+(VBE 3.0 linear masks when those are present). The cursor XORs every R, G and
+B bit, which is the packed value of palette entry 15. Downloadable VGA font
+planes and INT 10h AH=0Dh readback stay on the planar backend.
+
+Text bytes still come from B800. If a 64 KiB A000 window exists, the driver
+keeps the banked text window when a probe shows it does not alias the linear
+map; 43 and 50 rows need that window. Otherwise it writes B800 directly after
+checking that a marker there does not appear in the framebuffer, and only 25
+rows are offered. If neither check passes, installation restores the previous
+mode. Logical columns stay 80. 132-column modes and VBE text modes 108h–10Ch
+are unchanged and unused.
 
 Other memory-access backends can be added without changing the classifier, but must be
 compared using the same pixels and update regions:
@@ -328,8 +369,9 @@ compared using the same pixels and update regions:
 | --- | --- | --- |
 | 16-bit banked, BIOS interrupt | Real mode or a compatible host | Bank crossings and BIOS calls; use returned granularity/stride |
 | 16-bit banked, `WinFuncPtr` | BIOS advertising a callable entry | Same geometry, reduced call overhead; no per-pixel banking |
-| 32-bit LFB via DPMI | Host providing physical device mapping | Map once where possible; selectors, callbacks and mappings must remain valid for the resident service |
-| Unreal-mode LFB | Optional 386+ unmanaged real-mode environment | Segment-cache setup/maintenance, interrupts and A20; do not take over an existing protected-mode host |
+| Short real/protected/real LFB copy | 386+ real mode, PE clear on entry | One flat data selector per transfer of at most 4096 bytes; V86 cannot enter it |
+| 32-bit LFB via DPMI | Not used | A client selector does not survive as a TSR resource across mode switches |
+| Unreal-mode LFB | Not used | Leaving FS/GS limits raised across timer and BIOS calls was rejected |
 
 DPMI's [physical mapping API](https://www.delorie.com/djgpp/doc/dpmi/api/310800.html)
 returns a linear address for device memory. It does not, by itself, make that
