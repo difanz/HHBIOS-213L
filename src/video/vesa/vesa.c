@@ -16,6 +16,12 @@ int DecodeVbeModeInfo(struct VbeSurface* output, const u8* mode_info,
   u16 bytes_per_pixel;
   u16 channel;
   u16 previous_channel;
+  u16 pitch;
+  u16 win_size;
+  u16 win_gran;
+  int lfb;
+  int have_window;
+  const u8* masks = mode_info;
   /* VBE <1.2 may omit everything after BytesPerScanLine. Never infer
    * geometry from a vendor mode number or use VGA ports on non-VGA modes. */
   if ((attributes & 0x19) != 0x19 || (version < 0x102 && !(attributes & 2))) {
@@ -24,20 +30,22 @@ int DecodeVbeModeInfo(struct VbeSurface* output, const u8* mode_info,
   if (!width || !height) {
     return 0;
   }
+  lfb = version >= 0x200 && (attributes & 128);
   if (mode_info[27] == FORMAT_PLANAR4) {
     if (mode_info[24] != 4 || mode_info[25] != 4) {
       return 0;
     }
     minimum_pitch = width / 8 + (width % 8 != 0);
   } else {
-    if (mode_info[24] != 1 || (mode_info[27] != 4 && mode_info[27] != 6)) {
+    if (mode_info[24] != 1 ||
+        (mode_info[27] != FORMAT_PACKED8 && mode_info[27] != FORMAT_DIRECT)) {
       return 0;
     }
-    if (mode_info[27] == 4 && mode_info[25] != 8) {
+    if (mode_info[27] == FORMAT_PACKED8 && mode_info[25] != 8) {
       return 0;
     }
-    if (mode_info[27] == 6 && mode_info[25] != 15 && mode_info[25] != 16 &&
-        mode_info[25] != 24 && mode_info[25] != 32) {
+    if (mode_info[27] == FORMAT_DIRECT && mode_info[25] != 15 &&
+        mode_info[25] != 16 && mode_info[25] != 24 && mode_info[25] != 32) {
       return 0;
     }
     bytes_per_pixel = (mode_info[25] + 7) / 8;
@@ -45,48 +53,61 @@ int DecodeVbeModeInfo(struct VbeSurface* output, const u8* mode_info,
       return 0;
     }
     minimum_pitch = width * bytes_per_pixel;
-    if (mode_info[27] == 6) {
+    if (mode_info[27] == FORMAT_DIRECT) {
       if (version < 0x102) {
         return 0;
       }
-      for (channel = 31; channel < 37; channel += 2) {
-        if (!mode_info[channel] || mode_info[channel] > 8 ||
-            mode_info[channel + 1] >= mode_info[25] ||
-            mode_info[channel] + mode_info[channel + 1] > mode_info[25]) {
+      /* VBE 3 may publish a different mask layout for the linear map. */
+      masks = mode_info + 31;
+      if (version >= 0x300 && lfb && mode_info[0x36]) {
+        masks = mode_info + 0x36;
+      }
+      for (channel = 0; channel < 6; channel += 2) {
+        if (!masks[channel] || masks[channel] > 8 ||
+            masks[channel + 1] >= mode_info[25] ||
+            masks[channel] + masks[channel + 1] > mode_info[25]) {
           return 0;
         }
-        for (previous_channel = 31; previous_channel < channel;
+        for (previous_channel = 0; previous_channel < channel;
              previous_channel += 2) {
-          if (mode_info[channel + 1] < mode_info[previous_channel + 1] +
-                                           mode_info[previous_channel] &&
-              mode_info[previous_channel + 1] <
-                  mode_info[channel + 1] + mode_info[channel]) {
+          if (masks[channel + 1] <
+                  masks[previous_channel + 1] + masks[previous_channel] &&
+              masks[previous_channel + 1] <
+                  masks[channel + 1] + masks[channel]) {
             return 0;
           }
         }
       }
     }
   }
-  if (ReadLittleEndianWord(mode_info + 16) < minimum_pitch ||
-      !ReadLittleEndianWord(mode_info + 6) ||
-      ReadLittleEndianWord(mode_info + 6) > 64 ||
-      !ReadLittleEndianWord(mode_info + 4) ||
-      ReadLittleEndianWord(mode_info + 4) >
-          ReadLittleEndianWord(mode_info + 6)) {
+  pitch = ReadLittleEndianWord(mode_info + 16);
+  if (version >= 0x300 && lfb && ReadLittleEndianWord(mode_info + 0x32)) {
+    pitch = ReadLittleEndianWord(mode_info + 0x32);
+  }
+  win_size = ReadLittleEndianWord(mode_info + 6);
+  win_gran = ReadLittleEndianWord(mode_info + 4);
+  if (pitch < minimum_pitch) {
     return 0;
   }
   window = (mode_info[2] & 6) == 6 ? 0 : ((mode_info[3] & 6) == 6 ? 1 : 2);
-  if (window == 2 || !ReadLittleEndianWord(mode_info + 8 + 2 * window)) {
+  have_window = window < 2 && ReadLittleEndianWord(mode_info + 8 + 2 * window);
+  if (have_window) {
+    if (!win_size || win_size > 64 || !win_gran || win_gran > win_size) {
+      return 0;
+    }
+  } else if (!lfb || win_size > 64 || (win_size && win_gran > win_size)) {
+    /* A missing window is acceptable only when the linear map is advertised. */
     return 0;
   }
-  output->width = ReadLittleEndianWord(mode_info + 18);
-  output->height = ReadLittleEndianWord(mode_info + 20);
-  output->pitch = ReadLittleEndianWord(mode_info + 16);
-  output->segment = ReadLittleEndianWord(mode_info + 8 + 2 * window);
-  output->window_kb = ReadLittleEndianWord(mode_info + 6);
-  output->granularity_kb = ReadLittleEndianWord(mode_info + 4);
+  output->width = width;
+  output->height = height;
+  output->pitch = pitch;
+  output->segment =
+      have_window ? ReadLittleEndianWord(mode_info + 8 + 2 * window) : 0;
+  output->window_kb = win_size;
+  output->granularity_kb = win_gran;
   output->mode = mode;
-  output->window = (u8)window;
+  output->window = have_window ? (u8)window : 2;
   output->format = mode_info[27];
   output->bpp = mode_info[25];
   output->planes = mode_info[24];
@@ -94,45 +115,70 @@ int DecodeVbeModeInfo(struct VbeSurface* output, const u8* mode_info,
       0;
   output->blue_size = output->blue_pos = 0;
   output->physical = 0;
-  if (mode_info[27] == 6) {
-    output->red_size = mode_info[31];
-    output->red_pos = mode_info[32];
-    output->green_size = mode_info[33];
-    output->green_pos = mode_info[34];
-    output->blue_size = mode_info[35];
-    output->blue_pos = mode_info[36];
+  if (mode_info[27] == FORMAT_DIRECT) {
+    masks = mode_info + 31;
+    if (version >= 0x300 && lfb && mode_info[0x36]) {
+      masks = mode_info + 0x36;
+    }
+    output->red_size = masks[0];
+    output->red_pos = masks[1];
+    output->green_size = masks[2];
+    output->green_pos = masks[3];
+    output->blue_size = masks[4];
+    output->blue_pos = masks[5];
   }
-  if (version >= 0x200 && (attributes & 128)) {
+  if (lfb) {
     output->physical = ReadLittleEndianWord(mode_info + 40) |
                        ((u32)ReadLittleEndianWord(mode_info + 42) << 16);
   }
   return 1;
 }
 
+static int PlanarConsole(const struct VbeSurface* surface, const u8* mode_info) {
+  /* The banked rasterizer admits 64 KiB VGA windows with integral bank steps. */
+  return !(ReadLittleEndianWord(mode_info) & 0x60) && surface->width >= 800 &&
+         surface->height >= 600 && surface->width <= 4096 &&
+         surface->height <= 2160 && surface->pitch && surface->pitch <= 512 &&
+         !(surface->pitch & 1) && surface->format == FORMAT_PLANAR4 &&
+         surface->window < 2 && surface->segment == 0xa000 &&
+         surface->window_kb == 64 && surface->granularity_kb &&
+         surface->granularity_kb <= 64 &&
+         !(64 % surface->granularity_kb);
+}
+
+static int LinearConsole(const struct VbeSurface* surface) {
+  u16 pixel_bytes = surface->bpp == 32 ? 4 : 2;
+  /* 24 bpp stays out of scope: a 3-byte pixel makes odd pitches and
+   * unaligned scanlines expensive for a cell writer. 8-bit packed is decoded
+   * but has no console rasterizer. */
+  if (surface->format != FORMAT_DIRECT || !surface->physical) {
+    return 0;
+  }
+  if (surface->bpp != 15 && surface->bpp != 16 && surface->bpp != 32) {
+    return 0;
+  }
+  if (surface->width < 800 || surface->height < 600 || surface->width > 4096 ||
+      surface->height > 2160) {
+    return 0;
+  }
+  if (surface->width > 65535U / pixel_bytes) {
+    return 0;
+  }
+  return surface->pitch >= surface->width * pixel_bytes &&
+         surface->pitch <= 16384 && !(surface->pitch & 1);
+}
+
 int DecodeConsoleModeInfo(struct VbeSurface* output, const u8* mode_info,
                           u16 version, u16 mode) {
+  struct VbeSurface decoded;
   /* Keep the application-visible text grid independent of planar pixels.
-   * The banked rasterizer admits 64 KiB windows with integral bank steps. */
-  if ((ReadLittleEndianWord(mode_info) & 0x60) ||
-      ReadLittleEndianWord(mode_info + 18) < 800 ||
-      ReadLittleEndianWord(mode_info + 20) < 600 ||
-      ReadLittleEndianWord(mode_info + 18) > 4096 ||
-      ReadLittleEndianWord(mode_info + 20) > 2160 ||
-      ReadLittleEndianWord(mode_info + 16) > 512 ||
-      (ReadLittleEndianWord(mode_info + 16) & 1) ||
-      mode_info[27] != FORMAT_PLANAR4 ||
-      ReadLittleEndianWord(mode_info + 6) != 64 ||
-      !ReadLittleEndianWord(mode_info + 4) ||
-      ReadLittleEndianWord(mode_info + 4) > 64 ||
-      64 % ReadLittleEndianWord(mode_info + 4)) {
+   * Direct-color consoles additionally require the VBE 2 linear address. */
+  if (!DecodeVbeModeInfo(&decoded, mode_info, version, mode) ||
+      (!PlanarConsole(&decoded, mode_info) && !LinearConsole(&decoded))) {
     return 0;
   }
-  if (((mode_info[2] & 6) == 6
-           ? ReadLittleEndianWord(mode_info + 8)
-           : ReadLittleEndianWord(mode_info + 10)) != 0xa000) {
-    return 0;
-  }
-  return DecodeVbeModeInfo(output, mode_info, version, mode);
+  *output = decoded;
+  return 1;
 }
 
 #ifndef VESA_HOST
@@ -169,6 +215,7 @@ static u16 vbe_version;
 static struct VbeSurface preferred;
 u32 CALL plane_bytes = 60000UL;
 u8 CALL large_surface;
+u8 CALL linear_color;
 u8 CALL mode_selected;
 u8 CALL banked_text_allowed;
 u8 CALL active;
@@ -377,6 +424,10 @@ static int ActivateConsole(u16 preserve) {
   if (vbe_mode) {
     bios_registers.ax = 0x4f02;
     bios_registers.bx = screen.mode | (preserve ? 0x8000 : 0);
+    /* Bit 14 selects the linear map. Windowed planar modes leave it clear. */
+    if (linear_color) {
+      bios_registers.bx |= 0x4000;
+    }
   } else {
     bios_registers.ax = preserve ? 0x92 : 0x12;
   }
@@ -387,15 +438,22 @@ static int ActivateConsole(u16 preserve) {
   native_mode = 0xff;
   hardware_mode = ReadBdaByte(0x49);
   /* Start at graphics bank zero. The aperture probe isolates B800 text
-   * from every bank occupied by the visible plane. */
-  ClearBytes(&bios_registers, sizeof(bios_registers));
-  bios_registers.ax = 0x4f05;
-  bios_registers.bx = screen.window;
-  bios(&bios_registers);
-  if (bios_registers.ax != 0x004f) {
-    return 0;
+   * from every bank occupied by the visible plane. An LFB-only mode has
+   * no window; its text probe uses B800 directly. */
+  if (screen.window < 2) {
+    ClearBytes(&bios_registers, sizeof(bios_registers));
+    bios_registers.ax = 0x4f05;
+    bios_registers.bx = screen.window;
+    bios(&bios_registers);
+    if (bios_registers.ax != 0x004f && !linear_color) {
+      return 0;
+    }
   }
   display_pitch = screen.pitch;
+  /* Enable A20 before the alias scan reads the linear map. */
+  if (linear_color) {
+    linear_prepare();
+  }
   if (!aperture()) {
     return 0;
   }
@@ -434,8 +492,18 @@ static int ActivateConsole(u16 preserve) {
   }
   UpdateKeyboardState();
   invalidate();
-  RepaintConsole();
+  /* The first install still has resident_bytes == 0 and is using the text
+   * shadow as its stack. Paint only after that handoff. */
+  if (resident_bytes) {
+    RepaintConsole();
+  }
   return 1;
+}
+
+void CALL install_paint(void) {
+  if (active) {
+    RepaintConsole();
+  }
 }
 
 static void SetTextGeometry(u16 rows, u16 height) {
@@ -454,20 +522,37 @@ static void SetTextGeometry(u16 rows, u16 height) {
       large_surface
           ? (screen.height - raster_height * (rows + 1) * pixel_scale) / 2
           : 0;
-  bank_step = 64 / screen.granularity_kb;
+  bank_step = screen.granularity_kb && !(64 % screen.granularity_kb)
+                  ? (u16)(64 / screen.granularity_kb)
+                  : 1;
   text_bank = (u16)((plane_bytes + 65535UL) >> 16) * bank_step;
 }
 
 static int IsSavedSurfaceValid(const struct VbeSurface* saved, u16 rows) {
+  if (!font_choose(saved->width, saved->height, rows, 0)) {
+    return 0;
+  }
+  if (LinearConsole(saved)) {
+    return 1;
+  }
   return saved->width >= 800 && saved->width <= 4096 && saved->height >= 600 &&
-         saved->height <= 2160 &&
-         font_choose(saved->width, saved->height, rows, 0) &&
-         saved->pitch >= (saved->width + 7) / 8 && saved->pitch <= 512 &&
-         !(saved->pitch & 1) && saved->segment == 0xa000 &&
+         saved->height <= 2160 && saved->pitch >= (saved->width + 7) / 8 &&
+         saved->pitch <= 512 && !(saved->pitch & 1) && saved->segment == 0xa000 &&
          saved->window_kb == 64 && saved->granularity_kb &&
          saved->granularity_kb <= 64 && !(64 % saved->granularity_kb) &&
          saved->window < 2 && saved->format == FORMAT_PLANAR4 &&
          saved->bpp == 4 && saved->planes == 4;
+}
+
+static void UseSurface(const struct VbeSurface* saved) {
+  screen = *saved;
+  linear_color = (u8)LinearConsole(saved);
+}
+
+static u8 WindowCanBank(const struct VbeSurface* saved) {
+  return saved->window < 2 && saved->segment == 0xa000 &&
+         saved->window_kb == 64 && saved->granularity_kb &&
+         saved->granularity_kb <= 64 && !(64 % saved->granularity_kb);
 }
 
 static u8 ReadPortByte(u16 port);
@@ -512,6 +597,9 @@ static int RestoreSurface(void) {
   ClearBytes(&bios_registers, sizeof(bios_registers));
   bios_registers.ax = 0x4f02;
   bios_registers.bx = screen.mode | 0x8000;
+  if (linear_color) {
+    bios_registers.bx |= 0x4000;
+  }
   bios(&bios_registers);
   for (i = 0; i < 30; ++i) {
     WriteBdaByte(0x49 + i, bda[i]);
@@ -585,11 +673,11 @@ static int SetTextRows(u16 rows, u16 height, u16 preserve) {
     }
     return 0;
   }
-  screen = candidate;
+  UseSurface(&candidate);
   SetTextGeometry(rows, height);
   reprobe();
   if (!ActivateConsole(1)) {
-    screen = previous;
+    UseSurface(&previous);
     SetTextGeometry(old_rows, old_height);
     reprobe();
     if (!ActivateConsole(1)) {
@@ -637,6 +725,9 @@ u16 CALL initialize(void) {
   u16 number;
   u16 previous_mode;
   u16 font_missing = 0;
+  struct VbeSurface best_linear;
+  u32 best_score = 0xffffffffUL;
+  u8 have_linear = 0;
   if (keyboard_segment) {
     prompt_attr = *PTR(u8, keyboard_segment, 0x10a);
   }
@@ -658,8 +749,11 @@ u16 CALL initialize(void) {
   }
   modes_off = ReadLittleEndianWord(controller + 14);
   modes_seg = ReadLittleEndianWord(controller + 16);
-  /* An explicit /M selects one mode. Otherwise try 102h and a bounded
-   * advertised list, without wandering through a broken ROM. */
+  /* An explicit /M selects one mode. Otherwise prefer a planar mode,
+   * trying 102h before the advertised list. Direct-color linear modes are
+   * the fallback when the BIOS has no planar console mode; 16 bpp ranks
+   * ahead of 15 bpp and 32 bpp, then the smaller surface. */
+  linear_color = 0;
   for (n = 0; n < 257; ++n) {
     if (!n) {
       number = requested_mode;
@@ -685,39 +779,73 @@ u16 CALL initialize(void) {
     bios(&bios_registers);
     if (bios_registers.ax == 0x004f &&
         DecodeConsoleModeInfo(&screen, mode_info, version, number)) {
-      banked_text_allowed =
-          (u8)(version >= 0x102 && mode_info[29] > 0 &&
-               (mode_info[2 + screen.window] & 1) &&
-               !(64 % screen.granularity_kb));
-      if (font_open()) {
-        vbe_mode = 1;
-        break;
+      if (screen.format == FORMAT_PLANAR4) {
+        banked_text_allowed =
+            (u8)(version >= 0x102 && mode_info[29] > 0 && screen.window < 2 &&
+                 (mode_info[2 + screen.window] & 1) && WindowCanBank(&screen));
+        if (font_open()) {
+          vbe_mode = 1;
+          linear_color = 0;
+          break;
+        }
+        font_missing = 1;
+      } else if (mode_selected) {
+        banked_text_allowed = WindowCanBank(&screen);
+        linear_color = 1;
+        if (font_open()) {
+          vbe_mode = 1;
+          break;
+        }
+        font_missing = 1;
+        linear_color = 0;
+      } else {
+        /* 16 bpp, then 15, then 32; smaller area wins inside a depth. */
+        u32 score = MultiplyWide(screen.width, screen.height);
+        if (screen.bpp == 15) {
+          score += 100000000UL;
+        } else if (screen.bpp == 32) {
+          score += 200000000UL;
+        }
+        if (!have_linear || score < best_score) {
+          best_linear = screen;
+          best_score = score;
+          have_linear = 1;
+        }
       }
-      font_missing = 1;
     }
+  }
+  if (!vbe_mode && have_linear) {
+    UseSurface(&best_linear);
+    banked_text_allowed = WindowCanBank(&screen);
+    if (!font_open()) {
+      return 4;
+    }
+    vbe_mode = 1;
   }
   if (!vbe_mode) {
     return font_missing ? 4 : 1;
   }
   preferred = screen;
+  banked_text = linear_color ? 0 : banked_text_allowed;
   scan_lines = requested_rows == 43 ? 350 : 400;
   SetTextGeometry(requested_rows, requested_rows == 25 ? 16 : 8);
   if (requested_rows > 25) {
     cursor_shape = 0x0607;
   }
-  if (large_surface && !banked_text_allowed) {
+  if (large_surface && !banked_text_allowed && !linear_color) {
     return 1;
   }
-  bank_step = 64 / screen.granularity_kb;
-  text_bank = (u16)((plane_bytes + 65535UL) >> 16) * bank_step;
   /* Put all eight logical text pages in spare VRAM where available. This
-   * also avoids page 1..7 aliasing visible pixels on 64 KiB VGA mappings. */
-  banked_text = banked_text_allowed;
+   * also avoids page 1..7 aliasing visible pixels on 64 KiB VGA mappings.
+   * Linear modes start without that bank; the aperture probe may claim it. */
   page_count = banked_text ? 32768U / page_bytes : 1;
   /* On a 64 KiB aliasing aperture, reserve B800's first 4 KiB and place
    * scanout across a line-aligned wrap. The CPU start must be paragraph
    * aligned too. Geometry is kept out of the character classifier. */
-  if (!banked_text) {
+  if (linear_color) {
+    display_start = 0;
+    split_line = 0;
+  } else if (!banked_text) {
     n = (screen.pitch * screen.height - 0x8000U + screen.pitch - 1) /
         screen.pitch;
     while ((n * screen.pitch) & 15) {
@@ -987,7 +1115,7 @@ static void TransferVideoState(void) {
           UpdateKeyboardState();
           return;
         }
-        screen = saved;
+        UseSurface(&saved);
         SetTextGeometry(record[16], record[17]);
         text_bank = record[48] | ((u16)record[49] << 8);
         scan_lines = record[18] | ((u16)record[19] << 8);
@@ -1005,6 +1133,9 @@ static void TransferVideoState(void) {
           active = 0;
           request.ax = 0x014f;
         } else {
+          if (linear_color) {
+            linear_prepare();
+          }
           WriteBdaByte(0x49, logical_mode);
           WriteBdaByte(0x84, last_row);
           WriteBdaWord(0x85, logical_height);
@@ -1333,12 +1464,24 @@ u16 CALL dispatch(void) {
     request.di = (u16)(plane_bytes >> 16);
     return 1;
   }
+  if (function == 0x14 && subfunction == 24) {
+    /* DX:AX is the bytes written to the linear map since the previous reset.
+     * CX=1 clears the counter after reporting it. Planar draws leave it zero. */
+    request.ax = (u16)lfb_bytes;
+    request.dx = (u16)(lfb_bytes >> 16);
+    request.bx = linear_color;
+    if (request.cx == 1) {
+      lfb_bytes = 0;
+    }
+    return 1;
+  }
   if (function == 0x14 && (subfunction == 18 || subfunction == 20)) {
     u32 offset = request.si;
     if (subfunction == 20) {
       offset |= (u32)request.dx << 16;
     }
-    if (!active || request.bx > 3 || offset > plane_bytes ||
+    if (!active || (linear_color ? request.bx != 0 : request.bx > 3) ||
+        offset > plane_bytes ||
         request.cx > plane_bytes - offset || request.di > 65535U - request.cx) {
       request.ax = 1;
     } else if (!text_ready()) {

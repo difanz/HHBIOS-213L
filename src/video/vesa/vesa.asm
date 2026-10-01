@@ -10,7 +10,7 @@ public start
 public int10_handler, int8_handler, int2f_handler, old10, old8, stack_bottom, stack_top
 public image_end, resident_end, S_UMB, umb_segment, resident_paragraphs
 public font_checking
-extrn initialize:near, dispatch:near, tick:near
+extrn initialize:near, install_paint:near, dispatch:near, tick:near
 extrn request:byte, screen:byte, resident_segment:word, keyboard_segment:word
 extrn framebuffer:word, display_pitch:word, active_page:word
 extrn resident_bytes:word
@@ -18,6 +18,8 @@ extrn display_start:word, split_line:word
 extrn text_bank:word, banked_text_allowed:byte
 extrn requested_mode:word, requested_rows:word
 extrn plane_bytes:dword, bank_step:word, large_surface:byte
+extrn linear_color:byte
+extrn linear_bind_text:near, linear_use_bank:near, linear_text_isolated:near
 extrn mode_selected:byte
 extrn text_rows:word, text_cells:word, page_bytes:word, last_row:byte
 extrn raster_cell:near, raster_stencil:near
@@ -438,6 +440,8 @@ reprobe endp
 aperture proc near
     save_regs
     mov cs:aperture_result,1
+    cmp cs:linear_color,0
+    jne aperture_linear
     cmp cs:banked_text,0
     jne aperture_banked
     mov dx,3ceh
@@ -555,6 +559,41 @@ aperture_known_bank:
 aperture_failed:
     mov cs:aperture_result,0
     jmp aperture_done
+; Direct-color modes draw through the linear map. Keep B800 only when it is
+; real text RAM that does not alias that map. A bank probe that merely misses
+; the LFB is not enough.
+aperture_linear:
+    cmp cs:banked_text_allowed,0
+    je aperture_linear_direct
+    call probe_text_bank
+    jc aperture_linear_direct
+    call linear_text_isolated
+    or ax,ax
+    jz aperture_failed
+    call linear_use_bank
+    or ax,ax
+    jz aperture_failed
+    mov dx,cs:text_bank
+    call select_bank
+    jc aperture_linear_unbind
+    mov dx,3ceh
+    mov ah,cs:text_map
+    mov al,6
+    out dx,ax
+    mov ax,0b800h
+    mov es,ax
+    mov byte ptr es:[0],55h
+    cmp byte ptr es:[0],55h
+    jne aperture_linear_unbind
+    mov cs:aperture_alias,0
+    jmp aperture_done
+aperture_linear_unbind:
+    mov cs:banked_text,0
+aperture_linear_direct:
+    call linear_bind_text
+    or ax,ax
+    jnz aperture_done
+    jmp aperture_failed
 aperture endp
 
 select_bank proc near
@@ -964,6 +1003,8 @@ font_snapshot endp
 public font_seed
 font_seed proc near
     save_regs
+    cmp cs:linear_color,0
+    jne font_seed_done
     cmp cs:banked_text,0
     je font_seed_done
     cli
@@ -1417,6 +1458,10 @@ video_begin proc near
     jne video_nested
     push cs
     pop ds
+    cmp cs:linear_color,0
+    je video_planar_begin
+    jmp video_linear
+video_planar_begin:
     mov dx,3ceh
     in al,dx
     mov gc_index,al
@@ -1483,6 +1528,13 @@ video_direct:
     jmp short video_ready
 video_nested:
     inc cs:video_depth
+    jmp short video_ready
+video_linear:
+    cmp cs:banked_text,0
+    je video_linear_depth
+    call snapshot_text
+video_linear_depth:
+    mov cs:video_depth,1
 video_ready:
     load_regs
     clc
@@ -1510,6 +1562,10 @@ video_end proc near
 video_outer_end:
     push cs
     pop ds
+    cmp cs:linear_color,0
+    je video_end_vga
+    jmp video_copy_pending
+video_end_vga:
     cmp cs:banked_text,0
     je video_restore
     mov dx,cs:text_bank
@@ -1537,6 +1593,7 @@ video_restore_gc:
     out dx,ax
     mov al,seq_index
     out dx,al
+video_copy_pending:
     ; S_XR can repair frame aliases in the snapshot. Write those repairs only
     ; after the outer drawing batch has restored the application's text bank.
     cmp cs:text_copy_pending,0
@@ -1800,7 +1857,10 @@ include HZPOS.INC
 shadow label word
 D_XPQ db 8000 dup (0)
 stack_bottom dw 0a55ah
-db 2048 dup (0)
+; Resident handlers switch here. 1536 covers dispatch plus the VGA
+; palette snapshot in RestoreSurface. Install borrows the shadow until
+; initialize returns, then a disposable INIT label above that code.
+db 1536 dup (0)
 stack_top label word
 
 ; A runtime font/row change may select a different physical surface. Re-probe
@@ -1920,6 +1980,9 @@ install:
     pop ds
     push cs
     pop es
+    ; Font loading nests about 2 KB, and the COM image leaves no room above
+    ; itself. The text shadow is idle until the first paint.
+    mov sp,offset stack_bottom
     mov di,offset bss_begin
     mov cx,offset resident_end
     sub cx,di
@@ -2113,6 +2176,9 @@ options_done:
     mov keyboard_segment,bp
     mov busy,1
     call initialize
+    ; initialize() returned, so its INIT code is disposable stack. Painting
+    ; and the later DOS calls must not stay on the text shadow.
+    mov sp,offset install_stack_top
     cmp ax,4
     je no_font20
     or ax,ax
@@ -2123,6 +2189,8 @@ options_done:
     mov ax,offset image_end
 resident_size:
     mov resident_bytes,ax
+    call install_paint
+    mov ax,resident_bytes
     add ax,15
     mov cl,4
     shr ax,cl
@@ -2273,14 +2341,19 @@ umb_segment dw 0
 resident_paragraphs dw 0
 force_low db 0
 msg_loaded db 'A HHBIOS display driver is already installed.',13,10,'$'
-msg_cpu db 'VESA requires a 386 or newer CPU. Use VGA on older machines.',13,10,'$'
+msg_cpu db 'VESA requires a 386.',13,10,'$'
 msg_font db 'Load a HHBIOS font reader before VESA.',13,10,'$'
 msg_font20 db 'Cannot load font file into XMS or EMS 4.0 memory.',13,10,'$'
-msg_vbe db 'VESA needs a supported planar VBE mode and isolated text memory.',13,10,'$'
+msg_vbe db 'No usable VBE mode.',13,10,'$'
 msg_usage db 'VESA [/N] [/M:hex] [/F:file] [/R:25|43|50]',13,10
           db 'Defaults: mode 102, automatic font size, 80x25 text.',13,10
           db '/N keeps the driver in conventional memory.',13,10,'$'
 INIT_TEXT ends
+; Last byte of the image. Install uses it as stack after initialize returns.
+ZZINIT segment byte public 'ZZINIT'
+public install_stack_top
+install_stack_top label byte
+ZZINIT ends
 
 ; This class is ordered after compiler-generated BSS by the linker.
 _BSS segment word public 'BSS'
@@ -2294,5 +2367,5 @@ public text_transfer
 text_transfer db 8192 dup (0)
 image_end label byte
 _SCRATCH ends
-DGROUP group _BSS, _END, _SCRATCH, INIT_TEXT
+DGROUP group _BSS, _END, _SCRATCH, INIT_TEXT, ZZINIT
 end start

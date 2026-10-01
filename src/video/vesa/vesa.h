@@ -23,6 +23,8 @@ typedef unsigned long u32;
 #define MAX_FONT_WIDTH 24
 #define MAX_FONT_HEIGHT 64
 #define FORMAT_PLANAR4 3
+#define FORMAT_PACKED8 4
+#define FORMAT_DIRECT 6
 
 /* An 8086 MUL already yields the full 32-bit address without a CRT helper. */
 #if defined(__WATCOMC__)
@@ -108,6 +110,8 @@ extern u8 CALL hardware_mode;
 extern u8 CALL mouse_native;
 extern u32 CALL plane_bytes;
 extern u8 CALL large_surface;
+extern u8 CALL linear_color;
+extern u32 CALL lfb_bytes;
 extern u16 CALL mapped_block;
 extern u8 CALL banked_text_allowed;
 extern u8 CALL active;
@@ -163,6 +167,7 @@ u16 CALL pixel(u16 x, u16 y, u16 color, u16 writing);
 void CALL read_plane(u16 plane, u16 offset, u16 segment, u16 destination,
                      u16 count);
 u16 CALL initialize(void);
+void CALL install_paint(void);
 u16 CALL dispatch(void);
 void CALL tick(void);
 u16 CALL graphics_bank(u16 block);
@@ -175,6 +180,21 @@ void CALL raster_status_panel(u16 column, u16 width, u16 style, u16 inset);
 u16 CALL raster_pixel(u16 x, u16 y, u16 color, u16 writing);
 void CALL raster_read(u16 plane, u32 offset, u16 segment, u16 destination,
                       u16 count);
+u16 CALL lfb_load(u32 source, u8* destination, u16 bytes);
+void CALL lfb_a20(void);
+void CALL linear_prepare(void);
+u16 CALL linear_use_bank(void);
+u16 CALL linear_bind_text(void);
+u16 CALL linear_text_isolated(void);
+void CALL linear_hline(u16 x, u16 y, u16 width, u16 color);
+void CALL linear_packed(const u8* source, u16 attribute, u16 position,
+                        u16 source_pitch, u16 source_bit);
+void CALL linear_words(const u16* bits, u16 attribute, u16 position);
+void CALL linear_large(const u32* bits, u16 attribute, u16 position);
+u16 CALL linear_scroll(u16 first, u16 last, u16 count, u16 down);
+void CALL linear_cursor(u16 position, u16 lines);
+u16 CALL linear_pixel(u16 x, u16 y, u16 color, u16 writing);
+void CALL linear_read(u32 offset, u16 segment, u16 destination, u16 count);
 void CALL mouse_resume(void);
 void CALL mouse_suspend(void);
 u16 CALL mouse_prepare(u16 repaint);

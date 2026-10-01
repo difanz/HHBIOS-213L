@@ -134,8 +134,30 @@ def test_geometry_and_pixel_format_are_decoded_independently_of_console(layout_l
     assert layout_library.DecodeVbeModeInfo(ctypes.byref(s),buf,0x200,0x321)==1
     assert (s.width,s.height,s.pitch,s.bpp,s.format,s.physical)==(width,height,pitch,bpp,model,0xe0000000)
     if masks: assert (s.red_size,s.red_pos,s.green_size,s.green_pos,s.blue_size,s.blue_pos)==masks
-    # Describing a format must not select a renderer that cannot draw it.
-    assert layout_library.DecodeConsoleModeInfo(ctypes.byref(s),buf,0x200,0x321)==int((width,height,bpp)==(1024,768,4))
+    # Planar 4 bpp and direct 15/16/32 with a linear address are console modes.
+    # 24 bpp, packed 8 bpp and sub-800x600 surfaces stay described-only.
+    linear = model == 6 and bpp in (15, 16, 32) and width >= 800 and height >= 600
+    planar = model == 3 and bpp == 4 and width >= 800 and height >= 600
+    assert layout_library.DecodeConsoleModeInfo(ctypes.byref(s),buf,0x200,0x321)==int(linear or planar)
+
+
+def test_linear_console_needs_a_physical_address_and_honors_vbe3_pitch(layout_library):
+    info = bytearray(256)
+    struct.pack_into('<HBBHHHHIHHHHBBBB', info, 0, 0x9b, 7, 0, 64, 64, 0xa000, 0, 0,
+                     100, 1024, 768, 0x1008, 1, 16, 1, 6)
+    info[31:37] = bytes((5, 11, 6, 5, 5, 0))
+    buf = ctypes.create_string_buffer(bytes(info))
+    surface = Surface()
+    assert layout_library.DecodeVbeModeInfo(ctypes.byref(surface), buf, 0x300, 0x114) == 0
+    struct.pack_into('<H', info, 0x32, 2048)
+    buf = ctypes.create_string_buffer(bytes(info))
+    assert layout_library.DecodeVbeModeInfo(ctypes.byref(surface), buf, 0x300, 0x114) == 1
+    assert surface.pitch == 2048 and surface.physical == 0
+    assert layout_library.DecodeConsoleModeInfo(ctypes.byref(surface), buf, 0x300, 0x114) == 0
+    struct.pack_into('<I', info, 40, 0xe0000000)
+    buf = ctypes.create_string_buffer(bytes(info))
+    assert layout_library.DecodeConsoleModeInfo(ctypes.byref(surface), buf, 0x300, 0x114) == 1
+    assert (surface.pitch, surface.bpp, surface.physical) == (2048, 16, 0xe0000000)
 
 
 @pytest.mark.parametrize('failure',[None,'old-dos',0x5800,0x5802,'link','strategy',0x48])
@@ -199,10 +221,13 @@ class Driver:
 
     def run(self,entry='int10_handler',limit=300000,**registers):
         near=entry not in ('int10_handler','int33_handler','int8_handler')
-        # Small-model near calls require SS=DS. Leave room above the loaded
-        # image for their stack; BIOS callbacks live in a separate segment.
+        # Small-model near calls require SS=DS. The image fills the segment,
+        # so near calls grow down through the text shadow the way install does.
+        # Far handlers keep the caller's foreign stack. BIOS callbacks live
+        # in a separate segment.
         context=dict(CS=0x1000,DS=0x1000,SS=0x1000 if near else 0x8000,
-                     SP=0xfe00,EFLAGS=0x202)
+                     SP=(self.symbols['stack_bottom'] - 2) if near else 0xfe00,
+                     EFLAGS=0x202)
         context.update(registers)
         for name,value in context.items(): self.put(name,value)
         address=(self.get('SS')<<4)+self.get('SP')
@@ -223,7 +248,7 @@ def initialize_with_font(image, bios):
     font.uc = machine.uc
     machine.write('font_selected', b'\1')
     machine.uc.mem_write(0xf0000, b'\xcd\xf2\xcb')
-    machine.run('initialize', limit=3000000, SP=0xfe00)
+    machine.run('initialize', limit=3000000)
     return machine
 
 

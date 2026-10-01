@@ -132,6 +132,27 @@ def test_complete_catalog_keeps_color_modes_and_rejection_reasons(setup_policy):
         (0x109, 2), (0x12f, 4), (0x200, 1), (0x106, 5), (0x242, 0), (0x243, 3)]
 
 
+def test_direct_color_linear_modes_are_listed(setup_policy):
+    m = Machine(vbe_version=0x200)
+    listed = mode_info(1024, 768, bpp=16)
+    listed[16:18] = struct.pack('<H', 1024 * 2)
+    listed[31:37] = bytes((5, 11, 6, 5, 5, 0))
+    struct.pack_into('<I', listed, 40, 0xe0000000)
+    add_mode(setup_policy, m, 0x117, listed)
+    windowless = bytearray(listed)
+    windowless[8:10] = b'\0\0'
+    windowless[2] = 0
+    add_mode(setup_policy, m, 0x118, windowless)
+    odd = bytearray(listed)
+    odd[25] = 24
+    odd[16:18] = struct.pack('<H', 1024 * 3)
+    add_mode(setup_policy, m, 0x119, odd)
+    assert [(x.number, x.width, x.height, x.rows) for x in m.display_modes[:m.display_count]] == [
+        (0x117, 1024, 768, 3), (0x118, 1024, 768, 1)]
+    assert [(mode.number, mode.status) for mode in m.bios_modes[:m.bios_mode_count]] == [
+        (0x117, 0), (0x118, 0), (0x119, 3)]
+
+
 @pytest.mark.parametrize('video,rows', [(0,43),(4,50),(7,60),(3,51),(3,0xffff)])
 def test_unsupported_text_layout_never_reaches_batch(setup_policy,video,rows):
     m,f = capable(); c = Choices(0,0,video,0,1,0x106,rows)

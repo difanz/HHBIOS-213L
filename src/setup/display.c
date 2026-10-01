@@ -122,11 +122,19 @@ void AddDisplayMode(MachineCapabilities* machine, unsigned number,
     RecordBiosMode(machine, number, info, status);
     return;
   }
-  banked = machine->vbe_version >= 0x102 && info[29] &&
-           (info[2 + surface.window] & 1);
-  if (!banked && (width != 800 || height != 600 || surface.pitch != 100)) {
-    RecordBiosMode(machine, number, info, kModeBanking);
-    return;
+  if (surface.format == FORMAT_DIRECT) {
+    /* A linear console does not need spare image pages. 43/50-row text is
+     * offered only when a 64 KiB A000 window can hold the extra pages. */
+    banked = surface.window < 2 && surface.segment == 0xa000 &&
+             surface.window_kb == 64 && surface.granularity_kb &&
+             surface.granularity_kb <= 64 && !(64 % surface.granularity_kb);
+  } else {
+    banked = machine->vbe_version >= 0x102 && info[29] &&
+             (info[2 + surface.window] & 1);
+    if (!banked && (width != 800 || height != 600 || surface.pitch != 100)) {
+      RecordBiosMode(machine, number, info, kModeBanking);
+      return;
+    }
   }
   RecordBiosMode(machine, number, info, kModeUsable);
   if (number == 0x102 || number == 0x104 || number == 0x106) {

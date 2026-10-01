@@ -50,7 +50,12 @@ static void SelectPlane(u16 plane_index) {
 /* One scanline, clipped to the text viewport. Set/reset broadcasts the
  * solid color to all four planes; only partial edge bytes need a latch read. */
 static void StatusLine(u16 x, u16 y, u16 remaining, u16 color) {
-  u32 offset = MultiplyWide(y, display_pitch) + x / 8;
+  u32 offset;
+  if (linear_color) {
+    linear_hline(x, y, remaining, color);
+    return;
+  }
+  offset = MultiplyWide(y, display_pitch) + x / 8;
   if (y >= screen.height) {
     return;
   }
@@ -195,6 +200,10 @@ void CALL raster_packed_cell(const u8* source, u16 attribute, u16 position,
   u16 shift;
   u16 bytes;
   u16 i;
+  if (linear_color) {
+    linear_packed(source, attribute, position, source_pitch, source_bit);
+    return;
+  }
   if ((position & 255) >= TEXT_COLS || (position >> 8) > text_rows) {
     return;
   }
@@ -280,6 +289,10 @@ void CALL raster_cell(const u16* bits, u16 attribute, u16 position) {
   u16 x;
   u16 y;
   u16 row;
+  if (linear_color) {
+    linear_words(bits, attribute, position);
+    return;
+  }
   if ((position & 255) >= TEXT_COLS || (position >> 8) > text_rows) {
     return;
   }
@@ -314,6 +327,10 @@ void CALL raster_large_cell(const u32* bits, u16 attribute, u16 position) {
   u8 value;
   u8 FAR* destination;
   u32 offset;
+  if (linear_color) {
+    linear_large(bits, attribute, position);
+    return;
+  }
   if ((position & 255) >= TEXT_COLS || (position >> 8) > text_rows) {
     return;
   }
@@ -469,9 +486,13 @@ u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down) {
   u32 destination;
   u32 source;
   u32 distance = MultiplyWide(count * height, display_pitch);
-  if (width > sizeof(scratch.scroll_row[0]) || !begin_draw()) {
+  if (linear_color) {
+    if (!linear_scroll(first, last, count, down)) {
+      return 0;
+    }
+  } else if (width > sizeof(scratch.scroll_row[0]) || !begin_draw()) {
     return 0;
-  }
+  } else {
   for (row = 0; row < lines; ++row) {
     destination = MultiplyWide(viewport_y + first * height +
                                    (down ? lines - row - 1 : row),
@@ -500,9 +521,10 @@ u16 CALL raster_scroll(u16 first, u16 last, u16 count, u16 down) {
       break;
     }
   }
-  end_draw();
-  if (!active || row != lines) {
-    return 0;
+    end_draw();
+    if (!active || row != lines) {
+      return 0;
+    }
   }
   retained = (last - first + 1 - count) * TEXT_COLS;
   move_cells(PTR(u16, resident_segment, (u16)shadow),
@@ -524,6 +546,10 @@ void CALL raster_cursor(u16 position, u16 lines) {
   u32 offset;
   u32 row_start;
   u8 mask;
+  if (linear_color) {
+    linear_cursor(position, lines);
+    return;
+  }
   if (!begin_draw()) {
     return;
   }
@@ -565,6 +591,9 @@ u16 CALL raster_pixel(u16 x, u16 y, u16 color, u16 writing) {
   u8 mask = 0x80 >> (x & 7), value;
   u8 FAR* framebuffer_byte;
   u32 offset = MultiplyWide(y, display_pitch) + (x >> 3);
+  if (linear_color) {
+    return linear_pixel(x, y, color, writing);
+  }
   if (!begin_draw()) {
     return 0;
   }
@@ -599,6 +628,10 @@ void CALL raster_read(u16 plane_index, u32 offset, u16 segment, u16 destination,
   u16 i;
   u8 FAR* source;
   u8 FAR* out = PTR(u8, segment, destination);
+  if (linear_color) {
+    linear_read(offset, segment, destination, count);
+    return;
+  }
   if (!begin_draw()) {
     return;
   }

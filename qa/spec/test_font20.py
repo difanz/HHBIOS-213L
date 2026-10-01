@@ -18,10 +18,13 @@ class FontMachine:
         raw,self.symbols=image
         self.uc=Uc(UC_ARCH_X86,UC_MODE_16); self.uc.mem_map(0,0x100000)
         self.uc.mem_write(0x10100,raw)
-        self.buffer=(len(raw)+0x10f)&~15
-        # The near buffer follows installation code; leave 1.5 KiB below
-        # the FE00h stack. The XMS callback lives in a separate F000h segment.
-        assert self.buffer+520<0xf800, 'Test buffer must fit below the test stack'
+        # The COM image now ends near the top of the segment. Park the near
+        # output buffer and the call stack in the upper half of the 8000-byte
+        # text shadow; font tests that snapshot text use only the lower 4000.
+        shadow = self.symbols['shadow']
+        self.buffer = shadow + 8000 - 528
+        self.stack = self.buffer - 64
+        assert self.stack >= shadow + 4000, 'font output overlaps the text shadow'
         self.kind,self.failure=kind,failure
         self.data=data if data is not None else (ROOT/'fonts/HH20.FNT').read_bytes()
         self.position=0; self.moves=0; self.closed=0; self.allocated=False
@@ -105,10 +108,10 @@ class FontMachine:
             self.payload[do:do+size]=self.uc.mem_read((so >> 16)*16+(so & 65535),size)
 
     def call(self,name,*args):
-        for n,v in dict(CS=0x1000,DS=0x1000,ES=0x7890,SS=0x1000,SP=0xfe00,EFLAGS=0x202).items(): self.put(n,v)
-        self.uc.mem_write(0x1fe00,struct.pack('<'+'H'*(len(args)+1),0xff00,*args))
+        for n,v in dict(CS=0x1000,DS=0x1000,ES=0x7890,SS=0x1000,SP=self.stack,EFLAGS=0x202).items(): self.put(n,v)
+        self.uc.mem_write(0x10000+self.stack,struct.pack('<'+'H'*(len(args)+1),0xff00,*args))
         self.uc.emu_start(0x10000+self.symbols[name],0x1ff00,count=3000000)
-        assert self.get('IP')==0xff00 and self.get('SP')==0xfe02
+        assert self.get('IP')==0xff00 and self.get('SP')==self.stack+2
         assert self.get('DS')==self.get('SS')==0x1000
         return self.get('AX')
 
