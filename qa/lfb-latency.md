@@ -203,7 +203,7 @@ has to carry them for the linear case.
 | Move | UMB | COM ceiling | Why it stays |
 | --- | ---: | ---: | --- |
 | 32-bit body to extended RAM | 309 | 309 | No host-free owner. EMS-only install has no XMS lock. V86 never runs the body, but the hybrid image still needs it when PE is clear |
-| Glyph arena to XMS/EMS | about 2096, later | about 2096, later | One record already stages in `glyph_buf`. The arena itself is the first buffer to move. See below |
+| Glyph arena to XMS/EMS | 0 | 0 | Hot pin. A hit is a near pointer and issues no manager call. Mapping it into the EMS frame fights the video window. See below |
 | Shadow to extended RAM | 0 | 0 | `text_changed` and `choose_bank_paint` walk it in real mode on every refresh, including V86. 50-row planar needs all 8000 |
 | `text_transfer` to extended RAM | 0 on direct color | 8192 | Already outside the direct-color UMB. Planar paint reads the snapshot while the window covers B800 |
 | Planar scratch aliased onto `text_transfer` | 1296 | 1296 | The snapshot is live for the whole planar paint that also uses the scratch |
@@ -216,9 +216,10 @@ link is `0xFEF7`. That does not move the shadow or the transfer buffer.
 ## VESA.COM requires an EMS manager
 
 VESA is the console for a machine that already has an expanded-memory
-manager. The manager is how the TSR gets a UMB, and it is the store for
-the large buffers that still sit in the COM prefix. It is not a paint
-host. There is still no VCPI client and no DPMI client.
+manager. The manager is how the TSR gets a UMB. The font file already
+lives in XMS or EMS. The glyph arena stays in the prefix, as the next
+section describes. The manager is not a paint host. There is still no
+VCPI client and no DPMI client.
 
 `emm_ready` runs in the install stub, after the font driver is found
 and before `initialize` sets a mode. INT 21h `AX=3567h` must point at a
@@ -251,31 +252,116 @@ and does not set PE, so a large dirty region there still takes the
 short-PE path. The direct-color harness sets `ems=true` in
 `qa/profiles/vesa-hd.conf` for that reason.
 
-### Which buffer moves first
+### Glyph arena stays in the prefix
 
-The install check does not relocate the arena, the shadow, or
-`text_transfer`. Those moves are real-mode copies through a manager
-the font code already talks to. Order:
+The 2096-byte arena is the hot pin, not the cold font. It does not
+move. The link stays `0xFEF7`. Nothing was copied out, so there is no
+size delta.
 
-1. Glyph arena, 2096 bytes. The 28 slot tables stay (260 bytes).
-   `LoadGlyph` already returns a pointer. A hit copies one record into
-   `glyph_buf`, which already holds a 384-byte stage. The bank walker
-   and the 32-bit walker keep that near pointer. If the font payload
-   is in EMS, save and restore the page frame around the copy. If the
-   payload is in XMS, park the arena in EMS pages, because an EMS
-   manager is now required and the page frame is a real-mode address.
-   About 2 KiB leaves the direct-color UMB.
-2. `text_transfer`, 8192 bytes. This is the planar UMB and most of the
-   COM ceiling. The call sites are the text snapshot, font sync, the
-   text save, and the banked-text space fill. Point them at a mapped
-   EMS page after the save/restore helper from step 1 exists.
-3. Shadow, 8000 bytes. `text_changed` and `choose_bank_paint` walk it
-   on every refresh, including the timer hook. Point that compare at
-   an EMS page last.
+`cache` is 2096 bytes. The first 128 bytes (`FONT_MAP_CACHE` of 64
+words) are one page of the record index. The other 1968 bytes hold
+packed glyphs: 28 HH20 records are 1960 bytes, with 8 spare. The slot
+tables sit beside it and stay too: `keys`, `cache_offsets`, and
+`cache_lengths` are 28 words each, `valid` is 28 bytes, and `lookup`
+is 64 bytes (260). `glyph_buf` is a separate 624-byte stage. A 24×64
+record is 384 bytes and is written at `large_glyph`, continuing into
+`doubled_glyph`. Cropped hits expand into `doubled_glyph` and return
+that pointer. Every other hit returns `cache + 128 + offset`.
 
-The bank painter, the interrupt hooks, the 1040-byte stack, and the
-309-byte 32-bit body stay in the prefix. The body runs only while PE
-is clear, which a real EMM manager will not allow.
+A hit does not call the memory manager. The warmed-alphabet checks
+require that: 26 glyphs, then the same 26 again, and the second pass
+adds zero XMS/EMS moves. A one-record bounce on every hit would fail
+those checks. It would also sit on the real-mode side of the 249 ms
+frame. That side is 30 ms today and already includes the hit. A full
+hanzi refresh walks on the order of 2000 half-cells. The 166 ms bit
+walk is the store, not the lookup. Paying a manager call per cell
+does not shrink that walk.
+
+Miss path, both painters. `LoadGlyph` copies one index page into the
+128-byte window when the 64-slot page changes, then copies one raw
+record into `large_glyph`, then `CacheGlyph` compacts it into the
+1968-byte region. `font_draw` calls `LoadGlyph` once per cell. The
+packed path then calls `raster_packed_cell` twice with that same
+pointer (left half, then right half). Sparse banked paint (fewer than
+80 dirty cells, or any refresh while PE is set) and a full linear
+paint share this lookup. They differ only in the store:
+`bank_span` versus the short-PE body.
+
+`bank_span` reads the glyph with `DS:[SI]` in the same loop that calls
+`bank_fill_px` and `set_win`. `set_win` is `WinFuncPtr` or INT 10h
+`AX=4F05h`. `DS` stays the resident segment for the whole span. The
+glyph bytes have to be near pointers before the first window switch
+and have to stay there until the span returns. The short-PE path does
+the same: `paint_span` turns `CS<<4+SI` into the flat source, so the
+bytes are still in the resident image.
+
+### XMS, EMS, and the two apertures
+
+The font file, including HZK and `HH20.FNT`, already lives in extended
+memory. Install prefers XMS (`AH=09h` allocate). EMS is the fallback
+(`AH=43h` allocate pages) after `EMMXXXX0` and a version of at least
+`40h`. Reads and writes go through `TransferFontBytes`:
+
+- XMS `AH=0Bh` moves between the handle and a conventional buffer.
+- EMS `AH=57h` moves between a handle's logical page and a conventional
+  buffer. It does not change the visible page frame.
+
+There is no INT 67h `AH=44h` map in this driver, and no `AH=47h` /
+`AH=48h` save of the frame. The 128-byte index window is a copy, not a
+mapped page. HZK is not paged through the frame.
+
+XMS lock (`AH=0Ch`) can return a linear address. The short-PE painter
+could read that address while PE is clear. A real EMM386 or JEMM
+manager leaves the CPU in V86, `route_mem` takes the bank path, and a
+locked address above 1 MiB is not a near pointer. DOSBox-X `ems=true`
+does not set PE, so the short-PE path still runs there, but the image
+is one painter. Forking the glyph source for that lab would keep the
+conventional bytes for V86 anyway.
+
+The EMS page frame is the other 64 KiB aperture. The VESA window is
+the one `WinFuncPtr` moves, usually at A000, 64 KiB at a time. They
+are not the same object, and they are not guaranteed to be different
+addresses. `FRAME=A000` puts the page frame on the graphics window.
+Mapping a font page there, then letting `set_win` move that window,
+drops the glyph and the pixels into the same hole. Other software
+also owns the frame between paints. A map that is left up across a
+refresh is a loan of that hole, not a private buffer.
+
+`bank_span` already switches one aperture while it reads the glyph.
+An EMS map inside that loop is a second switch nested in the first.
+Save/restore around the map does not make that safe: the glyph pointer
+would have to stay valid across `set_win`, which is the thing that
+can move the same addresses.
+
+### What a later move would have to do
+
+These are the rules if a larger cold cache is ever added. They are not
+a reason to move the 2096-byte pin.
+
+1. Keep the hot records conventional. The pin has to cover the
+   26-glyph alphabet with zero manager calls, which is most of the
+   1968 glyph bytes. A one-record bounce thrashes that set.
+2. Cold bytes stay in the existing XMS handle, or in EMS logical pages
+   reached only with `AH=57h`. Do not park the arena in the page frame
+   just because an EMS manager is required.
+3. Copy into the conventional stage before `raster_packed_cell` or
+   `paint_span`. Do not remap during a glyph, and do not call a map
+   from inside `bank_span`.
+4. If some future path must use `AH=44h`, save the frame, map, copy
+   into the stage, and restore before `set_win`. Never leave the frame
+   pointing at glyph data while the video window is live.
+5. Do not take an XMS lock on the banked path. A lock is only a
+   short-PE address, and V86 never takes that path.
+
+`text_transfer` (8192) is already outside the direct-color UMB. On
+planar 43/50 rows it is in the prefix because the snapshot is read
+while the window covers B800. Pointing that buffer at a mapped EMS
+page has the same aperture collision. `font_text` already moves 4 KiB
+chunks through it with `AH=0Bh` or `AH=57h`. The shadow (8000) is
+walked on every refresh, including the timer hook, so it stays last
+and conventional. The bank painter, the hooks, the 1040-byte stack,
+and the 309-byte 32-bit body stay in the prefix. `/AF` is unchanged:
+the flag defaults off and no accelerator entry is called.
 
 ## VBE/AF stays off unless `/AF` is set
 
