@@ -102,6 +102,8 @@ pass is not a longer store. Bytes stayed 956800, 960000, and 3334400. Idle
 `AX=1418h` stayed 0. Scroll stayed 26 ms on 114h/117h and 24 ms on 245h.
 Blank samples are still a one-period PIT pair on 114h/117h. Spaces remain a
 horizontal fill on the 16-bit path, so that pair is not a painter result.
+Linear scale 2 later joined this packed painter; 245h is 403 ms and 402 ms
+in `qa/lfb-bench.md`.
 
 ## Rejected
 
