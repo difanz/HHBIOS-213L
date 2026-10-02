@@ -344,7 +344,8 @@ mode. The private GDT has a 16-bit 64 KiB code selector based at the resident
 segment, one 4 GB data selector based at physical 0, and a 32-bit 4 GB code
 selector at that same resident base. Copies, fills, and XOR run on the 16-bit
 code selector. The glyph painter far-jumps to the 32-bit selector, expands
-packed rows there, and stores with `REP STOS`. For that painter the flat data
+packed rows there, and stores with `REP STOS`. Linear consoles use that
+packed painter at every pixel scale. Planar scaling still unpacks. For that painter the flat data
 selector is also SS, because `[ebp+disp]` uses SS; the saved real-mode SS is
 restored before registers are popped. CR0.PE is set for the transfer and
 cleared before the real-mode far jump back. `SMSW` already reporting PE (V86,
@@ -356,7 +357,10 @@ framebuffer line of that chunk, split by source row only when the store would
 pass 4096 bytes. Holding PE for a whole frame would leave interrupts off for
 the whole hanzi repaint to save only the leftover per-glyph entries. The byte
 counter behind AX=1418h counts those stores, not loads. There is no persistent
-unreal-mode segment cache, no VCPI client and no DPMI client. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
+unreal-mode segment cache, no VCPI client and no DPMI client. EMM386 does
+not make the switch faster; its useful effect is UMBs for the resident
+image, and its V86 mode is why the linear transfer aborts. Details are in
+`qa/lfb-latency.md`. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
 when the framebuffer's physical range has bit 20 set. Why the other access
 paths were rejected is in `qa/lfb-fastpath.md`. PIT samples for modes 114h,
 117h and 245h are in `qa/lfb-bench.md`.

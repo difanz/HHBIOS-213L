@@ -103,3 +103,20 @@ painter. One ASCII line on 114h/117h latches one period low
 | 114h | 335 and 334 | 298018 and 296812 | 249 and 248 | 956800 |
 | 117h | 335 and 334 | 298214 and 297006 | 249 and 248 | 960000 |
 | 245h | 948 and 947 | 878690 and 943026 | 736 and 790 | 3334400 |
+
+## Packed rows at scale 2
+
+Same harness, after a linear console stopped unpacking scaled glyphs in C.
+Scale 1 was already on the packed painter, so 114h and 117h did not move.
+245h had been a 16-bit unpack plus the per-column loop. Cell pixels dumped
+by `LFBDUMP` at 114h and 245h match the previous painter byte for byte.
+Idle stayed 0. Scroll stayed 24 ms. Bytes stayed 3334400. The two hanzi
+passes now agree; the old 736/790 split was the per-column store. Blank
+bytes are unchanged. The 245h blank sample moved from 104 ms to 118 ms
+with no change to the fill routine; the link shifted that code by 6 bytes.
+
+| Mode | Hanzi before ms | Hanzi after counts | Hanzi after ms | Bytes |
+| --- | ---: | --- | ---: | ---: |
+| 114h | 249 and 248 | 297932 and 296724 | 249 and 248 | 956800 |
+| 117h | 249 and 248 | 298128 and 296918 | 249 and 248 | 960000 |
+| 245h | 736 and 790 | 481320 and 480110 | 403 and 402 | 3334400 |

@@ -410,7 +410,8 @@ static void DrawLargeHalf(const u32* bits, u16 attribute, u16 position,
 }
 
 void CALL font_draw(u16 code, u16 attribute, u16 position, u16 wide) {
-  if (pixel_scale == 1 && wide == 1 &&
+  /* Scale belongs to the linear painter. Planar scale still unpacks. */
+  if (wide == 1 && (pixel_scale == 1 || linear_color) &&
       (code >= 256 || !(font_custom[code] & 1))) {
     u8* pixels = LoadGlyph(code);
     u16 stride = ((loaded_compact ? font_width : font_width * 2) + 7) / 8;

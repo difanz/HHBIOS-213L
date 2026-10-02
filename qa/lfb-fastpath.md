@@ -86,10 +86,12 @@ scale 2 on these fonts. That is one glyph, not the frame. Entering PM once
 for a whole refresh would require the font walker inside the 32-bit blob, or
 CLI across the whole hanzi repaint (249 ms at 114h), to save the leftover
 per-glyph entries. Those entries were about 12 ms after the previous
-batching. A frame of CLI is not worth 12 ms.
+batching. A later probe measured them at 9 ms. A frame of CLI is not
+worth that. The ranked leftovers, the UMB/EXE question, and EMM386 are
+in `qa/lfb-latency.md`.
 
-The image is `0xFED9` (39 bytes under `0xFF00`), 16 bytes smaller than the
-`0xFEE9` 16-bit painter. The resident stack stays 1104 bytes. V86 still
+That link reported `0xFED9`. A rebuild of this tree reports `0xFEE9`
+(23 bytes under `0xFF00`). The resident stack stays 1104 bytes. V86 still
 aborts when `SMSW` shows PE. The painter does not use VCPI, DPMI, or XMS.
 
 Full hanzi on the same harness, two passes, from the 335 ms / 948 ms
@@ -122,8 +124,8 @@ is the 12 ms above. Not implemented.
 
 Adjacent hanzi as one transfer. Neighboring cells are different glyphs, so
 they become one store only after expansion. A row of expanded RGB565 is about
-36 KB, and one scanline at 800×600×16 is 1600 bytes. The COM has 39 bytes
-free. `text_transfer` (8192) and the shadow (8000) are live. The stack cannot
+36 KB, and one scanline at 800×600×16 is 1600 bytes. The COM link is
+`0xFEE9`, 23 bytes under `0xFF00`. `text_transfer` (8192) and the shadow (8000) are live. The stack cannot
 hold a row during refresh. Run-length `REP STOS` inside the glyph entry is
 the coalescing that fits.
 
