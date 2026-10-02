@@ -120,3 +120,115 @@ with no change to the fill routine; the link shifted that code by 6 bytes.
 | 114h | 249 and 248 | 297932 and 296724 | 249 and 248 | 956800 |
 | 117h | 249 and 248 | 298128 and 296918 | 249 and 248 | 960000 |
 | 245h | 736 and 790 | 481320 and 480110 | 403 and 402 | 3334400 |
+
+## 64 KiB bank window, real mode only
+
+`qa/harness/bankwin.asm` is a separate COM. It is not linked into
+`VESA.COM` (the resident image is 23 bytes under `0xFF00`). It stays in
+real mode: no CR0, no VCPI, no DPMI. The window is the 64 KiB buffer at
+A000. `DX` is the 64 KiB bank (`granularity` 64, so `bank_step` is 1).
+When mode info has a `WinFuncPtr`, the switch is a far call with
+`AX=4F05h`; the other sample is `INT 10h` `AX=4F05h`. Both probes
+returned success on 114h and 117h. Milliseconds are still PIT counts
+divided by 1193, at `cycles=30000`, `core=normal`, `HH20.FNT`. A negative
+latch adds one 65536-count period before the line is printed.
+
+The harness times the paint only. It does not run the console's
+`AX=1500h` classifier. That real-mode walk is about 30 ms on a full
+hanzi frame in `qa/lfb-latency.md` and is the same cost on either
+painter.
+
+DOSBox-X with `qa/profiles/vesa-hd.conf` publishes a writable 64 KiB
+window and a `PhysBasePtr` for both 114h and 117h. 117h is not
+linear-only on this card. Mode 245h is not in the 128-mode list this
+profile returns (`MODES=128`, list ends at `0xFFFF`). There is no 245h
+banked sample. The 245h LFB numbers above are from the earlier linear
+harness.
+
+Glyph order matches the console. A full frame is the 80×25 grid of
+10×23 cells plus the 23-line status band (598 lines, 956800 bytes at
+16 bpp). Sparse is four cells on text row 2 plus that status band.
+One line is text row 10, ASCII, plus status. Scroll moves 552 lines up
+by 23 and clears the vacated row. It does not repaint status. At pitch
+1600 the row is the whole pitch, so the copy is one span in 4 KiB
+pieces. At pitch 2048 the copy is one 1600-byte span per scanline.
+Bytes are the bytes stored, not the bytes read back from the window.
+
+A scanline fill crosses a bank 15 times at pitch 1600 (956800 bytes,
+15 windows). Cell order does not. Pitch 1600 holds 40.96 lines per
+window, so some 23-line rows straddle a 64 KiB edge. The next cell
+starts back in the previous window. Text row 10 therefore switches
+twice per cell (160) plus the status window, 161 switches, not three.
+A full hanzi frame in the same order is 2171 switches. The switch
+itself is cheap: the 114h hanzi pair differs by 516 counts (0.4 ms)
+between `WinFuncPtr` and `INT 10h` `AX=4F05h`, both at 2171 switches
+and 417 ms.
+
+| Sample | 114h far counts | ms | switches | bytes | 117h far counts | ms | switches | bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Full blank | 50652 | 42 | 15 | 956800 | 50602 | 42 | 19 | 956800 |
+| Four cells | 3488 | 2 | 2 | 38640 | 3498 | 2 | 10 | 38640 |
+| One ASCII line | 43968 | 36 | 161 | 73600 | 43766 | 36 | 3 | 73600 |
+| Scroll one row | 91236 | 76 | 251 | 920000 | 94604 | 79 | 800 | 920000 |
+| Full hanzi | 498402 | 417 | 2171 | 956800 | 433522 | 363 | 2705 | 956800 |
+
+114h blank, sparse, line, and hanzi were also run through `INT 10h`
+`AX=4F05h`. Blank stayed 42 ms and 15 switches, sparse 2 ms and 2
+switches, the line 43928 counts (36 ms, 161 switches). Hanzi reads were
+497886 and 432350 counts, the same 417 ms and 2171 switches after the
+missed PIT period. `WinFuncPtr` does not change the result at this
+granularity.
+
+117h blank in the raw latch was `counts=4294952362`. Adding the missed
+period gives 50602. 117h hanzi is one pass. It was not paired, so it is
+not corrected up by a period. 114h hanzi is the paired reading (498402
+and 432866).
+
+LFB numbers in the table below are the published 32-bit painter, not a
+new boot. Blank is the same 16-bit space fill on both paths and is PIT
+noise around 42 ms. The LFB four-cell figure of 55 ms is from before
+that 32-bit painter and is not reused here.
+
+| Sample | LFB 114h | Banked 114h | LFB 117h | Banked 117h |
+| --- | ---: | ---: | ---: | ---: |
+| Four cells | — | 2 ms, 2 switches | — | 2 ms, 10 switches |
+| One ASCII line | 33 ms | 36 ms, 161 switches | 33 ms | 36 ms, 3 switches |
+| Scroll one row | 26 ms | 76 ms, 251 switches | 26 ms | 79 ms, 800 switches |
+| Full hanzi | 249 ms | 417 ms, 2171 switches | 249 ms | 363 ms, 2705 switches |
+
+Sparse dirt sits in one window at pitch 1600 (2 switches, 2 ms) and in
+a handful at pitch 2048 (10 switches, still 2 ms). That is the common
+console case. A full line that straddles a bank is a wash with the
+linear painter (36 ms versus 33 ms). Scroll and a full hanzi frame are
+not. The linear copy is 26 ms; the banked copy is 76 ms at 114h and
+79 ms at 117h, for the same 920000 bytes. Full hanzi is 249 ms linear
+and 417 ms banked at 114h. The extra banked time is the 16-bit bit walk
+and the cell-order stores, not the far call.
+
+A per-scanline read then write at pitch 1600 would ping-pong and land
+near 643 switches. The harness does not do that. It copies the
+contiguous grid in 4 KiB chunks and switches only when the source or
+destination window changes (251). At pitch 2048 the 1600-byte rows are
+not contiguous, so each row is its own span (800 switches). The two
+scroll times still agree, which matches the hanzi pair: a few hundred
+extra far calls are under a millisecond.
+
+## Which painter
+
+Use the linear short-PE painter when install finds PE clear and the
+mode has `PhysBasePtr`. That is the 249 ms frame and the 26 ms scroll.
+
+Use the bank window and `WinFuncPtr` when the console is forced banked,
+or when `SMSW` shows PE (V86: Win95, EMM386, JEMM). There is no
+protected-mode entry on that path. Hybrid linear paint is not available
+there, because the short CR0 session is illegal. The banked frame is
+the one measured above: sparse dirt stays near 2 ms, a straddling line
+near 36 ms, a scroll near 76 ms, a full hanzi frame near 417 ms.
+
+A hybrid is viable only as an optimization, and only when all three
+hold: the mode has a 64 KiB window, it has `PhysBasePtr`, and PE is
+still clear. Keep the banked `WinFuncPtr` path for sparse dirt (no PE,
+2 switches at 114h). For a scroll or a full frame, the linear short-PE
+painter is the faster one (26 ms versus 76 ms, 249 ms versus 417 ms).
+One text line is not worth the switch. Under V86 the hybrid cannot take
+the linear side, so the console stays banked for every sample.

@@ -331,3 +331,34 @@ runtime 4–8 KiB conventional glyph cache (8 KiB can hold this bench;
 4 KiB does not), a slimmer resident image if EXE or OVL packaging can
 shrink what UMB install actually keeps, and algorithmic cuts to the bit
 walk. Not a mode-switch host.
+
+### Banked window, from the real-mode bench
+
+`qa/lfb-bench.md` records a harness that never enters protected mode.
+`WinFuncPtr` (or `INT 10h` `AX=4F05h`) moves a 64 KiB window at A000.
+The painter is not in `VESA.COM`. The link is still `0xFEE9`.
+
+What the samples change about the choice above:
+
+- PE clear at install, and the mode has `PhysBasePtr`: keep the
+  short-PE linear painter. Full hanzi is 249 ms there and 417 ms
+  banked at 114h. Scroll is 26 ms versus 76 ms.
+- Forced banked, or PE already set (V86): `WinFuncPtr` only. Do not
+  enter PE. Hybrid linear paint does not exist in that case. Sparse
+  dirt is the common refresh and is cheap there (2 ms, 2 switches at
+  114h, 10 switches at 117h). A full line is about 36 ms. A scroll is
+  about 76 ms. A full hanzi frame is about 417 ms.
+- Hybrid, only when a 64 KiB window and `PhysBasePtr` both exist and
+  `SMSW` still shows PE clear. Sparse paints stay on `WinFuncPtr` and
+  do not enter PE. A scroll or a full frame may use the short-PE
+  linear painter. One text line is a wash (36 ms banked, 33 ms
+  linear) and stays on whichever path the refresh already chose.
+  This is an optimization on top of the linear default, not a second
+  product. It is unavailable under V86.
+
+`WinFuncPtr` and `INT 10h` `AX=4F05h` differ by 0.4 ms on a 2171-switch
+hanzi frame. Either call is fine. The far pointer is the one to use
+when mode info has it. 117h on this DOSBox-X profile has both the
+window and `PhysBasePtr`. 245h was not in that mode list. The ~30 ms
+classifier is not inside the banked harness times; it would add the
+same amount to a console frame on either painter.

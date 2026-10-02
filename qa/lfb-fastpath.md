@@ -94,6 +94,11 @@ in `qa/lfb-latency.md`.
 That link reported `0xFED9`. A rebuild of this tree reports `0xFEE9`
 (23 bytes under `0xFF00`). The resident stack stays 1104 bytes. V86 still
 aborts when `SMSW` shows PE. The painter does not use VCPI, DPMI, or XMS.
+A real-mode 64 KiB window bench (`qa/harness/bankwin.asm`, numbers in
+`qa/lfb-bench.md`) is the measured alternative for that abort: sparse
+dirt is a few bank switches, and a full frame or a scroll stays slower
+than short-PE linear. The policy sketch is in `qa/lfb-latency.md`.
+Nothing from that harness is in this image.
 
 Full hanzi on the same harness, two passes, from the 335 ms / 948 ms
 painter: 114h 249 ms and 248 ms, 117h 249 ms and 248 ms, 245h 736 ms and
