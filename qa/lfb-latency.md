@@ -171,7 +171,7 @@ the classifier do touch it.
 | slot tables inside BSS | 260 | yes | yes | the same real-mode lookup |
 | glyph scratch inside BSS | 624 | yes | yes | real-mode staging before either painter |
 | planar scratch inside BSS | 1296 | yes | yes | planar draw and scroll, real mode |
-| status bitmaps inside BSS | 1680 | yes | yes | real-mode status line |
+| status line inside BSS | 1680 | yes | yes | real-mode prompt and status cells |
 | `font_custom` inside BSS | 256 | yes | yes | real-mode font check |
 | mouse glyph temps inside BSS | 404 | yes | yes | real-mode cursor |
 | `text_transfer` | 8192 | no | yes | real-mode text snapshot and font bounce |
