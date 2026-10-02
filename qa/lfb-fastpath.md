@@ -1,10 +1,11 @@
 # Direct-color fast path
 
 The console stays a 16-bit real-mode TSR inside `VESA.COM`. It does not load
-VCPI, DPMI, a DOS extender, or a Windows VxD. A Win95 DOS box and EMM386 are
-V86: `SMSW` already shows PE, the linear transfer aborts, and install does
-not keep the console. That is the same failure as the short protected-mode
-copy. VCPI is not a workaround; it conflicts with those V86 hosts.
+VCPI, DPMI, a DOS extender, or a Windows VxD, and it does not require one.
+A Win95 DOS box, EMM386, and JEMM are V86: `SMSW` already shows PE, the
+linear transfer aborts, and install does not keep the console. VCPI and
+DPMI are not product paths around that abort. The host write-up is
+`qa/lfb-latency.md`.
 
 Samples use DOSBox-X at `cycles=30000` with `HH20.FNT`. Counts and the PIT
 period are in `qa/lfb-bench.md`.

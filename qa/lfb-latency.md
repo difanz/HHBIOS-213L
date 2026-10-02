@@ -62,7 +62,8 @@ at 245h moved from 67 ms to 57 ms. The image link stayed `0xFEE9`.
 | Unreal FS | The same 9 ms, and the bit walk grows 66h prefixes again | 0 | interrupts can reload FS | No |
 | Precomputed scale tables, wider RLE, skip blank glyph rows | Noise. `BSR` is already one run. A blank row is already one store. Scale 1 multiplies by 1 | 0 | — | No |
 | EXE or overlays | No paint change. See below | — | — | No |
-| EMM386 / optional VCPI | No paint change, and the switch gets heavier. See below | — | — | No |
+| VCPI paint or install path | Rejected. One VCPI client at a time; a resident console blocks games and extenders. Not a latency win | — | — | No. Out of scope |
+| DPMI dual path, bundled or required | Rejected for the product. Normal DOS does not load a DPMI host, and this TSR must not require or ship CWSDPMI or any other server | — | — | No |
 
 ### 4 KiB and 8 KiB of conventional scratch
 
@@ -135,49 +136,198 @@ Overlays do not shrink the hot path and they are a bad fit for a FreeDOS
 or Win95 DOS box, where the file handle and the DOS busy flag are not ours.
 They do not help latency.
 
-Recommendation: stay a COM. If a glyph cache is built later, allocate 8 KiB
-of conventional memory at runtime. Do not convert to EXE or OVL for UMB
-fit or for paint speed. Do not bake the scratch into the image.
+Recommendation for the image we have: stay a COM. The paragraphs above
+are why an EXE or an OVL is not smaller or faster by itself. A glyph
+cache, if built, is 8 KiB of conventional memory at runtime, not bytes
+baked into the image. Slimmer packaging stays on the latency list only
+where it actually shrinks the resident image UMB install keeps.
 
-## EMM386
+## Hosts that already own protected mode
 
-EMM386 (and the Windows DOS box) runs the CPU in V86: CR0.PE is set, the
-guest is virtual-8086, and a pager owns CR3. The same program usually
-publishes UMBs and, unless started with `NOVCPI`, a VCPI server. The EMS
-page frame is a 64 KiB window in the upper memory area. It is a banked
-view of expanded memory, not a map of `PhysBasePtr`.
+The shipping painter is one path. It runs only when PE is clear: a
+private GDT and a short CR0 session, then back. It does not call VCPI
+or DPMI, and it does not load or require a server. When PE is already
+set (Win95, EMM386, JEMM), install fails the linear console and leaves
+the planar driver. That abort stays. VCPI and DPMI are not product
+paths around it.
 
-The linear path reads `SMSW` and aborts when PE is already set. From V86,
-`LGDT` and a write to CR0 are privileged. EMM386 would fault them and
-would not leave our GDT, our CLI window, or our identity map in place.
-The console does not stay installed. That abort is the honest outcome
-when no VCPI client is implemented.
+### What each host actually is
 
-VCPI, where an EMM386 actually exports it, is how a DOS program is
-supposed to enter protected mode under that host. The client calls
-INT 67h `AX=DE00h` / `DE01h`, receives a server entry, and switches with
-the server's page tables. It is optional in the market and absent in a
-lot of real machines: `NOVCPI`, `NOEMS` builds that still set PE, and a
-Win95 DOS box. Windows is the V86 host there. It does not hand a DOS
-program ring 0, and a VCPI client that worked under EMM386 before Windows
-started is the conflict called out earlier. A path that required VCPI
-would refuse the same machines the current abort refuses, plus any
-EMM386 with VCPI turned off.
+EMM386 and JEMM run the guest in V86. CR0.PE is set, a pager owns CR3,
+and `LGDT` or a write to CR0 from the guest faults. The same driver
+usually publishes UMBs. Unless it was started with `NOVCPI`, it also
+publishes VCPI. The EMS page frame is a 64 KiB window in upper memory.
+It is not a map of `PhysBasePtr` (here `0xE0000000`).
 
-It would also not be a faster switch. One entry today is a private `LGDT`
-and a CR0 write, 9 ms across the whole frame. A VCPI call saves the
-server's CR3, IDT, and registers and returns through the server. That is
-more work per glyph, not less. The ceiling, if every entry were free and
-the 30 ms real-mode side were somehow inside the same session, is under
-40 ms of a 249 ms frame. The 166 ms bit walk does not move. Mapping the
-framebuffer still needs page-table entries for `PhysBasePtr` (here
-`0xE0000000`). The EMS page frame cannot cover that address. EMS remains
-what it already is: an optional font-cache backend, unrelated to pixels.
+A Win95 DOS box is V86 under the Windows VMM, not under EMM386. Windows
+does not hand that box ring 0. A VCPI mode switch there is the conflict
+already called out: it faults, or it is refused. Windows does answer the
+DPMI installation check. DPMI clients run at ring 3 in the host's address
+space. They do not load their own GDT, and they cannot clear PE.
 
-EMM386's real benefit to this program is UMBs, and only for a resident
-image that can install. The planar driver can live in an EMM386 UMB. The
-linear console cannot start while that EMM386 has PE set. HIMEM alone
-does not set PE; it is not the obstacle.
+HIMEM alone does not set PE. It is not why the linear console aborts.
 
-Recommendation: ignore EMM386 when tuning paint speed. Do not add an
-optional VCPI painter. Keep the `SMSW` abort when PE is already set.
+### Detection
+
+`SMSW` bit 0 is the test the painter already uses. PE clear means path A
+is legal. PE set means a raw CR0 switch is not.
+
+Windows enhanced mode is INT 2Fh `AX=1600h`. `AL` below `80h` and not
+zero is a Windows version (`AL=3` for Windows 3.x, `AL=4` for Windows 95
+and 98). `AL=0` or `AL=80h` means that check did not find Windows. This
+is the Win95-hostile test. If it says Windows is running, do not call
+VCPI even when INT 67h answers.
+
+VCPI presence is INT 67h `AX=DE00h`, and only after the INT 67h vector
+points at a real EMS driver (`EMMXXXX0` at offset `0Ah` of that segment).
+A bare INT 67h with no driver is a crash. `AH=0` means a VCPI server
+answered. `NOVCPI` and `NOEMS` builds still leave PE set and fail this
+check. That is an abort, not a prompt to load anything.
+
+DPMI presence is INT 2Fh `AX=1687h`. `AX=0` means a host is already
+there. `ES:DI` is the real-to-protected entry, `SI` is the private-data
+paragraph count, and `BX` bit 0 means 32-bit clients are allowed. INT 2Fh
+`AX=1686h` is the other half: `AX=0` means the caller is already a
+protected-mode client. A resident INT 10h hook on Win95 is still entered
+in V86, so 1686h will say it is not in protected mode at the start of
+the hook.
+
+There is no switch for this today. `/N` only forces the resident image
+to stay in conventional memory. Do not add `/V`, and do not add a DPMI
+switch. Neither server is an install option.
+
+### Path A, the default
+
+PE is clear. The private GDT, the short CR0 session, and the `SMSW`
+abort stay as they are. On that machine the protected-mode entry for a
+full hanzi frame is 9 ms out of 249 ms. VCPI or DPMI would replace those
+9 ms with a host call. That is slower, not faster. The 166 ms bit walk
+does not care which host entered PM.
+
+### VCPI, rejected for the resident console
+
+VCPI is one protected-mode client at a time. EMM386 and JEMM give that
+client `DE01h`'s protected-mode entry, and the client is expected to
+build page tables on top of the server's and to switch back to V86
+before another program does the same. DOS games and extenders (DOS/4GW
+and the same family) are that client. They call VCPI when they start,
+and they keep protected mode until they exit.
+
+VESA.COM is a TSR. Its job is to stay loaded across that program. If the
+console itself remains the VCPI client, the game's `DE01h` / mode switch
+fails or the two sessions share one GDT and one page directory and both
+crash. Allocating VCPI pages for an LFB map and never freeing them
+shrinks the pool the game expected to own. There is no reliable
+"someone else is in protected mode" query. From V86, `SMSW` already
+shows PE whether the foreground program is in V86 or has switched. The
+dangerous moment is a reflected interrupt: the game is the VCPI client,
+the server drops into V86 to run INT 10h or the timer, and the hook
+calls VCPI again.
+
+A brief switch that always returns to V86 before the hook returns is the
+only pattern that does not hold the server across the application's
+life. It is still a poor paint client. The hook runs because an
+application is drawing, which is exactly when that application may
+already be the VCPI client. Nesting a second switch inside the game's
+session is the conflict, not a fallback. Detecting a refused switch and
+skipping the frame (fail soft) is safer than crashing, and it means the
+linear console goes blank for the whole game. Falling back to path A is
+impossible while PE is set: raw CR0 is still illegal. The planar console
+is the soft landing, and it does not need VCPI.
+
+Entering VCPI only at install, then leaving it before the prompt
+returns, does not unlock later paints. The next INT 10h is in V86 again
+and would have to re-enter. The feature people want from path B, a
+linear console that stays up under EMM while other programs run, is the
+long-lived client. That is the shape to reject.
+
+This path also does not speed the hot path on a machine where path A
+already works. The switch saves the server's state and is heavier than
+`LGDT` plus CR0. The 166 ms bit walk does not move. Mapping the
+framebuffer means page-table entries for the physical LFB. The EMS page
+frame cannot cover `0xE0000000`.
+
+VCPI is out of scope for this console. Do not plan a shipping dual path,
+do not call it at install, and do not call it from the paint or timer
+hook. Do not add `/V`. A non-default experiment belongs in a throwaway
+harness, not in VESA.COM. Under EMM386 the linear console still aborts,
+and the planar driver can still sit in the UMB.
+
+### DPMI, not a product path
+
+A DOS user does not load a DPMI host at boot. Shipping a dual path that
+needs one would mean requiring CWSDPMI or another server, or bundling
+one. This program does neither. If `1687h` fails, which is the normal
+DOS box, there is no DPMI client to become.
+
+Win95 does answer `1687h` inside a DOS box. That is a niche host that
+happens to be present, not a second console we plan to ship. The notes
+below are why even that opportunistic case stays off the product.
+
+What DPMI buys is a supported way into the host's protected mode, plus,
+on hosts that implement it, INT 31h `AX=0800h` to map a physical range
+to a linear address. Windows 95 is a DPMI 0.9 host with that call.
+Windows 3.1's DPMI 0.9 generally does not have it. The linear address is
+not `PhysBasePtr`, and it is not valid in V86. The flat selector based
+at physical 0, which the painter uses today, does not see the LFB
+through the Windows page tables. The glyph code would have to write
+through a descriptor whose base is the address `0800h` returned.
+
+A 16-bit DPMI client is the natural shape of this COM. `BX` bit 0 at
+`1687h` says whether a 32-bit client is even offered. The painter's code
+is 32-bit. A 16-bit client can create a 32-bit code selector only when
+that host allows it. Some do. It is a probe, not a promise.
+
+The resident INT 10h hook is the part that does not fit DPMI 0.9.
+
+- The hook is entered in V86. Painting means a real-to-protected switch
+  on that call, then a switch back before the hook returns. DPMI 0.9 has
+  no supported way for a client to terminate-and-stay-resident in
+  protected mode. The usual pattern (switch back to real mode, then
+  INT 21h `AH=31h`) drops the protected-mode client. Every later paint
+  has to enter again through `1687h` or through the raw switch from
+  INT 31h `AX=0306h`, and `0306h` is only valid for a client the host
+  still remembers.
+- The host may call DOS on the way in. The hook often runs while DOS is
+  already busy, because applications write the screen with DOS. A
+  reentrant mode switch there deadlocks.
+- `CLI` is not available to a ring-3 client. The current painter loads
+  the flat selector into SS and does not use a stack, which is safe only
+  because interrupts are off. Under DPMI the host can interrupt, and it
+  will push on SS. That is a fault or a write into the framebuffer. The
+  32-bit blob would need a real protected-mode stack and a normal SS for
+  the whole session. That is a different painter, not a flag on
+  `flat_run`.
+- DPMI 1.0 resident services (`0C00h` / `0C01h`) are not what Win95
+  provides. A selector borrowed from whatever DOS program happens to be
+  in the foreground dies when that program exits. The TSR has to be its
+  own client for the life of the box, which is the lifetime problem
+  above.
+
+DPMI does not make the 249 ms frame shorter. On plain DOS it does not
+exist unless we ship a server, which we will not. On a Win95 box the
+sketch is a different painter, about as slow as today's, plus a host
+switch, and only on a machine that already loaded DPMI. That is a niche
+note, not a dual path. Do not implement it.
+
+### Recommendation
+
+Ship one painter. When PE is clear, use the self-contained short CR0
+session. When PE is set, fail the linear console and keep the planar
+driver. That covers Win95, EMM386, and JEMM. Do not paper over the
+abort.
+
+VCPI is rejected. One client at a time is too poor a fit for a resident
+painter: the TSR would block the game or extender that also needs VCPI,
+and an install-time switch does not keep later paints working.
+
+DPMI is rejected as a product path and deferred with no schedule. Do
+not depend on a DPMI host, do not bundle CWSDPMI or any other server,
+and do not add a Win95 dual path. A DOS box that already has DPMI is a
+niche note, not a console we ship.
+
+Latency work that is still in scope is the 249 ms frame itself: a
+runtime 4–8 KiB conventional glyph cache (8 KiB can hold this bench;
+4 KiB does not), a slimmer resident image if EXE or OVL packaging can
+shrink what UMB install actually keeps, and algorithmic cuts to the bit
+walk. Not a mode-switch host.
