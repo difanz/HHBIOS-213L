@@ -349,7 +349,9 @@ packed painter at every pixel scale. Planar scaling still unpacks. For that pain
 selector is also SS, because `[ebp+disp]` uses SS; the saved real-mode SS is
 restored before registers are popped. CR0.PE is set for the transfer and
 cleared before the real-mode far jump back. `SMSW` already reporting PE (V86,
-including EMM386) fails the transfer and the console does not stay installed.
+including EMM386) does not enter that transfer. A 64 KiB window then paints
+the frame in real mode; with no window the direct-color console does not
+stay installed.
 Interrupts stay off for at most 4096 bytes. There is no STI while PE is set:
 the real-mode IVT is not an IDT. Dirty spaces are one horizontal fill per run,
 still on the 16-bit path. A glyph chunk is one entry covering every
@@ -359,7 +361,9 @@ the whole hanzi repaint to save only the leftover per-glyph entries. The byte
 counter behind AX=1418h counts those stores, not loads. There is no persistent
 unreal-mode segment cache, no VCPI client and no DPMI client. EMM386 does
 not make the switch faster; its useful effect is UMBs for the resident
-image, and its V86 mode is why the linear transfer aborts. Details are in
+image, and its V86 mode is why the linear transfer aborts. Below 80 dirty
+text cells the resident console uses the real-mode window instead, including
+every refresh while PE is set. Details are in
 `qa/lfb-latency.md`. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
 when the framebuffer's physical range has bit 20 set. Why the other access
 paths were rejected is in `qa/lfb-fastpath.md`. PIT samples for modes 114h,

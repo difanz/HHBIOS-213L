@@ -47,7 +47,7 @@ Dumped cells at 114h and 245h match the previous image byte for byte.
 
 245h full hanzi moved from 736/790 ms to 403/402 ms. Bytes stayed
 3334400. 114h and 117h stayed 249/248 ms. Idle stayed 0. One ASCII line
-at 245h moved from 67 ms to 57 ms. The image link stayed `0xFEE9`.
+at 245h moved from 67 ms to 57 ms. The image link at that measurement was `0xFEE9`.
 
 ## Ranked leftovers
 
@@ -83,7 +83,7 @@ strategy, so a later low-memory `AH=48h` does not grow the UMB block.
 Baking 8 KiB into the COM is the opposite: the file cannot pass `0xFF00`,
 and the banked resident image is already 60832 bytes against the 62 KiB
 test cap. The cache lookup itself also does not fit. The link is
-`0xFEE9`, 23 bytes under the COM limit, and the tail segment moves after
+`0xFEF1`, 15 bytes under the COM limit, and the tail segment moves after
 4 more bytes of code.
 
 ### Whole-frame protected mode, unreal mode, classifier
@@ -104,19 +104,26 @@ bytes. It does not allocate the whole file.
 
 | Image | Offset | Bytes | Kept after install |
 | --- | ---: | ---: | --- |
-| Load image (`Memory size`) | `0xFEE9` | 65257 | Only long enough to install. `LOADHIGH` of the file needs a hole this big |
-| LFB resident (`banked_text=0`, `resident_end`) | `0xCD9B` | 52635 | Yes. This is the UMB request for a direct-color console |
-| Banked resident (`image_end`, includes `text_transfer`) | `0xEDA0` | 60832 | Yes, when the 64 KiB text window is kept |
-| `INIT_TEXT` | `0x1149` | 4425 | No. Option parse, VBE probe, font file decode |
+| Load image (`Memory size`) | `0xFEF1` | 65265 | Only long enough to install. `LOADHIGH` of the file needs a hole this big |
+| LFB resident (`banked_text=0`, `resident_end`) | `0xCD55` | 52565 | Yes. This is the UMB request for a direct-color console |
+| Banked resident (`image_end`, includes `text_transfer`) | `0xED60` | 60768 | Yes, when the 64 KiB text window is kept |
+| `INIT_TEXT` | `0x1191` | 4497 | No. Option parse, VBE probe, font file decode |
 | `text_transfer` | `0x2000` | 8192 | No on the LFB path. Yes if `banked_text` is set |
 
+The file on disk is 65009 bytes (`Memory size` minus the `ORG 100h` prefix),
+8 bytes above the previous `0xFEE9` image and 15 bytes under `0xFF00`.
+`resident_end` moved down 70 bytes and `image_end` moved down 64. The
+resident stack is 1040 bytes plus the `0xA55A` marker. The packed-glyph
+arena is still 2176 bytes, with 28 live slots. `large_glyph` and
+`doubled_glyph` are one 624-byte object (two 312-byte halves). A 24×64
+record is 384 bytes and is staged at the start of that object.
+
 What has to stay for a Chinese LFB console: the INT 10h, INT 08h, INT 33h,
-and INT 2Fh hooks; the 8000-byte shadow; the 1104-byte stack; the glyph
-cache (2176 bytes plus its tables); the private GDT and the 32-bit painter;
-the classifier and `font_draw`. `large_glyph` and `doubled_glyph` are 512
-bytes each and still serve planar and custom cells. Init code and, on the
-LFB path, the 8192-byte transfer buffer are already outside the resident
-image. Little else is cold. An EXE does not discover a hidden 20 KiB.
+and INT 2Fh hooks; the 8000-byte shadow; the 1040-byte stack; the glyph
+cache; the private GDT and the 32-bit painter; the real-mode bank painter;
+the classifier and `font_draw`. Init code and, on the LFB path, the
+8192-byte transfer buffer are already outside the resident image. Little
+else is cold. An EXE does not discover a hidden 20 KiB.
 
 An MZ EXE can be larger than 64 KiB and can put install code in another
 segment. The resident hot path would still be one near segment, or every
@@ -144,12 +151,13 @@ where it actually shrinks the resident image UMB install keeps.
 
 ## Hosts that already own protected mode
 
-The shipping painter is one path. It runs only when PE is clear: a
-private GDT and a short CR0 session, then back. It does not call VCPI
-or DPMI, and it does not load or require a server. When PE is already
-set (Win95, EMM386, JEMM), install fails the linear console and leaves
-the planar driver. That abort stays. VCPI and DPMI are not product
-paths around it.
+The shipping painter does not call VCPI or DPMI, and it does not load
+or require a server. When PE is clear, a private GDT and a short CR0
+session are legal. When PE is already set (Win95, EMM386, JEMM), that
+session is not. A mode that still has a 64 KiB window is painted
+through the window. A mode with neither a usable window nor a legal
+linear map fails the direct-color console and leaves the planar
+driver. VCPI and DPMI are not product paths around that.
 
 ### What each host actually is
 
@@ -312,10 +320,12 @@ note, not a dual path. Do not implement it.
 
 ### Recommendation
 
-Ship one painter. When PE is clear, use the self-contained short CR0
-session. When PE is set, fail the linear console and keep the planar
-driver. That covers Win95, EMM386, and JEMM. Do not paper over the
-abort.
+When PE is clear, use the self-contained short CR0 session for a full
+text line or more, and the real-mode window for sparser dirt when that
+window exists. When PE is set, do not enter protected mode. If the mode
+has a 64 KiB window, paint through it. Otherwise fail the linear
+console and keep the planar driver. That covers Win95, EMM386, and
+JEMM. Do not paper over a missing window with VCPI or DPMI.
 
 VCPI is rejected. One client at a time is too poor a fit for a resident
 painter: the TSR would block the game or extender that also needs VCPI,
@@ -332,33 +342,64 @@ runtime 4–8 KiB conventional glyph cache (8 KiB can hold this bench;
 shrink what UMB install actually keeps, and algorithmic cuts to the bit
 walk. Not a mode-switch host.
 
-### Banked window, from the real-mode bench
+### Banked window in the resident console
 
-`qa/lfb-bench.md` records a harness that never enters protected mode.
-`WinFuncPtr` (or `INT 10h` `AX=4F05h`) moves a 64 KiB window at A000.
-The painter is not in `VESA.COM`. The link is still `0xFEE9`.
+`qa/lfb-bench.md` records both the paint-only harness and the resident
+hybrid. The harness never enters protected mode. `WinFuncPtr` (or
+`INT 10h` `AX=4F05h` through the saved vector, never a nested
+`INT 10h`) moves a 64 KiB window at A000. That painter now lives in
+`VESA.COM`, ahead of `resident_end`. The link is `0xFEF1`.
 
-What the samples change about the choice above:
+`bank_cell_limit` is 80 dirty text cells, one full line. Counted on
+the active B800 page against the shadow, with `CS` overrides while
+`DS` is the text page:
 
-- PE clear at install, and the mode has `PhysBasePtr`: keep the
-  short-PE linear painter. Full hanzi is 249 ms there and 417 ms
-  banked at 114h. Scroll is 26 ms versus 76 ms.
-- Forced banked, or PE already set (V86): `WinFuncPtr` only. Do not
-  enter PE. Hybrid linear paint does not exist in that case. Sparse
-  dirt is the common refresh and is cheap there (2 ms, 2 switches at
-  114h, 10 switches at 117h). A full line is about 36 ms. A scroll is
-  about 76 ms. A full hanzi frame is about 417 ms.
-- Hybrid, only when a 64 KiB window and `PhysBasePtr` both exist and
-  `SMSW` still shows PE clear. Sparse paints stay on `WinFuncPtr` and
-  do not enter PE. A scroll or a full frame may use the short-PE
-  linear painter. One text line is a wash (36 ms banked, 33 ms
-  linear) and stays on whichever path the refresh already chose.
-  This is an optimization on top of the linear default, not a second
-  product. It is unavailable under V86.
+- Fewer than 80 dirty cells, and the mode has a usable 64 KiB window:
+  paint through the window. Stay in real mode. Do not set PE.
+- 80 or more dirty cells, `PhysBasePtr` was recorded, and `SMSW` still
+  shows PE clear: the existing short-PE linear painter.
+- Scroll (`INT 10h` `AH=06h`) is not a dirty-cell refresh. It clears
+  the bank choice and uses the linear copy while PE is clear. Under
+  V86 the same copy uses the window.
+- A refresh with no dirty text cells (status or caret only) uses the
+  window when one exists. Zero is below the limit.
+- Window but no `PhysBasePtr`: bank for every refresh.
+- `PhysBasePtr` but no usable window: the linear path only. PE set
+  still refuses it.
+- PE set at install: `have_lfb` is cleared, so the short-PE path is
+  not armed. If a window exists, install binds sticky B800 and does
+  not call `lfb_load`. Rows above 25 still need the linear alias read,
+  so 43 and 50 fail that install. If no window exists, install fails
+  the direct-color console as before.
+
+The limit is the harness wash, not a new sweep. Four cells were about
+2 ms and 2 switches on the paint-only harness; a scroll was 76 ms
+versus 26 ms linear; full hanzi was 417 ms versus 249 ms. A full line
+was 36 ms banked versus 33 ms linear, so 80 stays on the linear side.
+
+Console samples are the whole `AX=1500h` refresh at `cycles=30000`,
+`core=normal`, `HH20.FNT`, not the paint-only harness. A negative PIT
+latch has one 65536-count period added. Idle `AX=1418h` is 0.
+
+| Sample | 114h | 117h | Path |
+| --- | ---: | ---: | --- |
+| Four cells | 24 ms, 38640 bytes | 25 ms, 41840 bytes | bank |
+| One ASCII line | 33 ms, 73600 bytes | 33 ms, 76800 bytes | linear |
+| Scroll one row | 28 ms, 920000 bytes | 28 ms, 920000 bytes | linear |
+| Full hanzi | 252 and 251 ms, 956800 bytes | 252 and 251 ms, 960000 bytes | linear |
+
+114h line and 117h four-cell were one period low in the raw latch
+(39646 and 30118 counts after the add). 117h hanzi's first pass was
+one period low and agrees with the second pass after the add. Blank
+is still the old one-period pair (about 60 ms and about 5 ms) and is
+not a painter result. Line, scroll, and hanzi sit on the published
+linear numbers (33 ms, 26 ms, 249 ms). The extra few milliseconds are
+the dirty-cell scan. The four-cell console time includes that scan
+and the status band; the 2 ms figure remains the paint-only harness.
 
 `WinFuncPtr` and `INT 10h` `AX=4F05h` differ by 0.4 ms on a 2171-switch
-hanzi frame. Either call is fine. The far pointer is the one to use
-when mode info has it. 117h on this DOSBox-X profile has both the
-window and `PhysBasePtr`. 245h was not in that mode list. The ~30 ms
-classifier is not inside the banked harness times; it would add the
-same amount to a console frame on either painter.
+hanzi frame in the harness. The far pointer is the one the resident
+uses when mode info has it. 117h on this DOSBox-X profile has both the
+window and `PhysBasePtr`. 245h was not in that mode list. These V86
+rules were not booted under JEMM or EMM386; they are what `SMSW` and
+`linear_bind_v86` do.

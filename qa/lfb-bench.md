@@ -123,10 +123,11 @@ with no change to the fill routine; the link shifted that code by 6 bytes.
 
 ## 64 KiB bank window, real mode only
 
-`qa/harness/bankwin.asm` is a separate COM. It is not linked into
-`VESA.COM` (the resident image is 23 bytes under `0xFF00`). It stays in
-real mode: no CR0, no VCPI, no DPMI. The window is the 64 KiB buffer at
-A000. `DX` is the 64 KiB bank (`granularity` 64, so `bank_step` is 1).
+`qa/harness/bankwin.asm` is the paint-only probe. The same window
+switch and glyph walk now also live in `VESA.COM` (link `0xFEF1`, 15
+bytes under `0xFF00`). The harness stays in real mode: no CR0, no
+VCPI, no DPMI. The window is the 64 KiB buffer at A000. `DX` is the
+64 KiB bank (`granularity` 64, so `bank_step` is 1).
 When mode info has a `WinFuncPtr`, the switch is a far call with
 `AX=4F05h`; the other sample is `INT 10h` `AX=4F05h`. Both probes
 returned success on 114h and 117h. Milliseconds are still PIT counts
@@ -215,20 +216,25 @@ extra far calls are under a millisecond.
 
 ## Which painter
 
-Use the linear short-PE painter when install finds PE clear and the
-mode has `PhysBasePtr`. That is the 249 ms frame and the 26 ms scroll.
+The resident dispatcher is in `VESA.COM`. `bank_cell_limit` is 80 dirty
+text cells. Details and the console PIT table are in `qa/lfb-latency.md`.
 
-Use the bank window and `WinFuncPtr` when the console is forced banked,
-or when `SMSW` shows PE (V86: Win95, EMM386, JEMM). There is no
-protected-mode entry on that path. Hybrid linear paint is not available
-there, because the short CR0 session is illegal. The banked frame is
-the one measured above: sparse dirt stays near 2 ms, a straddling line
-near 36 ms, a scroll near 76 ms, a full hanzi frame near 417 ms.
+Use the bank window and `WinFuncPtr` when the dirty page is below 80
+cells, when the mode has no `PhysBasePtr`, or when `SMSW` shows PE
+(V86: Win95, EMM386, JEMM). There is no protected-mode entry on that
+path. The paint-only frame measured above is the cost of staying
+there: sparse dirt near 2 ms, a straddling line near 36 ms, a scroll
+near 76 ms, a full hanzi frame near 417 ms.
 
-A hybrid is viable only as an optimization, and only when all three
-hold: the mode has a 64 KiB window, it has `PhysBasePtr`, and PE is
-still clear. Keep the banked `WinFuncPtr` path for sparse dirt (no PE,
-2 switches at 114h). For a scroll or a full frame, the linear short-PE
-painter is the faster one (26 ms versus 76 ms, 249 ms versus 417 ms).
-One text line is not worth the switch. Under V86 the hybrid cannot take
-the linear side, so the console stays banked for every sample.
+Use the linear short-PE painter when PE is clear, the mode has
+`PhysBasePtr`, and the refresh is a full line (80 cells), a scroll, or
+a full frame. That is the 249 ms frame and the 26 ms scroll. One text
+line is the threshold because the harness line was a wash (36 ms
+banked, 33 ms linear). The console re-bench of that choice, including
+the dirty walk, is 24 ms for four cells (bank), 33 ms for one line,
+28 ms for a scroll, and 252/251 ms for full hanzi, on both 114h and
+117h. Idle `AX=1418h` is 0.
+
+Under V86 the hybrid cannot take the linear side, so a mode with a
+window stays banked for every sample. A mode with no window still
+refuses the linear console.

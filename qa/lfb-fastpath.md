@@ -43,7 +43,7 @@ A half-cell at these sizes is well under that cap, so the window is one
 glyph (tens of microseconds), not the frame.
 
 That image was `0xFEE9` bytes (23 bytes under the COM limit). The resident
-stack is 1104 bytes. `RestoreSurface` uses about 1022 of those, and the
+stack is now 1040 bytes. `RestoreSurface` uses about 1022 of those, and the
 timer interrupt chains the previous handler on this stack before it checks
 the busy flag. Do not shrink the stack further without measuring that chain.
 The install banners were shortened by the same budget. The switches are
@@ -91,14 +91,14 @@ batching. A later probe measured them at 9 ms. A frame of CLI is not
 worth that. The ranked leftovers, the UMB/EXE question, and EMM386 are
 in `qa/lfb-latency.md`.
 
-That link reported `0xFED9`. A rebuild of this tree reports `0xFEE9`
-(23 bytes under `0xFF00`). The resident stack stays 1104 bytes. V86 still
-aborts when `SMSW` shows PE. The painter does not use VCPI, DPMI, or XMS.
-A real-mode 64 KiB window bench (`qa/harness/bankwin.asm`, numbers in
-`qa/lfb-bench.md`) is the measured alternative for that abort: sparse
-dirt is a few bank switches, and a full frame or a scroll stays slower
-than short-PE linear. The policy sketch is in `qa/lfb-latency.md`.
-Nothing from that harness is in this image.
+That link reported `0xFED9`. The image is now `0xFEF1` (15 bytes under
+`0xFF00`). The resident stack is 1040 bytes. The painter does not use
+VCPI, DPMI, or XMS. A real-mode 64 KiB window path is in the resident
+image: below 80 dirty cells it paints through `WinFuncPtr` and does not
+enter PE. A full line, a scroll, or a full frame still uses short-PE
+linear when PE is clear. When `SMSW` shows PE and a window exists, every
+refresh stays banked. No window still aborts the linear console. The
+numbers are in `qa/lfb-latency.md`.
 
 Full hanzi on the same harness, two passes, from the 335 ms / 948 ms
 painter: 114h 249 ms and 248 ms, 117h 249 ms and 248 ms, 245h 736 ms and
@@ -133,18 +133,18 @@ is the 12 ms above. Not implemented.
 Adjacent hanzi as one transfer. Neighboring cells are different glyphs, so
 they become one store only after expansion. A row of expanded RGB565 is about
 36 KB, and one scanline at 800×600×16 is 1600 bytes. The COM link is
-`0xFEE9`, 23 bytes under `0xFF00`. `text_transfer` (8192) and the shadow (8000) are live. The stack cannot
+`0xFEF1`, 15 bytes under `0xFF00`. `text_transfer` (8192) and the shadow (8000) are live. The stack cannot
 hold a row during refresh. Run-length `REP STOS` inside the glyph entry is
 the coalescing that fits.
 
 CPU split. Install already refuses an 8086 or 286 (`requires a 386`). There
 is no second linear painter for a weaker CPU.
 
-Banked VBE window (`AX=4F05h`). A bank switch per 64 KB window adds calls on
-top of the copies. It is not faster than the linear map, and it is not
-required for cards that publish `PhysBasePtr`. Linear remains preferred when
-that pointer is present. Planar 4 bpp remains preferred when the BIOS offers
-it.
+Banked VBE window (`WinFuncPtr`, else `AX=4F05h` through the saved vector).
+The resident console uses it for fewer than 80 dirty cells, and for every
+refresh when PE is set. A full line or more still prefers the linear map
+when `PhysBasePtr` is present and PE is clear. Planar 4 bpp remains
+preferred when the BIOS offers it.
 
 XMS is already optional for the font cache. It is not required to reach the
 framebuffer.

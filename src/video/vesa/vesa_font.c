@@ -7,7 +7,9 @@
 #define FONT_MAP_BYTES (FONT_SLOTS * 4UL)
 #define FONT_RECORD 70U
 #define FONT_MAP_CACHE 64U
-#define FONT_CACHE 60U
+/* 32 slots cover a 26-glyph alphabet plus a few misses. The arena, not
+ * the slot count, is what decides whether those records stay resident. */
+#define FONT_CACHE 28U
 
 enum {
   kHalfGlyph = 0x8000U,
@@ -51,9 +53,18 @@ static u8 valid[FONT_CACHE];
 static u8 lookup[64];
 static u16 map_page = 0xffff;
 /* The first 128 bytes cache record IDs. Variable-sized glyphs use the rest. */
+/* 128-byte record map plus 29 full HH20 records. */
 static u8 cache[2176];
-static u32 large_glyph[MAX_FONT_HEIGHT * 2];
-static u32 doubled_glyph[MAX_FONT_HEIGHT * 2];
+/* One object: a 24x64 record is 384 bytes and is staged at large_glyph,
+ * continuing into doubled_glyph. DrawLargeHalf uses the second half only
+ * after that record has been copied into the cache. */
+static struct {
+  u32 wide[GLYPH_ROWS * 2];
+  u32 half[GLYPH_ROWS * 2];
+} glyph_buf;
+#define large_glyph glyph_buf.wide
+#define doubled_glyph glyph_buf.half
+typedef char glyph_stage_holds_24x64[(sizeof(glyph_buf) >= 384) ? 1 : -1];
 extern u8 CALL text_transfer[8192];
 void CALL font_service(u16 kind, struct BiosRegisters* bios_registers);
 u16 CALL font_snapshot(void);
@@ -210,7 +221,7 @@ static u16 CompactGlyph(u8* pixels, u16* format) {
 }
 
 static void CacheGlyph(u16 index, u16 slot, u16 size) {
-  u8* pixels = (u8*)doubled_glyph;
+  u8* pixels = (u8*)large_glyph;
   u16 length = size;
   u16 compact = 0;
   u16 i;
@@ -245,7 +256,7 @@ static u8* LoadGlyph(u16 code) {
   u16 i;
   u16 record_index;
   u16 bucket;
-  u8* glyph_data = (u8*)doubled_glyph;
+  u8* glyph_data = (u8*)large_glyph;
   if (code < 256) {
     slot = (font_custom[code] & 1) ? code | 0x8000 : code;
   } else {
@@ -395,17 +406,17 @@ static void DrawLargeHalf(const u32* bits, u16 attribute, u16 position,
     return;
   }
   ClearBytes(doubled_glyph, sizeof(doubled_glyph));
-  for (y = 0; y < font_height; ++y) {
+  for (y = 0; y < font_height && y < GLYPH_ROWS; ++y) {
     for (x = 0; x < font_width * 2; ++x) {
       if (bits[y] & (0x80000000UL >> (x / 2))) {
-        doubled_glyph[y + (x >= font_width ? MAX_FONT_HEIGHT : 0)] |=
+        doubled_glyph[y + (x >= font_width ? GLYPH_ROWS : 0)] |=
             0x80000000UL >> (x % font_width);
       }
     }
   }
   raster_large_cell(doubled_glyph, attribute, position);
   if ((position & 255) < TEXT_COLS - 1) {
-    raster_large_cell(doubled_glyph + MAX_FONT_HEIGHT, attribute, position + 1);
+    raster_large_cell(doubled_glyph + GLYPH_ROWS, attribute, position + 1);
   }
 }
 
@@ -432,7 +443,7 @@ void CALL font_draw(u16 code, u16 attribute, u16 position, u16 wide) {
   DrawLargeHalf(large_glyph, code < 256 ? attribute : attribute >> 8, position,
                 wide == 2);
   if (code >= 256 && (position & 255) + wide < TEXT_COLS) {
-    DrawLargeHalf(large_glyph + MAX_FONT_HEIGHT, attribute & 255,
+    DrawLargeHalf(large_glyph + GLYPH_ROWS, attribute & 255,
                   position + wide, wide == 2);
   }
 }

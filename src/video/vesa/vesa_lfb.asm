@@ -1,6 +1,7 @@
 ; Direct-color framebuffer for a resident 16-bit TSR.
-; Each transfer enters protected mode only long enough to use a 4 GB data
-; descriptor, then returns to real mode. V86 (CR0.PE already set) fails.
+; Large dirt enters protected mode only long enough to use a 4 GB data
+; descriptor, then returns to real mode. Sparse dirt, a bank-only mode, and
+; V86 (CR0.PE already set) paint through the 64 KiB window instead.
 ; Copies stay at or below 4096 bytes so interrupts are off for one chunk.
 ; Op 7 runs in a 32-bit code segment: packed rows are expanded there and
 ; stored with REP STOS. PE is cleared before any DOS or BIOS interrupt.
@@ -14,6 +15,8 @@ public lfb_bytes, lfb_load, lfb_a20, linear_prepare, linear_use_bank
 public linear_packed, linear_words, linear_large, linear_hline
 public linear_scroll, linear_cursor, linear_pixel, linear_read
 public linear_text_isolated, linear_bind_text, linear_paint_spaces
+public note_direct_window, choose_bank_paint, direct_lfb_ok, bank_paint
+public have_bank, linear_bind_v86
 
 extrn active:byte, display_pitch:word, viewport_x:word, viewport_y:word
 extrn font_width:word, pixel_scale:word, raster_height:word, text_rows:word
@@ -21,6 +24,7 @@ extrn font_body_height:word, screen:byte, begin_draw:near, end_draw:near
 extrn banked_text:byte, page_bytes:word, page_count:word, plane_bytes:dword
 extrn font_custom:byte, shadow:word, text_transfer:byte
 extrn active_page:word, text_cells:word
+extrn old10:dword, bank_step:word
 
 lfb_bytes dd 0
 op     dw 0
@@ -88,6 +92,18 @@ text_saved dw 0
 linear_bpp_bytes db 2
 linear_xor_mask dd 0
 linear_palette dd 16 dup (0)
+; Fewer than this many dirty text cells stays on the bank window.
+; One full line is 80 cells and uses the linear painter when PE is clear.
+public bank_cell_limit
+bank_cell_limit dw 80
+win_far dd 0
+have_bank db 0
+have_lfb db 0
+bank_only db 0
+bank_paint db 0
+cur_bank dw 0ffffh
+boff dd 0
+soff dd 0
 rgb db 000h,000h,000h, 000h,000h,0aah, 000h,0aah,000h, 000h,0aah,0aah
     db 0aah,000h,000h, 0aah,000h,0aah, 0aah,055h,000h, 0aah,0aah,0aah
     db 055h,055h,055h, 055h,055h,0ffh, 055h,0ffh,055h, 055h,0ffh,0ffh
@@ -378,6 +394,591 @@ use_read:
     ret
 linear_use_bank endp
 
+; AX = 1 when PhysBasePtr is usable: recorded at install and PE still clear.
+direct_lfb_ok proc near
+    cmp have_lfb,0
+    je dlo_no
+    smsw ax
+    test al,1
+    jnz dlo_no
+    mov ax,1
+    ret
+dlo_no:
+    xor ax,ax
+    ret
+direct_lfb_ok endp
+
+; far_off, far_seg, bank, lfb. PE at install drops the linear map.
+note_direct_window proc near
+    push bp
+    mov bp,sp
+    mov dword ptr win_far,0
+    cmp word ptr [bp+8],0
+    je ndw_flag
+    mov ax,[bp+4]
+    mov word ptr win_far,ax
+    mov ax,[bp+6]
+    mov word ptr win_far+2,ax
+ndw_flag:
+    mov al,byte ptr [bp+8]
+    mov have_bank,al
+    mov al,byte ptr [bp+10]
+    mov have_lfb,al
+    smsw ax
+    test al,1
+    jz ndw_only
+    mov have_lfb,0
+ndw_only:
+    mov bank_only,0
+    cmp have_bank,0
+    je ndw_done
+    cmp have_lfb,0
+    jne ndw_done
+    mov bank_only,1
+ndw_done:
+    mov cur_bank,0ffffh
+    mov bank_paint,0
+    pop bp
+    ret
+note_direct_window endp
+
+; Bank when the dirty text page is below bank_cell_limit. A full line is
+; the limit and stays on the linear painter while PE is clear.
+choose_bank_paint proc near
+    mov bank_paint,0
+    mov cur_bank,0ffffh
+    cmp have_bank,0
+    je cbp_ret
+    cmp bank_only,0
+    jne cbp_yes
+    smsw ax
+    test al,1
+    jnz cbp_yes
+    pusha
+    push ds
+    mov ax,cs:active_page
+    mul cs:page_bytes
+    mov cl,4
+    shr ax,cl
+    add ax,0b800h
+    mov ds,ax
+    xor si,si
+    mov di,offset shadow
+    mov cx,cs:text_cells
+    xor bx,bx
+cbp_loop:
+    jcxz cbp_under
+    mov ax,[si]
+    cmp ax,cs:[di]
+    je cbp_next
+    inc bx
+    cmp bx,cs:bank_cell_limit
+    jae cbp_pop
+cbp_next:
+    add si,2
+    add di,2
+    dec cx
+    jmp cbp_loop
+cbp_under:
+    mov byte ptr cs:bank_paint,1
+cbp_pop:
+    pop ds
+    popa
+    ret
+cbp_yes:
+    mov bank_paint,1
+cbp_ret:
+    ret
+choose_bank_paint endp
+
+; Sticky B800, no linear alias read. 43/50 rows still need that read.
+linear_bind_v86 proc near
+    cmp have_bank,0
+    je lbv_no
+    call text_ram
+    jc lbv_no
+    mov banked_text,0
+    mov page_count,1
+    cmp text_rows,25
+    ja lbv_no
+    mov ax,1
+    ret
+lbv_no:
+    xor ax,ax
+    ret
+linear_bind_v86 endp
+
+; AX = 0 linear, 1 bank, 2 fail. PE checked again so a later V86 entry
+; cannot take the flat selector.
+route_mem proc near
+    smsw ax
+    mov ah,al
+    cmp have_bank,0
+    je rm_lin
+    cmp bank_paint,0
+    jne rm_bank
+    cmp bank_only,0
+    jne rm_bank
+    test ah,1
+    jnz rm_bank
+rm_lin:
+    test ah,1
+    jnz rm_fail
+    xor ax,ax
+    ret
+rm_bank:
+    mov ax,1
+    ret
+rm_fail:
+    mov ax,2
+    ret
+route_mem endp
+
+; DX = granularity position. Far-call WinFuncPtr, else the saved INT 10h.
+set_win proc near
+    cmp dx,cur_bank
+    je sw_ok
+    pusha
+    push ds
+    push es
+    mov ax,word ptr win_far
+    or ax,word ptr win_far+2
+    pushf
+    mov ax,4f05h
+    xor bx,bx
+    mov bl,byte ptr screen+14
+    popf
+    jz sw_bios
+    call dword ptr win_far
+    jmp short sw_cmp
+sw_bios:
+    pushf
+    call dword ptr old10
+sw_cmp:
+    cmp ax,004fh
+    pop es
+    pop ds
+    popa
+    jne sw_bad
+    mov cur_bank,dx
+sw_ok:
+    clc
+    ret
+sw_bad:
+    stc
+    ret
+set_win endp
+
+; boff is the byte offset from PhysBasePtr. ES:DI addresses that byte.
+bank_place proc near
+    push eax
+    push dx
+    mov ax,word ptr boff+2
+    mul bank_step
+    test dx,dx
+    jnz bpl_bad
+    mov dx,ax
+    call set_win
+    jc bpl_bad
+    mov es,word ptr screen+6
+    mov di,word ptr boff
+    pop dx
+    pop eax
+    clc
+    ret
+bpl_bad:
+    pop dx
+    pop eax
+    stc
+    ret
+bank_place endp
+
+; CX = pixels of `color`. Does not add lfb_bytes or clobber SI.
+bank_fill_px proc near
+    push bx
+    push dx
+bf_loop:
+    jcxz bf_ok
+    push cx
+    call bank_place
+    pop cx
+    jc bf_bad
+    mov ax,di
+    neg ax
+    cmp byte ptr pixsz,2
+    jne bf_p4
+    shr ax,1
+    jnz bf_lim
+    mov ax,32768
+    jmp short bf_lim
+bf_p4:
+    shr ax,2
+    jnz bf_lim
+    test di,di
+    jnz bf_bad
+    mov ax,16384
+bf_lim:
+    test ax,ax
+    jz bf_bad
+    cmp ax,cx
+    jbe bf_use
+    mov ax,cx
+bf_use:
+    mov bx,ax
+    sub cx,bx
+    push cx
+    movzx ecx,bx
+    cld
+    cmp byte ptr pixsz,2
+    jne bf_d32
+    mov ax,word ptr color
+    rep stosw
+    jmp short bf_add
+bf_d32:
+    mov eax,color
+    rep stosd
+bf_add:
+    movzx eax,bx
+    movzx edx,pixsz
+    mul edx
+    add boff,eax
+    pop cx
+    jmp bf_loop
+bf_ok:
+    pop dx
+    pop bx
+    clc
+    ret
+bf_bad:
+    pop dx
+    pop bx
+    stc
+    ret
+bank_fill_px endp
+
+bank_xor_px proc near
+    push dx
+bx_loop:
+    jcxz bx_ok
+    push cx
+    call bank_place
+    pop cx
+    jc bx_bad
+    mov ax,di
+    neg ax
+    jnz bx_room
+    mov ax,0ffffh
+bx_room:
+    cmp ax,pixsz
+    jb bx_bad
+    cmp byte ptr pixsz,2
+    jne bx_32
+    mov ax,word ptr color
+    xor es:[di],ax
+    add word ptr boff,2
+    adc word ptr boff+2,0
+    jmp short bx_next
+bx_32:
+    mov eax,color
+    xor dword ptr es:[di],eax
+    add dword ptr boff,4
+bx_next:
+    dec cx
+    jmp bx_loop
+bx_ok:
+    pop dx
+    clc
+    ret
+bx_bad:
+    pop dx
+    stc
+    ret
+bank_xor_px endp
+
+; AX = request, DI = window offset (0 means a full 64 KiB). AX = bytes that fit.
+win_room proc near
+    mov bx,di
+    neg bx
+    jnz wr_lim
+    mov bx,ax
+    jmp short wr_min
+wr_lim:
+    cmp ax,bx
+    jbe wr_min
+    mov ax,bx
+wr_min:
+    test ax,ax
+    jz wr_no
+    clc
+    ret
+wr_no:
+    stc
+    ret
+win_room endp
+
+; CX = bytes. counting = 0 reads the window into the linear dest buffer.
+; Otherwise both ends are framebuffer offsets. A 256-byte stack scratch
+; keeps a scroll from needing the flat selector.
+bank_move proc near
+    push bx
+    push si
+    push di
+    push es
+    push bp
+    mov eax,src
+    sub eax,dword ptr screen+24
+    mov soff,eax
+    cmp counting,0
+    je bm_read
+    mov eax,dest
+    sub eax,dword ptr screen+24
+    mov boff,eax
+bm_pair:
+    test cx,cx
+    jz bm_ok
+    push cx
+    mov ax,cx
+    cmp ax,256
+    jbe bm_pa
+    mov ax,256
+bm_pa:
+    mov di,word ptr soff
+    call win_room
+    jc bm_pop
+    mov di,word ptr boff
+    call win_room
+    jc bm_pop
+    mov bp,ax
+    mov eax,boff
+    mov pix,eax
+    mov eax,soff
+    mov boff,eax
+    call bank_place
+    mov eax,pix
+    mov boff,eax
+    jc bm_pop
+    mov si,di
+    mov dx,es
+    sub sp,256
+    mov di,sp
+    push ds
+    mov ds,dx
+    push ss
+    pop es
+    mov cx,bp
+    cld
+    rep movsb
+    pop ds
+    call bank_place
+    jc bm_unw
+    mov si,sp
+    mov cx,bp
+    push ds
+    push ss
+    pop ds
+    rep movsb
+    pop ds
+    add sp,256
+    movzx eax,bp
+    add soff,eax
+    add boff,eax
+    pop cx
+    sub cx,bp
+    jmp bm_pair
+bm_read:
+    test cx,cx
+    jz bm_ok
+    push cx
+    mov eax,soff
+    mov boff,eax
+    call bank_place
+    pop cx
+    jc bm_bad
+    mov si,di
+    mov ax,es
+    push ds
+    mov ds,ax
+    mov eax,dest
+    mov di,ax
+    and di,0fh
+    shr eax,4
+    mov es,ax
+    cld
+    movsb
+    pop ds
+    add soff,1
+    add dest,1
+    dec cx
+    jmp bm_read
+bm_unw:
+    add sp,256
+bm_pop:
+    pop cx
+bm_bad:
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop bx
+    xor ax,ax
+    ret
+bm_ok:
+    pop bp
+    pop es
+    pop di
+    pop si
+    pop bx
+    mov ax,1
+    ret
+bank_move endp
+
+bank_chunk proc near
+    mov eax,dest
+    sub eax,dword ptr screen+24
+    mov boff,eax
+    mov cx,cnt
+    cmp op,5
+    je bk_xor
+    call bank_fill_px
+    jmp short bk_flag
+bk_xor:
+    call bank_xor_px
+bk_flag:
+    jc bk_no
+    mov ax,nbytes
+    add word ptr lfb_bytes,ax
+    adc word ptr lfb_bytes+2,0
+    mov ax,1
+    ret
+bk_no:
+    xor ax,ax
+    ret
+bank_chunk endp
+
+; SI = glyph row. One real-mode pass over pix_lines framebuffer rows.
+; Packed bits match the 32-bit painter: bit 31 is the leftmost pixel.
+bank_span proc near
+    push bx
+    push di
+    push es
+    mov eax,gaddr
+    sub eax,dword ptr screen+24
+    mov boff,eax
+    mov origin,eax
+    mov ax,gscale
+    mov row_px,ax
+    mov cx,pix_lines
+bs_row:
+    test cx,cx
+    jz bs_ok
+    push cx
+    cmp gkind,0
+    jne bs_gen
+    movzx ecx,gbit
+    mov ax,cx
+    shr ax,3
+    push si
+    add si,ax
+    mov eax,[si]
+    pop si
+    xchg al,ah
+    rol eax,16
+    xchg al,ah
+    and cl,7
+    shl eax,cl
+    movzx ebx,gwidth
+bs_run:
+    test ebx,ebx
+    jz bs_eol
+    mov edx,eax
+    rol edx,1
+    and edx,1
+    test edx,edx
+    jnz bs_one
+    bsr ecx,eax
+    jz bs_all
+    neg ecx
+    add ecx,31
+    jmp short bs_fit
+bs_one:
+    mov ecx,eax
+    not ecx
+    bsr ecx,ecx
+    jz bs_all
+    neg ecx
+    add ecx,31
+bs_fit:
+    test ecx,ecx
+    jz bs_all
+    cmp ecx,ebx
+    jbe bs_keep
+    mov ecx,ebx
+bs_keep:
+    sub ebx,ecx
+    shl eax,cl
+bs_store:
+    mov pix,eax
+    movzx eax,gscale
+    imul eax,ecx
+    mov cx,ax
+    mov eax,gbg
+    test edx,edx
+    jz bs_put
+    mov eax,gfg
+bs_put:
+    mov color,eax
+    call bank_fill_px
+    jc bs_popbad
+    mov eax,pix
+    jmp bs_run
+bs_all:
+    mov ecx,ebx
+    xor ebx,ebx
+    jmp bs_store
+; Word and dword glyphs already keep bit 31 (or bit 15) as the left pixel.
+; Lift a word to bit 31 and use the same run walker as packed rows.
+bs_gen:
+    cmp gkind,1
+    jne bs_dword
+    movzx eax,word ptr [si]
+    shl eax,16
+    jmp short bs_bits
+bs_dword:
+    mov eax,[si]
+bs_bits:
+    movzx ebx,gwidth
+    jmp bs_run
+bs_eol:
+    movzx eax,display_pitch
+    add origin,eax
+    mov eax,origin
+    mov boff,eax
+    dec row_px
+    jnz bs_same
+    mov ax,gscale
+    mov row_px,ax
+    movzx eax,gpitch
+    add si,ax
+bs_same:
+    pop cx
+    dec cx
+    jmp bs_row
+bs_popbad:
+    pop cx
+bs_bad:
+    pop es
+    pop di
+    pop bx
+    xor ax,ax
+    ret
+bs_ok:
+    pop es
+    pop di
+    pop bx
+    mov ax,1
+    ret
+bank_span endp
+
 chunk_pix proc near
     push si
 cp_loop:
@@ -395,7 +996,16 @@ cp_n:
     mov nbytes,ax
     mov si,ax
     push cx
+    call route_mem
+    cmp ax,2
+    je cp_popbad
+    cmp ax,1
+    jne cp_flat
+    call bank_chunk
+    jmp short cp_after
+cp_flat:
     call flat_run
+cp_after:
     pop cx
     or ax,ax
     jz cp_bad
@@ -407,6 +1017,8 @@ cp_ok:
     pop si
     mov ax,1
     ret
+cp_popbad:
+    pop cx
 cp_bad:
     mov active,0
     pop si
@@ -432,7 +1044,23 @@ cb_go:
     mov si,ax
     mov op,1
     push cx
+    call route_mem
+    cmp ax,2
+    je cb_popbad
+    cmp ax,1
+    jne cb_flat
+    mov cx,si
+    call bank_move
+    or ax,ax
+    jz cb_after
+    mov ax,nbytes
+    add word ptr lfb_bytes,ax
+    adc word ptr lfb_bytes+2,0
+    mov ax,1
+    jmp short cb_after
+cb_flat:
     call flat_run
+cb_after:
     pop cx
     or ax,ax
     jz cb_bad
@@ -446,6 +1074,8 @@ cb_ok:
     pop si
     mov ax,1
     ret
+cb_popbad:
+    pop cx
 cb_bad:
     mov active,0
     pop si
@@ -502,7 +1132,22 @@ paint_span proc near
     ja ps_bad
     mov nbytes,ax
     mov op,7
+    call route_mem
+    cmp ax,2
+    je ps_bad
+    cmp ax,1
+    je ps_bank
     call flat_run
+    jmp short ps_ran
+ps_bank:
+    call bank_span
+    or ax,ax
+    jz ps_bad
+    mov ax,nbytes
+    add word ptr lfb_bytes,ax
+    adc word ptr lfb_bytes+2,0
+    mov ax,1
+ps_ran:
     or ax,ax
     jz ps_bad
     movzx eax,word ptr pix_lines
@@ -903,6 +1548,8 @@ linear_cursor endp
 linear_scroll proc near
     push bp
     mov bp,sp
+    mov bank_paint,0
+    mov cur_bank,0ffffh
     mov cx,pixel_scale
     or cx,cx
     jnz sl_sc

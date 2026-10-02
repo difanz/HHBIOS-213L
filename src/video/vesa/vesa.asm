@@ -19,6 +19,7 @@ extrn text_bank:word, banked_text_allowed:byte
 extrn requested_mode:word, requested_rows:word
 extrn plane_bytes:dword, bank_step:word, large_surface:byte
 extrn linear_color:byte
+extrn direct_lfb_ok:near, linear_bind_v86:near, have_bank:byte
 extrn linear_bind_text:near, linear_use_bank:near, linear_text_isolated:near
 extrn mode_selected:byte
 extrn text_rows:word, text_cells:word, page_bytes:word, last_row:byte
@@ -563,6 +564,14 @@ aperture_failed:
 ; real text RAM that does not alias that map. A bank probe that merely misses
 ; the LFB is not enough.
 aperture_linear:
+    call direct_lfb_ok
+    or ax,ax
+    jnz aperture_linear_probe
+    call linear_bind_v86
+    or ax,ax
+    jnz aperture_done
+    jmp aperture_failed
+aperture_linear_probe:
     cmp cs:banked_text_allowed,0
     je aperture_linear_direct
     call probe_text_bank
@@ -1857,10 +1866,10 @@ include HZPOS.INC
 shadow label word
 D_XPQ db 8000 dup (0)
 stack_bottom dw 0a55ah
-; Resident handlers switch here. 1104 covers dispatch plus the VGA
-; palette snapshot in RestoreSurface (about 1022 bytes) with spare.
+; Resident handlers switch here. 1040 covers dispatch plus the VGA
+; palette snapshot in RestoreSurface (about 1022 bytes).
 ; Install borrows the shadow until initialize returns.
-db 1104 dup (0)
+db 1040 dup (0)
 stack_top label word
 
 ; A runtime font/row change may select a different physical surface. Re-probe

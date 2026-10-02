@@ -168,13 +168,40 @@ static int LinearConsole(const struct VbeSurface* surface) {
          surface->pitch <= 16384 && !(surface->pitch & 1);
 }
 
+/* Same geometry as the linear console, drawn through a 64 KiB window
+ * when PhysBasePtr is missing or protected mode is already on. */
+static int BankDirectConsole(const struct VbeSurface* surface) {
+  u16 pixel_bytes = surface->bpp == 32 ? 4 : 2;
+  if (surface->format != FORMAT_DIRECT) {
+    return 0;
+  }
+  if (surface->bpp != 15 && surface->bpp != 16 && surface->bpp != 32) {
+    return 0;
+  }
+  if (surface->window >= 2 || surface->segment != 0xa000 ||
+      surface->window_kb != 64 || !surface->granularity_kb ||
+      surface->granularity_kb > 64 || (64 % surface->granularity_kb)) {
+    return 0;
+  }
+  if (surface->width < 800 || surface->height < 600 || surface->width > 4096 ||
+      surface->height > 2160 || surface->width > 65535U / pixel_bytes) {
+    return 0;
+  }
+  return surface->pitch >= surface->width * pixel_bytes &&
+         surface->pitch <= 16384 && !(surface->pitch & 1);
+}
+
+static int DirectConsole(const struct VbeSurface* surface) {
+  return LinearConsole(surface) || BankDirectConsole(surface);
+}
+
 int DecodeConsoleModeInfo(struct VbeSurface* output, const u8* mode_info,
                           u16 version, u16 mode) {
   struct VbeSurface decoded;
   /* Keep the application-visible text grid independent of planar pixels.
-   * Direct-color consoles additionally require the VBE 2 linear address. */
+   * Direct color needs either PhysBasePtr or a 64 KiB bank window. */
   if (!DecodeVbeModeInfo(&decoded, mode_info, version, mode) ||
-      (!PlanarConsole(&decoded, mode_info) && !LinearConsole(&decoded))) {
+      (!PlanarConsole(&decoded, mode_info) && !DirectConsole(&decoded))) {
     return 0;
   }
   *output = decoded;
@@ -377,6 +404,11 @@ static void RefreshConsole(u16 show_cursor) {
   if (changed && !begin_draw()) {
     return;
   }
+  /* Sparse dirt stays on the bank window. A line or more uses the linear
+   * painter while PE is clear. Scroll clears the choice on its own entry. */
+  if (linear_color && (changed || prompt_dirty || show_cursor)) {
+    choose_bank_paint();
+  }
   if (cursor_visible &&
       (changed || !show_cursor || !cursor_on || (cursor_shape & 0x2000) ||
        cursor_position != CursorPosition(active_page) ||
@@ -403,6 +435,7 @@ static void RefreshConsole(u16 show_cursor) {
     end_draw();
   }
   mouse_paint();
+  bank_paint = 0;
 }
 static void RepaintConsole(void) {
   RefreshConsole(1);
@@ -429,8 +462,9 @@ static int ActivateConsole(u16 preserve) {
   if (vbe_mode) {
     bios_registers.ax = 0x4f02;
     bios_registers.bx = screen.mode | (preserve ? 0x8000 : 0);
-    /* Bit 14 selects the linear map. Windowed planar modes leave it clear. */
-    if (linear_color) {
+    /* Bit 14 selects the linear map. A bank-only direct mode has no
+     * PhysBasePtr and must still install through the window. */
+    if (linear_color && screen.physical) {
       bios_registers.bx |= 0x4000;
     }
   } else {
@@ -537,7 +571,7 @@ static int IsSavedSurfaceValid(const struct VbeSurface* saved, u16 rows) {
   if (!font_choose(saved->width, saved->height, rows, 0)) {
     return 0;
   }
-  if (LinearConsole(saved)) {
+  if (DirectConsole(saved)) {
     return 1;
   }
   return saved->width >= 800 && saved->width <= 4096 && saved->height >= 600 &&
@@ -551,13 +585,23 @@ static int IsSavedSurfaceValid(const struct VbeSurface* saved, u16 rows) {
 
 static void UseSurface(const struct VbeSurface* saved) {
   screen = *saved;
-  linear_color = (u8)LinearConsole(saved);
+  linear_color = (u8)DirectConsole(saved);
 }
 
 static u8 WindowCanBank(const struct VbeSurface* saved) {
   return saved->window < 2 && saved->segment == 0xa000 &&
          saved->window_kb == 64 && saved->granularity_kb &&
          saved->granularity_kb <= 64 && !(64 % saved->granularity_kb);
+}
+
+static void CommitDirect(u16 far_off, u16 far_seg) {
+  u16 bank = WindowCanBank(&screen);
+  u16 lfb = (u16)(screen.physical != 0);
+  if (!bank) {
+    far_off = 0;
+    far_seg = 0;
+  }
+  note_direct_window(far_off, far_seg, bank, lfb);
 }
 
 static u8 ReadPortByte(u16 port);
@@ -602,7 +646,7 @@ static int RestoreSurface(void) {
   ClearBytes(&bios_registers, sizeof(bios_registers));
   bios_registers.ax = 0x4f02;
   bios_registers.bx = screen.mode | 0x8000;
-  if (linear_color) {
+  if (linear_color && screen.physical) {
     bios_registers.bx |= 0x4000;
   }
   bios(&bios_registers);
@@ -733,6 +777,8 @@ u16 CALL initialize(void) {
   struct VbeSurface best_linear;
   u32 best_score = 0xffffffffUL;
   u8 have_linear = 0;
+  u16 best_far_off = 0;
+  u16 best_far_seg = 0;
   if (keyboard_segment) {
     prompt_attr = *PTR(u8, keyboard_segment, 0x10a);
   }
@@ -791,6 +837,7 @@ u16 CALL initialize(void) {
         if (font_open()) {
           vbe_mode = 1;
           linear_color = 0;
+          note_direct_window(0, 0, 0, 0);
           break;
         }
         font_missing = 1;
@@ -799,6 +846,8 @@ u16 CALL initialize(void) {
         linear_color = 1;
         if (font_open()) {
           vbe_mode = 1;
+          CommitDirect(ReadLittleEndianWord(mode_info + 12),
+                       ReadLittleEndianWord(mode_info + 14));
           break;
         }
         font_missing = 1;
@@ -814,6 +863,8 @@ u16 CALL initialize(void) {
         if (!have_linear || score < best_score) {
           best_linear = screen;
           best_score = score;
+          best_far_off = ReadLittleEndianWord(mode_info + 12);
+          best_far_seg = ReadLittleEndianWord(mode_info + 14);
           have_linear = 1;
         }
       }
@@ -826,6 +877,7 @@ u16 CALL initialize(void) {
       return 4;
     }
     vbe_mode = 1;
+    CommitDirect(best_far_off, best_far_seg);
   }
   if (!vbe_mode) {
     return font_missing ? 4 : 1;

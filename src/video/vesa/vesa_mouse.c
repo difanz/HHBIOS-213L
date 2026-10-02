@@ -415,7 +415,7 @@ void CALL mouse_paint(void) {
   /* Only the serialized renderer calls this; callbacks never draw. */
   static struct BiosRegisters bios_registers;
   static u16 bits[CELL_HEIGHT * 2];
-  static u32 large_bits[MAX_FONT_HEIGHT * 2];
+  static u32 large_bits[GLYPH_ROWS * 2];
   u16 value;
   u16 changed;
   u16 code;
@@ -453,16 +453,16 @@ void CALL mouse_paint(void) {
   if (font_extended) {
     font_get_large(code, large_bits);
     if (cursor_type) {
-      for (i = 0; i < font_body_height; ++i) {
+      for (i = 0; i < font_body_height && i < GLYPH_ROWS; ++i) {
         u16 line = i * logical_height / font_body_height;
         if (line >= cursor_first && line <= cursor_last) {
-          large_bits[half * MAX_FONT_HEIGHT + i] = 0xffffffffUL
+          large_bits[half * GLYPH_ROWS + i] = 0xffffffffUL
                                                    << (32 - font_width);
         }
       }
     }
     if (begin_draw()) {
-      raster_large_cell(large_bits + half * MAX_FONT_HEIGHT, changed >> 8,
+      raster_large_cell(large_bits + half * GLYPH_ROWS, changed >> 8,
                         (mouse_y << 8) | mouse_x);
       end_draw();
     }

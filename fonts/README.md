@@ -77,8 +77,8 @@ traditional forms, share one index.
 The committed font payload is 733176 bytes, rounded to 716 KiB. VESA reserves
 another 36 KiB in the same handle for text-page and downloaded-font preservation:
 752 KiB in XMS, or 47 EMS pages. The 2176-byte cache holds a 128-byte record-map
-page and 29 HH20 glyphs, plus separate keys and reference flags. No DOS or file
-calls occur while drawing.
+page and room for 29 HH20 records. The live slot table is 28 entries, plus
+separate keys and reference flags. No DOS or file calls occur while drawing.
 
 `HZK16` remains the original 16-pixel font used by the legacy drivers and
 the compatible INT 10h/AH=16h bitmap query. It is not the source of HH20.FNT.
@@ -162,8 +162,7 @@ Western characters occupy the left half of the record. Record size follows
 the header geometry; it is not fixed at 70 bytes. The loader validates the
 dimensions and exact payload length before allocating memory.
 
-The resident packed-glyph cache occupies 2176 bytes and holds up to 60
-records (five at the maximum 48x64 fullwidth size). Larger Western records
+The resident packed-glyph cache occupies 2176 bytes and 28 slots. Larger Western records
 whose second cell is empty use halfwidth storage; drawing reads those rows
 directly. Chinese and application-defined bitmaps retain their complete data.
 The complete font and

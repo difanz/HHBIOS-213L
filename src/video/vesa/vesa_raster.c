@@ -19,7 +19,9 @@ static union {
     u8 masks[16];
     u32 scaled_bits[MAX_FONT_HEIGHT];
   } glyph;
-  u8 scroll_row[4][512];
+  /* 4 * 324 matches the glyph member, so the union does not grow.
+   * A wider planar row repaints on the next refresh. */
+  u8 scroll_row[4][324];
 } scratch;
 void CALL raster_words(const u16* bits, u16 offset, u16 rows, u16 shift,
                        u16 foreground, u16 background);

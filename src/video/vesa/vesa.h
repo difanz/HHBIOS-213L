@@ -22,6 +22,8 @@ typedef unsigned long u32;
 #define GLYPH_HEIGHT 20
 #define MAX_FONT_WIDTH 24
 #define MAX_FONT_HEIGHT 64
+/* Unpacked glyph temps. Matches the tallest face test (39 rows). */
+#define GLYPH_ROWS 39
 #define FORMAT_PLANAR4 3
 #define FORMAT_PACKED8 4
 #define FORMAT_DIRECT 6
@@ -188,6 +190,9 @@ u16 CALL linear_bind_text(void);
 u16 CALL linear_text_isolated(void);
 void CALL linear_hline(u16 x, u16 y, u16 width, u16 color);
 void CALL linear_paint_spaces(void);
+void CALL note_direct_window(u16 far_off, u16 far_seg, u16 bank, u16 lfb);
+void CALL choose_bank_paint(void);
+extern u8 CALL bank_paint;
 void CALL linear_packed(const u8* source, u16 attribute, u16 position,
                         u16 source_pitch, u16 source_bit);
 void CALL linear_words(const u16* bits, u16 attribute, u16 position);
