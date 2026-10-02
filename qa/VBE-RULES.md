@@ -361,7 +361,13 @@ the whole hanzi repaint to save only the leftover per-glyph entries. The byte
 counter behind AX=1418h counts those stores, not loads. There is no persistent
 unreal-mode segment cache, no VCPI client and no DPMI client. EMM386 does
 not make the switch faster; its useful effect is UMBs for the resident
-image, and its V86 mode is why the linear transfer aborts. Below 80 dirty
+image, and its V86 mode is why the linear transfer aborts. VESA.COM
+now refuses to install unless that manager is present (`EMMXXXX0` and
+INT 67h `AH=40h`). JEMM386 and JEMMEX count. VGA.COM does not check.
+`/AF` sets the resident accelerator flag and `/AF-` clears it. The
+default is off. This image does not call an AF entry; no AF device is
+a no-op.
+Below 80 dirty
 text cells the resident console uses the real-mode window instead, including
 every refresh while PE is set. Details are in
 `qa/lfb-latency.md`. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only

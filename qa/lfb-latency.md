@@ -83,8 +83,8 @@ strategy, so a later low-memory `AH=48h` does not grow the UMB block.
 Baking 8 KiB into the COM is the opposite: the file cannot pass `0xFF00`,
 and the banked resident image is already 60832 bytes against the 62 KiB
 test cap. The cache lookup itself also does not fit. The link is
-`0xFEF1`, 15 bytes under the COM limit, and the tail segment moves after
-4 more bytes of code.
+`0xFEF7`, 9 bytes under the COM limit. Nine more resident bytes still
+fit before `text_transfer` moves to the next paragraph.
 
 ### Whole-frame protected mode, unreal mode, classifier
 
@@ -104,19 +104,17 @@ bytes. It does not allocate the whole file.
 
 | Image | Offset | Bytes | Kept after install |
 | --- | ---: | ---: | --- |
-| Load image (`Memory size`) | `0xFEF1` | 65265 | Only long enough to install. `LOADHIGH` of the file needs a hole this big |
-| LFB resident (`banked_text=0`, `resident_end`) | `0xCD55` | 52565 | Yes. This is the UMB request for a direct-color console |
-| Banked resident (`image_end`, includes `text_transfer`) | `0xED60` | 60768 | Yes, when the 64 KiB text window is kept |
-| `INIT_TEXT` | `0x1191` | 4497 | No. Option parse, VBE probe, font file decode |
+| Load image (`Memory size`) | `0xFEF7` | 65271 | Only long enough to install. `LOADHIGH` of the file needs a hole this big |
+| LFB resident (`banked_text=0`, `resident_end`) | `0xCD07` | 52487 | Yes. This is the UMB request for a direct-color console |
+| Banked resident (`image_end`, includes `text_transfer`) | `0xED10` | 60688 | Yes, when the 64 KiB text window is kept |
+| `INIT_TEXT` | `0x11E7` | 4583 | No. Option parse, VBE probe, font file decode, EMS check |
 | `text_transfer` | `0x2000` | 8192 | No on the LFB path. Yes if `banked_text` is set |
 
-The file on disk is 65009 bytes (`Memory size` minus the `ORG 100h` prefix),
-8 bytes above the previous `0xFEE9` image and 15 bytes under `0xFF00`.
-`resident_end` moved down 70 bytes and `image_end` moved down 64. The
-resident stack is 1040 bytes plus the `0xA55A` marker. The packed-glyph
-arena is still 2176 bytes, with 28 live slots. `large_glyph` and
-`doubled_glyph` are one 624-byte object (two 312-byte halves). A 24×64
-record is 384 bytes and is staged at the start of that object.
+The file on disk is 65015 bytes (`Memory size` minus the `ORG 100h` prefix),
+9 bytes under `0xFF00`. The packed-glyph arena is 2096 bytes, with 28
+live slots. `large_glyph` and `doubled_glyph` are one 624-byte object
+(two 312-byte halves). A 24×64 record is 384 bytes and is staged at the
+start of that object.
 
 What has to stay for a Chinese LFB console: the INT 10h, INT 08h, INT 33h,
 and INT 2Fh hooks; the 8000-byte shadow; the 1040-byte stack; the glyph
@@ -151,10 +149,10 @@ where it actually shrinks the resident image UMB install keeps.
 
 ## The 32-bit session does not shrink the UMB
 
-`0xFEF1` is the COM load image. The UMB block is a prefix of that image,
+`0xFEF7` is the COM load image. The UMB block is a prefix of that image,
 copied with `rep movsb` and no fixups. Direct color stops at
-`resident_end` (`0xCD55`, 52565). Planar 43/50 rows stop at `image_end`
-(`0xED60`, 60768) so the copy includes `text_transfer`. `INIT_TEXT` is
+`resident_end` (`0xCD07`, 52487). Planar 43/50 rows stop at `image_end`
+(`0xED10`, 60688) so the copy includes `text_transfer`. `INIT_TEXT` is
 already past both stops. A byte that the short-PE glyph body does not
 touch is still in the UMB when the real-mode hooks, the bank painter, or
 the classifier do touch it.
@@ -166,8 +164,8 @@ the classifier do touch it.
 | stack inside `_TEXT` | 1042 | yes | yes | those hooks and `RestoreSurface` |
 | 32-bit glyph body (`pm32.bin` plus the far return) | 309 | yes | yes | selector 18h, only while PE is clear |
 | DATA | 220 | yes | yes | near `DS` |
-| BSS | 7011 | yes | yes | near `DS` |
-| glyph arena inside BSS | 2176 | yes | yes | `font_draw`, then the bank walker or the 32-bit walker |
+| BSS | 6931 | yes | yes | near `DS` |
+| glyph arena inside BSS | 2096 | yes | yes | `font_draw`, then the bank walker or the 32-bit walker |
 | slot tables inside BSS | 260 | yes | yes | the same real-mode lookup |
 | glyph scratch inside BSS | 624 | yes | yes | real-mode staging before either painter |
 | planar scratch inside BSS | 1296 | yes | yes | planar draw and scroll, real mode |
@@ -177,7 +175,7 @@ the classifier do touch it.
 | `text_transfer` | 8192 | no | yes | real-mode text snapshot and font bounce |
 | `INIT_TEXT` | 4497 | no | no | install only |
 
-BSS rows above share the 7011. The rest of that 7011 is scalars and the
+BSS rows above share the 6931. The rest of that 6931 is scalars and the
 four-font catalog. `_TEXT` minus the shadow and the stack is instructions
 and small tables. The bank dispatcher and window painter, from
 `choose_bank_paint` through `bank_span`, are 1096 bytes of that code.
@@ -205,14 +203,103 @@ has to carry them for the linear case.
 | Move | UMB | COM ceiling | Why it stays |
 | --- | ---: | ---: | --- |
 | 32-bit body to extended RAM | 309 | 309 | No host-free owner. EMS-only install has no XMS lock. V86 never runs the body, but the hybrid image still needs it when PE is clear |
-| Glyph arena to XMS/EMS | 0 | 0 | The bank walker reads a near pointer. A bounce buffer is the arena again |
+| Glyph arena to XMS/EMS | about 2096, later | about 2096, later | One record already stages in `glyph_buf`. The arena itself is the first buffer to move. See below |
 | Shadow to extended RAM | 0 | 0 | `text_changed` and `choose_bank_paint` walk it in real mode on every refresh, including V86. 50-row planar needs all 8000 |
 | `text_transfer` to extended RAM | 0 on direct color | 8192 | Already outside the direct-color UMB. Planar paint reads the snapshot while the window covers B800 |
 | Planar scratch aliased onto `text_transfer` | 1296 | 1296 | The snapshot is live for the whole planar paint that also uses the scratch |
-| `INIT_TEXT` in another EXE segment | 0 | 4497 | Already omitted from both UMB stops. The resident piece would still be this tiny image, or the UMB copy would need fixups |
+| `INIT_TEXT` in another EXE segment | 0 | 4583 | Already omitted from both UMB stops. The resident piece would still be this tiny image, or the UMB copy would need fixups |
 | Classifier inside the 32-bit body | grows the prefix | grows | The walk runs before either painter, in real mode, so V86 can take the bank path |
 
-No resident shrink from this pass. The link stays `0xFEF1`.
+The glyph arena gave up 80 bytes so the EMS install check fits. The
+link is `0xFEF7`. That does not move the shadow or the transfer buffer.
+
+## VESA.COM requires an EMS manager
+
+VESA is the console for a machine that already has an expanded-memory
+manager. The manager is how the TSR gets a UMB, and it is the store for
+the large buffers that still sit in the COM prefix. It is not a paint
+host. There is still no VCPI client and no DPMI client.
+
+`emm_ready` runs in the install stub, after the font driver is found
+and before `initialize` sets a mode. INT 21h `AX=3567h` must point at a
+device whose name at offset 10 is `EMMXXXX0`. INT 67h `AH=40h` must
+return status 0. EMM386, JEMM386, and JEMMEX all publish that name.
+DOSBox-X `ems=true` does too. A manager that is present but has EMS
+turned off (the `EMMQXXX0` name) does not pass.
+
+Without that manager the stub prints two lines and exits 1. It does not
+change video mode:
+
+```
+No EMM.
+需要EMM386。
+```
+
+The second line is GB2312. VGA.COM, EGA, CGA, and HGA do not call
+`emm_ready`. A planar VBE mode installed by VESA.COM does. The UMB is
+for this TSR, planar or direct color. `/N` still forces the conventional
+copy after the manager check has passed. `S_UMB` still asks DOS for a
+high block (strategy `41h`) and, if that alloc fails, stays in
+conventional memory. The footprint is the same bytes either way:
+direct color keeps `0xCD07` (52487), and planar 43/50 rows keep
+`0xED10` (60688).
+
+Real EMM386 or JEMM runs the guest in V86. `SMSW` shows PE, so the
+short-PE linear painter stays dark and every refresh uses the 64 KiB
+window and `WinFuncPtr`. DOSBox-X `ems=true` publishes the same device
+and does not set PE, so a large dirty region there still takes the
+short-PE path. The direct-color harness sets `ems=true` in
+`qa/profiles/vesa-hd.conf` for that reason.
+
+### Which buffer moves first
+
+The install check does not relocate the arena, the shadow, or
+`text_transfer`. Those moves are real-mode copies through a manager
+the font code already talks to. Order:
+
+1. Glyph arena, 2096 bytes. The 28 slot tables stay (260 bytes).
+   `LoadGlyph` already returns a pointer. A hit copies one record into
+   `glyph_buf`, which already holds a 384-byte stage. The bank walker
+   and the 32-bit walker keep that near pointer. If the font payload
+   is in EMS, save and restore the page frame around the copy. If the
+   payload is in XMS, park the arena in EMS pages, because an EMS
+   manager is now required and the page frame is a real-mode address.
+   About 2 KiB leaves the direct-color UMB.
+2. `text_transfer`, 8192 bytes. This is the planar UMB and most of the
+   COM ceiling. The call sites are the text snapshot, font sync, the
+   text save, and the banked-text space fill. Point them at a mapped
+   EMS page after the save/restore helper from step 1 exists.
+3. Shadow, 8000 bytes. `text_changed` and `choose_bank_paint` walk it
+   on every refresh, including the timer hook. Point that compare at
+   an EMS page last.
+
+The bank painter, the interrupt hooks, the 1040-byte stack, and the
+309-byte 32-bit body stay in the prefix. The body runs only while PE
+is clear, which a real EMM manager will not allow.
+
+## VBE/AF stays off unless `/AF` is set
+
+VBE/AF (Accelerator Functions) is not the INT 10h VBE BIOS. The common
+SciTech driver exports 32-bit flat calls for a rectangle copy and a
+solid fill. DOSBox-X implements VBE BIOS modes and does not provide
+that driver. A few late-1990s S3, Cirrus, and Tseng packs shipped one.
+Coverage is the card plus that module, not "VESA is present."
+
+Chinese glyphs are a 1bpp packed row expanded to 16bpp. AF copies
+pixels that already exist. It does not replace the bit walk. A scroll
+or a full clear is the rectangle case, and those are the only samples
+where AF could matter. Calling the 32-bit table needs a protected-mode
+entry. This TSR will not use VCPI or DPMI to get one. Under EMM the
+CPU is already in V86, so that entry is the same illegal CR0 switch as
+the short-PE painter.
+
+The install switch is `/AF` to enable and `/AF-` to disable. Default
+off: omitting the switch leaves the resident byte `af_on` clear, the
+same as `/AF-`. No AF device is a no-op. This image parses the switch
+and stores it. It does not call an AF entry, so `/AF` does not change
+pixels on DOSBox-X or on a card with no real-mode accelerator entry.
+An unknown switch, including `/A` without `F`, is rejected with the
+usage line. Do not call a 32-bit AF entry from this TSR.
 
 ## Hosts that already own protected mode
 
@@ -413,7 +500,7 @@ walk. Not a mode-switch host.
 hybrid. The harness never enters protected mode. `WinFuncPtr` (or
 `INT 10h` `AX=4F05h` through the saved vector, never a nested
 `INT 10h`) moves a 64 KiB window at A000. That painter now lives in
-`VESA.COM`, ahead of `resident_end`. The link is `0xFEF1`.
+`VESA.COM`, ahead of `resident_end`. The link is `0xFEF7`.
 
 `bank_cell_limit` is 80 dirty text cells, one full line. Counted on
 the active B800 page against the shadow, with `CS` overrides while

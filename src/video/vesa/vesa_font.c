@@ -52,9 +52,10 @@ static u8 valid[FONT_CACHE];
 /* A hint only: arena reuse and hash collisions still check the full key. */
 static u8 lookup[64];
 static u16 map_page = 0xffff;
-/* The first 128 bytes cache record IDs. Variable-sized glyphs use the rest. */
-/* 128-byte record map plus 29 full HH20 records. */
-static u8 cache[2176];
+/* The first 128 bytes cache record IDs. Variable-sized glyphs use the rest.
+ * 2096 leaves 1968 bytes after the map: 28 HH20 records (1960) and 8 spare.
+ * The bytes freed here pay for the install-time EMS check in the COM image. */
+static u8 cache[2096];
 /* One object: a 24x64 record is 384 bytes and is staged at large_glyph,
  * continuing into doubled_glyph. DrawLargeHalf uses the second half only
  * after that record has been copied into the cache. */

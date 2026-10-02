@@ -92,6 +92,27 @@ def test_vesa_chinese_pixels(dosbox_binary, vesa_build, tmp_path, adapter, resid
             assert bool(plane[59900 + x // 8] & (128 >> (x & 7))) == bool(color & (1 << p))
 
 
+def test_vesa_refuses_install_without_emm(dosbox_binary, vesa_build, tmp_path):
+    for name in ('VESA.COM', 'READ5.COM'):
+        shutil.copy2(vesa_build / name, tmp_path)
+    for name in ('HZK16', 'HH20.FNT'):
+        shutil.copy2(ROOT / 'fonts' / name, tmp_path)
+    files = run_dos(dosbox_binary, tmp_path, [
+        'READ5',
+        ('VESA > VESA.LOG', 1),
+        ('VESA /AF > AF.LOG', 1),
+        ('VESA /AF- > AFM.LOG', 1),
+        ('VESA /AX > BAD.LOG', 1),
+    ], settings='\n[dosbox]\nmachine=svga_s3\n[dos]\nems=false\n')
+    for name in ('VESA.LOG', 'AF.LOG', 'AFM.LOG'):
+        log = files[name].read_bytes()
+        assert b'No EMM.' in log
+        assert '需要EMM386。'.encode('gb2312') in log
+    rejected = files['BAD.LOG'].read_bytes()
+    assert b'No EMM.' not in rejected
+    assert b'VESA [/N] [/AF]' in rejected
+
+
 @pytest.mark.parametrize('cpu',['8086','286'])
 def test_vesa_rejects_old_cpu_before_entering_386_code(dosbox_binary,vesa_build,tmp_path,cpu):
     shutil.copy2(vesa_build/'VESA.COM',tmp_path)

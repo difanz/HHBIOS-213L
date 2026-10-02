@@ -76,6 +76,9 @@ mapped_block dw 0
 bank_result dw 0
 public banked_text
 banked_text db 0
+; /AF sets this, /AF- clears it. Default off. Paint does not call AF.
+public af_on
+af_on db 0
 aperture_result dw 1
 frame_alias_offset dw offset D_ZBFB
 
@@ -2009,14 +2012,34 @@ parse_option:
     cmp al,' '
     je parse_option
     cmp al,'/'
-    jne bad_option
-    or cx,cx
-    jz bad_option
+    jne option_bad
+    jcxz option_bad
     lodsb
     dec cx
     cmp al,'?'
     je usage
     and al,5fh
+    cmp al,'A'
+    jne parse_not_af
+    jcxz option_bad
+    lodsb
+    dec cx
+    and al,5fh
+    cmp al,'F'
+    jne option_bad
+    mov al,1
+    jcxz parse_af_store
+    cmp byte ptr [si],'-'
+    jne parse_af_store
+    inc si
+    dec cx
+    dec al
+parse_af_store:
+    mov af_on,al
+    jmp short parse_option
+option_bad:
+    jmp bad_option
+parse_not_af:
     cmp al,'N'
     jne parse_mode
     mov force_low,1
@@ -2027,13 +2050,12 @@ parse_mode:
     cmp al,'F'
     je parse_font
     cmp al,'M'
-    jne bad_option
-    or cx,cx
-    jz bad_option
+    jne option_bad
+    jcxz option_bad
     lodsb
     dec cx
     cmp al,':'
-    jne bad_option
+    jne option_bad
     xor bx,bx
     xor di,di
 parse_mode_digit:
@@ -2163,27 +2185,24 @@ options_done:
     int 2fh
     cmp bx,4a06h
     jne no_font
-    mov ax,3510h
+    mov si,offset saved_vectors
+    mov cx,4
+save_vector:
+    cld
+    lodsw
     int 21h
-    mov word ptr old10,bx
-    mov word ptr old10+2,es
-    mov ax,3508h
-    int 21h
-    mov word ptr old8,bx
-    mov word ptr old8+2,es
-    mov ax,3533h
-    int 21h
-    mov word ptr old33,bx
-    mov word ptr old33+2,es
-    mov ax,352fh
-    int 21h
-    mov word ptr old2f,bx
-    mov word ptr old2f+2,es
+    lodsw
+    xchg ax,di
+    mov [di],bx
+    mov [di+2],es
+    loop save_vector
     xor bp,bp
     mov ah,2fh
     int 16h
     mov keyboard_segment,bp
     mov busy,1
+    call emm_ready
+    jc no_emm
     call initialize
     ; initialize() returned, so its INIT code is disposable stack. Painting
     ; and the later DOS calls must not stay on the text shadow.
@@ -2223,18 +2242,17 @@ resident_size:
     mov resident_segment,ds
     mov word ptr ds:[2ch],0
 install_vectors:
-    mov dx,offset int10_handler
-    mov ax,2510h
+    ; DS is the UMB after the copy. The hook table stays in INIT, so read it
+    ; through CS. AH=25h still publishes DS:DX, the resident copy.
+    mov si,offset hook_vectors
+    mov cx,4
+hook_vector:
+    mov ax,cs:[si]
+    mov dx,ax
+    mov ax,cs:[si+2]
+    add si,4
     int 21h
-    mov dx,offset int8_handler
-    mov ax,2508h
-    int 21h
-    mov dx,offset int33_handler
-    mov ax,2533h
-    int 21h
-    mov dx,offset int2f_handler
-    mov ax,252fh
-    int 21h
+    loop hook_vector
     call mouse_resume
     mov busy,0
     cmp prompt_notify,0
@@ -2275,10 +2293,7 @@ old_processor:
     push dx
     popf
     mov dx,offset msg_cpu
-    mov ah,9
-    int 21h
-    mov ax,4c01h
-    int 21h
+    jmp short install_error
 bad_option:
     mov dx,offset msg_usage
 install_error:
@@ -2295,6 +2310,36 @@ usage:
 no_font20:
     mov dx,offset msg_font20
     jmp install_error
+no_emm:
+    mov dx,offset msg_emm
+    jmp install_error
+
+; EMM386, JEMM386 and JEMMEX all publish this device name and answer AH=40h.
+; DOSBox ems=true does the same and does not set CR0.PE. A missing manager
+; refuses the install before any mode set. VGA.COM does not call this.
+emm_ready proc near
+    mov ax,3567h
+    int 21h
+    mov si,offset emm_sig
+    mov di,10
+    mov cx,8
+emm_sig_loop:
+    mov al,es:[di]
+    cmp al,[si]
+    jne emm_missing
+    inc di
+    inc si
+    loop emm_sig_loop
+    mov ah,40h
+    int 67h
+    or ah,ah
+    jnz emm_missing
+    clc
+    ret
+emm_missing:
+    stc
+    ret
+emm_ready endp
 
 ; DOS-owned UMBs, with complete restoration of allocation policy on failure.
 ; This follows the existing display-module allocator without requiring XMS.
@@ -2349,12 +2394,23 @@ old_link dw 0
 umb_segment dw 0
 resident_paragraphs dw 0
 force_low db 0
+emm_sig db 'EMMXXXX0'
 msg_loaded db 'Installed.',13,10,'$'
 msg_cpu db 'requires a 386.',13,10,'$'
 msg_font db 'No font.',13,10,'$'
 msg_font20 db 'No XMS.',13,10,'$'
 msg_vbe db 'No VBE.',13,10,'$'
-msg_usage db 'VESA [/N]',13,10,'$'
+msg_emm db 'No EMM.',13,10
+        db 0D0h,0E8h,0D2h,0AAh,'EMM386',0A1h,0A3h,13,10,'$'
+saved_vectors dw 3510h, offset old10
+              dw 3508h, offset old8
+              dw 3533h, offset old33
+              dw 352fh, offset old2f
+hook_vectors dw offset int10_handler, 2510h
+             dw offset int8_handler, 2508h
+             dw offset int33_handler, 2533h
+             dw offset int2f_handler, 252fh
+msg_usage db 'VESA [/N] [/AF]',13,10,'$'
 INIT_TEXT ends
 ; Last byte of the image. Install uses it as stack after initialize returns.
 ZZINIT segment byte public 'ZZINIT'
