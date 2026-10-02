@@ -149,6 +149,71 @@ cache, if built, is 8 KiB of conventional memory at runtime, not bytes
 baked into the image. Slimmer packaging stays on the latency list only
 where it actually shrinks the resident image UMB install keeps.
 
+## The 32-bit session does not shrink the UMB
+
+`0xFEF1` is the COM load image. The UMB block is a prefix of that image,
+copied with `rep movsb` and no fixups. Direct color stops at
+`resident_end` (`0xCD55`, 52565). Planar 43/50 rows stop at `image_end`
+(`0xED60`, 60768) so the copy includes `text_transfer`. `INIT_TEXT` is
+already past both stops. A byte that the short-PE glyph body does not
+touch is still in the UMB when the real-mode hooks, the bank painter, or
+the classifier do touch it.
+
+| Region | Bytes | Direct-color UMB | Planar UMB | Who addresses it |
+| --- | ---: | --- | --- | --- |
+| `_TEXT` | 45334 | yes | yes | INT 10h, INT 08h, INT 33h, INT 2Fh |
+| shadow inside `_TEXT` | 8000 | yes | yes | real-mode compare, every refresh, including V86 |
+| stack inside `_TEXT` | 1042 | yes | yes | those hooks and `RestoreSurface` |
+| 32-bit glyph body (`pm32.bin` plus the far return) | 309 | yes | yes | selector 18h, only while PE is clear |
+| DATA | 220 | yes | yes | near `DS` |
+| BSS | 7011 | yes | yes | near `DS` |
+| glyph arena inside BSS | 2176 | yes | yes | `font_draw`, then the bank walker or the 32-bit walker |
+| slot tables inside BSS | 260 | yes | yes | the same real-mode lookup |
+| glyph scratch inside BSS | 624 | yes | yes | real-mode staging before either painter |
+| planar scratch inside BSS | 1296 | yes | yes | planar draw and scroll, real mode |
+| status bitmaps inside BSS | 1680 | yes | yes | real-mode status line |
+| `font_custom` inside BSS | 256 | yes | yes | real-mode font check |
+| mouse glyph temps inside BSS | 404 | yes | yes | real-mode cursor |
+| `text_transfer` | 8192 | no | yes | real-mode text snapshot and font bounce |
+| `INIT_TEXT` | 4497 | no | no | install only |
+
+BSS rows above share the 7011. The rest of that 7011 is scalars and the
+four-font catalog. `_TEXT` minus the shadow and the stack is instructions
+and small tables. The bank dispatcher and window painter, from
+`choose_bank_paint` through `bank_span`, are 1096 bytes of that code.
+They run with PE clear or with PE already set. The 309-byte 32-bit body
+is the only paint code that runs exclusively inside the short CR0 session.
+
+`S_UMB` copies a prefix. Direct color is the shorter prefix, so anything
+it needs is also in the planar image. The 32-bit body has to sit in that
+prefix, or the far jump lands outside the UMB after DOS frees the load
+image. Putting it after `text_transfer` and skipping the hole is not a
+prefix. Two resident layouts would be two binaries.
+
+There is no owned extended heap. The font payload is already in XMS or
+EMS, whichever answered at install, and neither one is required to be
+the other. XMS lock can return a linear address; an EMS-only machine
+has no such lock. INT 15h reports extended memory and does not reserve
+it. Writing that range collides with HIMEM when HIMEM is loaded. The
+framebuffer's `PhysBasePtr` is video memory, and V86 cannot read it
+with the flat selector. The bank path would have to switch the window
+away from the pixel bank to fetch a blob stored there, then switch
+back. That stays on the real-mode path the sparse and V86 cases already
+use, and it does not remove the bytes from a hybrid image that still
+has to carry them for the linear case.
+
+| Move | UMB | COM ceiling | Why it stays |
+| --- | ---: | ---: | --- |
+| 32-bit body to extended RAM | 309 | 309 | No host-free owner. EMS-only install has no XMS lock. V86 never runs the body, but the hybrid image still needs it when PE is clear |
+| Glyph arena to XMS/EMS | 0 | 0 | The bank walker reads a near pointer. A bounce buffer is the arena again |
+| Shadow to extended RAM | 0 | 0 | `text_changed` and `choose_bank_paint` walk it in real mode on every refresh, including V86. 50-row planar needs all 8000 |
+| `text_transfer` to extended RAM | 0 on direct color | 8192 | Already outside the direct-color UMB. Planar paint reads the snapshot while the window covers B800 |
+| Planar scratch aliased onto `text_transfer` | 1296 | 1296 | The snapshot is live for the whole planar paint that also uses the scratch |
+| `INIT_TEXT` in another EXE segment | 0 | 4497 | Already omitted from both UMB stops. The resident piece would still be this tiny image, or the UMB copy would need fixups |
+| Classifier inside the 32-bit body | grows the prefix | grows | The walk runs before either painter, in real mode, so V86 can take the bank path |
+
+No resident shrink from this pass. The link stays `0xFEF1`.
+
 ## Hosts that already own protected mode
 
 The shipping painter does not call VCPI or DPMI, and it does not load
