@@ -156,7 +156,7 @@ def test_msdos_status_page_budget(dosbox_binary, guest_build, msdos_image, tmp_p
               (line.split('=') for line in read('HHBIOS/PRMPERF.TXT').decode().splitlines())}
     (tmp_path/'timings.json').write_text(json.dumps(counts, indent=2)+'\n')
     print(mode, rows, counts)
-    # Real Ctrl+F5 menu paging, status strings and the CKBD title/bitmap writer.
+    # Real Ctrl+F5 menu input, status strings and the CKBD title/bitmap writer.
     # A per-byte repaint of the whole row exceeds these by a wide margin.
     for name, budget in dict(CONTROL_FLIPS_4=12, ASCII_PAGES_4=8, HANZI_PAGES_4=10,
                              CKBD_TITLE_8=12, UNCHANGED_64=2).items():

@@ -21,7 +21,8 @@ def menu_binary(assembler, source_dir, tmp_path_factory, request):
              'D_INKEY', 'D_INT16', 'L_XTK1D', 'S_QTXS', 'S_CXTUX', 'S_SETINT',
              'INT_9', 'D_INT9', 'K_SHIFT', 'K_DEL', 'INT_16', 'D_DEFER',
              'D_PUMP', 'D_IRQ', 'S_FOREGROUND_EXIT', 'S_JRCL', 'D_95D5',
-             'D_KEYCONSUMED', 'D_2BAA', 'D_KBDBUF', 'S_CDKZ')
+             'D_KEYCONSUMED', 'D_2BAA', 'D_KBDBUF', 'S_CDKZ', 'L_XTK1',
+             'K_GBKG')
     # Export addresses for observation, without replacing production code.
     source = source.replace(b'SEG_A ENDS',
                             ('PUBLIC ' + ','.join(names) + '\r\nSEG_A ENDS').encode())
@@ -111,26 +112,44 @@ class KeyboardModule:
         assert self.get('SP') == self.initial['SP'] + len(frame)
 
 
+def menu_line(item):
+    names = ['光标开关', '特显字符串', '简繁切换', '退出汉字', '长城键盘',
+             '联想开关', '直接写屏', '打印字符串', '显示模式', '重绘屏幕',
+             '拼音词组', '字典方式', '重码提示', '常驻提示行']
+    name = names[item - 1].encode('gbk')
+    name += b' ' * (10 - len(name))
+    text = ('系统菜单 '.encode('gbk') + '上一项 '.encode('gbk') + b'[' + name +
+            b'] ' + '下一项 '.encode('gbk') + '执行 '.encode('gbk') +
+            '关闭'.encode('gbk'))
+    text += b' ' * (68 - len(text))
+    text += f'{item:02d}/14'.encode('ascii')
+    return text
+
+
 @pytest.mark.parametrize('keys,selected', [
-    ([0x0231], 1), ([0x0938], 8), ([0x0a39, 0x0534], 4),
-    ([0x4f00, 0x1c0d], 8), ([0x4f00, 0x4700, 0x1c0d], 1),
-    ([0x0f09, 0x1c0d], 2), ([0x4f00, 0x0f09, 0x1c0d], 1),
-    ([0x4900], 0x48), ([0x5100], 0x50), ([0x011b], 0x1b),
+    ([0x1c0d], 1),
+    ([0x4d00, 0x1c0d], 2),
+    ([0x4b00, 0x1c0d], 14),
+    ([0x4d00, 0x4d00, 0x4d00, 0x1c0d], 4),
+    ([0x0231, 0x0938, 0x0f09, 0x4700, 0x4f00, 0x4900, 0x5100, 0x4800, 0x5000,
+      0x1c0d], 1),
+    ([0x011b], 0x1b),
 ])
 def test_control_menu_navigation(menu_binary, keys, selected):
     machine = KeyboardModule(menu_binary)
     queue = list(keys)
+    drawn = bytearray()
     panels = []
     machine.write('D_INT16', struct.pack('<HH', 0xf000, BASE//16))
     machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
-    machine.uc.mem_write(BASE+0xe000, b''.join(
-        f'{i}Option   '.encode() for i in range(1, 9)) + b'\0')
 
     def bios(uc, number, _):
         if number == 0x10:
             assert machine.get('AX') >> 8 == 0x14
             if machine.get('AX') == 0x1417:
-                panels.append((machine.get('BX') & 255, machine.get('DX')))
+                panels.append(machine.get('DX'))
+            elif machine.get('AX') == 0x1403:
+                drawn.append(machine.get('DX') & 255)
         else:
             assert number == 0x60 and queue, 'menu did not accept its key'
             machine.set('AX', queue.pop(0))
@@ -142,8 +161,40 @@ def test_control_menu_navigation(menu_binary, keys, selected):
     machine.call('S_CDKZ')
     assert not queue
     assert machine.get('AX') & 255 == selected
-    assert panels[:8] == [(1, 0x0a00 | slot) for slot in range(8)]
-    assert panels[8] == (2, 0x0a00)
+    assert panels == []
+    assert bytes(drawn).startswith(menu_line(1))
+    if selected != 0x1b:
+        assert menu_line(selected) in bytes(drawn)
+
+
+def test_menu_reaches_cursor_exit_and_resident_row(menu_binary):
+    machine = KeyboardModule(menu_binary)
+    queue = []
+
+    def bios(uc, number, _):
+        if number == 0x10:
+            return
+        assert number == 0x60 and queue, 'menu requested an unexpected key'
+        machine.set('AX', queue.pop(0))
+
+    machine.uc.hook_add(UC_HOOK_INTR, bios)
+    machine.write('D_INT16', struct.pack('<HH', 0xf000, BASE//16))
+    machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
+    machine.set('DS', BASE//16)
+    assert machine.byte('K_GBKG') == 0xff
+    queue.extend([0x1c0d])
+    machine.call('L_XTK1')
+    assert not queue and machine.byte('K_GBKG') == 0
+    machine.set('SP', machine.initial['SP'])
+    queue.extend([0x4d00, 0x4d00, 0x4d00, 0x1c0d, 0x1579])
+    machine.call('L_XTK1')
+    assert not queue and machine.byte('D_EXIT') == 2
+    machine.write('D_EXIT', b'\0')
+    machine.set('SP', machine.initial['SP'])
+    queue.extend([0x4b00, 0x1c0d])
+    machine.call('L_XTK1')
+    assert not queue
+    assert machine.uc.mem_read(BASE + 0xf4, 1) == b'\x02'
 
 
 @pytest.mark.parametrize('toggle', [1, 2, 0x10])

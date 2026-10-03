@@ -1187,15 +1187,19 @@ L_CT1:
 		RET
 
 ;----------------------------------------------------------------------------
-D_XTK1		DB	' 1下一页   2光标     3特显     4简繁    '
-		DB	' 5关中文   6长城键   7联想     8直写屏  ',0
 ;【系统控制-第一页】
 L_XTK1:
-		MOV	SI,OFFSET D_XTK1	;第一页菜单
-		MOV	CX,800H
-		CALL	S_CDKZ			;提示行菜单控制
-		CMP	AL,1BH			;<ESC>
-		JNZ	L_XTK1A
+		CALL	S_CDKZ
+		CMP	AL,1BH
+		JZ	L_XTK1Z
+		CMP	AL,8
+		JB	L_XTK1P
+		SUB	AL,6
+		JMP	L_XTK2A
+L_XTK1P:
+		INC	AL
+		JMP	L_XTK1A
+L_XTK1Z:
 		RET
 
 K_GBKG		DB	0FFH			;光标开关
@@ -1341,21 +1345,14 @@ L_AH18:
 		INT	10H
 		RET
 L_XTK1H:
-		JMP	SHORT L_XTK2
+		RET
 
 ;----------------------------------------------------------------------------
-D_XTK2		DB	' 1上一页   2打印字   3模式名   4重绘屏  '
-		DB	' 5拼音词   6字典     7重码     8常驻栏  ',0
 D_DK		DB	'打开',0
 D_GB		DB	'关闭',0
 D_DYZF		DB	'打印字符串:',0
 ;【系统控制-第二页】
 L_XTK2:
-		MOV	SI,OFFSET D_XTK2	;第二页菜单
-		MOV	CX,800H
-		CALL	S_CDKZ			;提示行菜单控制
-		CMP	AL,1BH			;<ESC>
-		JNZ	L_XTK2A
 		RET
 
 L_XTK2A:
@@ -2478,91 +2475,8 @@ D_QT	DB	255,128,128,159,177,129,131,134,140,152,176,177,191,128,128,255
 	DB	255,  1,  1,249,141, 13, 13,121, 13, 13, 13,141,249,  1,  1,255
 
 ;子程序:菜单控制 字符串SI,项数CH,首项位置CL 返回AL=选中项
-S_CDKZ:
-		MOV	DI,SI
-		CALL	S_1400			;清提示行
-		MOV	BL,D_TUX1		;常规文字
-		XOR	DL,DL			;定位
-		CALL	S_A249			;显示
-                CALL    S_MENU_FRAMES
-		MOV	DH,1			;默认号
-L_CD00:
-		CALL	S_A251
-		CALL	S_INT16
-                CALL    S_MENU_KEY 		;键入
-		CMP	AL,1BH			;ESC
-		JZ	L_CD08
-		CMP	AL,0DH			;回车
-		JNZ	L_CD10
-		CALL	S_1404			;关闭提示行
-		MOV	AL,DH			;选中项号
-		RET
-L_CD08:
-		CALL	S_1404			;关闭提示行
-		MOV	AL,1BH			;ESC
-		RET
-L_CD10:
-		CMP	AH,4DH			;→
-		JNZ	L_CD20
-		CALL	S_A250			;清原显示
-		CMP	DH,CH			;已到最大号?
-		JZ	L_CD11
-		INC	DH			;增1
-		JMP	SHORT L_CD00
-L_CD11:
-		MOV	DH,1			;置1
-		JMP	SHORT L_CD00
-L_CD20:
-		CMP	AH,4BH			;←
-		JNZ	L_CD30
-		CALL	S_A250			;清原显示
-		CMP	DH,1			;判=1?
-		JZ	L_CD21
-		DEC	DH			;减1
-		JMP	SHORT L_CD00
-L_CD21:
-		MOV	DH,CH			;置最大号
-		JMP	SHORT L_CD00
-L_CD30:
-		CMP	AH,48H			;↑
-		JZ	L_CD33
-		CMP	AH,50H			;↓
-		JNZ	L_CD00
-L_CD33:
-		MOV	AL,AH
-		RET
-
 ;子程序:定位显示字符串SI
                 INCLUDE STATUSKEY.INC
-S_A250:
-                MOV     BH,1
-		MOV	BL,D_TUX1		;常规文字
-		JMP	SHORT L_A252
-S_A251:
-                MOV     BH,2
-		MOV	BL,D_QTS1		;选中项颜色
-L_A252:
-		PUSH	CX
-		MOV	AL,10
-		MUL	DH
-		SUB	AX,10
-		MOV	SI,DI
-		ADD	SI,AX
-		XOR	CH,CH
-		ADD	SI,CX
-		MOV	DL,CL
-		ADD	DL,AL
-		CALL	S_1402			;定位
-		MOV	CX,9
-L_A253:
-		LODSB				;取一字符
-		CALL	S_1403A 		;显示
-		LOOP	L_A253
-                CALL    S_MENU_FRAME
-		CALL	S_A24E			;8.7
-		POP	CX
-		RET
-
 ;子程序:调原INT16取键入字符
 S_INT16_1:
 		MOV	AH,11H

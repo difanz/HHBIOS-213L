@@ -56,16 +56,13 @@ def operate_menu(keyboard, process):
                 client.sendall(b'\xa5')
                 time.sleep(.15)
                 press(keyboard, 'Control_L+F5')
-                if step == 0:
-                    press(keyboard, 'Next')
-                    if keyboard.screenshots:
-                        keyboard.capture(f'menu-page2-{cycle}')
-                    press(keyboard, 'Prior')
-                    if keyboard.screenshots:
-                        keyboard.capture(f'menu-page1-{cycle}')
-                keys = (['End', 'Home', 'Tab', 'Right', 'Right', 'Right', 'Return']
-                        if step == 0 else ['5'])
-                for key in keys:
+                if step == 0 and keyboard.screenshots:
+                    keyboard.capture(f'menu-open-{cycle}')
+                press(keyboard, 'Right')
+                if step == 0 and keyboard.screenshots:
+                    keyboard.capture(f'menu-selected-{cycle}')
+                # The extra Rights land on 退出汉字, the exit confirmation.
+                for key in ('Right', 'Right', 'Return'):
                     press(keyboard, key)
                 time.sleep(1)
                 if keyboard.screenshots:
