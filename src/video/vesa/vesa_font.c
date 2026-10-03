@@ -7,8 +7,8 @@
 #define FONT_MAP_BYTES (FONT_SLOTS * 4UL)
 #define FONT_RECORD 70U
 #define FONT_MAP_CACHE 64U
-/* 32 slots cover a 26-glyph alphabet plus a few misses. The arena, not
- * the slot count, is what decides whether those records stay resident. */
+/* 28 slots. A 26-glyph alphabet stays resident; the arena size, not the
+ * slot count, is what keeps those records from being evicted. */
 #define FONT_CACHE 28U
 
 enum {
@@ -53,8 +53,7 @@ static u8 valid[FONT_CACHE];
 static u8 lookup[64];
 static u16 map_page = 0xffff;
 /* The first 128 bytes cache record IDs. Variable-sized glyphs use the rest.
- * 2096 leaves 1968 bytes after the map: 28 HH20 records (1960) and 8 spare.
- * The bytes freed here pay for the install-time EMS check in the COM image. */
+ * 2096 leaves 1968 bytes after the map: 28 HH20 records (1960) and 8 spare. */
 static u8 cache[2096];
 /* One object: a 24x64 record is 384 bytes and is staged at large_glyph,
  * continuing into doubled_glyph. DrawLargeHalf uses the second half only
@@ -305,7 +304,8 @@ static u8* LoadGlyph(u16 code) {
           count = FONT_MAP_CACHE;
         }
         map_page = 0xffff;
-        if (!TransferFontBytes(glyph_storage + (u32)page * 2, cache, count * 2, 0)) {
+        if (!TransferFontBytes(glyph_storage + (u32)page * 2, cache, count * 2,
+                               0)) {
           font_fault = 1;
           return 0;
         }
@@ -314,7 +314,8 @@ static u8* LoadGlyph(u16 code) {
       record_index = ((u16*)cache)[slot - map_page];
       if (record_index >= record_count ||
           !TransferFontBytes(
-              glyph_storage + FONT_MAP_BYTES + MultiplyWide(record_index, record_bytes),
+              glyph_storage + FONT_MAP_BYTES +
+                  MultiplyWide(record_index, record_bytes),
               glyph_data, record_bytes, 0)) {
         font_fault = 1;
         return 0;
@@ -709,7 +710,8 @@ static int ReadFontInfo(const char* name, struct FontCandidate* candidate) {
   regs.cx = 32;
   regs.dx = (u16)text_transfer;
   font_service(0, &regs);
-  if (!(regs.flags & 1) && regs.ax == 32 && DecodeFontFile(text_transfer, &info)) {
+  if (!(regs.flags & 1) && regs.ax == 32 &&
+      DecodeFontFile(text_transfer, &info)) {
     regs.ax = 0x4202;
     regs.bx = file;
     regs.cx = regs.dx = 0;
@@ -867,7 +869,8 @@ static u16 ChooseFiles(struct FontCandidate* files) {
   return count;
 }
 
-static int LoadFontFile(const struct FontCandidate* candidate, u32 destination) {
+static int LoadFontFile(const struct FontCandidate* candidate,
+                        u32 destination) {
   struct BiosRegisters bios_registers;
   FontFileInfo info;
   u16 file;
@@ -887,7 +890,8 @@ static int LoadFontFile(const struct FontCandidate* candidate, u32 destination) 
   if ((bios_registers.flags & 1) || bios_registers.ax != 32 ||
       !DecodeFontFile(text_transfer, &info) ||
       info.format != candidate->info.format ||
-      info.width != candidate->info.width || info.height != candidate->info.height ||
+      info.width != candidate->info.width ||
+      info.height != candidate->info.height ||
       info.payload_bytes != length) {
     goto done;
   }

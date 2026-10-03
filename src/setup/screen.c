@@ -29,14 +29,16 @@ static char far text_pool[16384];
 static unsigned text_used;
 static unsigned text_count;
 enum { kTextStringCount = 256 };
-static const char *source_text[kTextStringCount], *encoded_text[kTextStringCount];
+static const char* source_text[kTextStringCount];
+static const char* encoded_text[kTextStringCount];
 
 const char* EncodeScreenText(const char* text) {
   unsigned i;
   unsigned code;
   unsigned slot;
   const unsigned char* source = (const unsigned char*)text;
-  char *encoded, *encoded_start;
+  char* encoded;
+  char* encoded_start;
   for (i = 0; i < text_count; ++i) {
     if (source_text[i] == text) {
       return encoded_text[i];

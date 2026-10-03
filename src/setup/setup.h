@@ -123,7 +123,8 @@ typedef struct SetupChoices {
   unsigned print_memory; /* 0: automatic XMS/EMS, 1: XMS, 2: EMS */
   unsigned printer_flags; /* PRNT's /1 through /5 switches. */
   unsigned vector_access; /* READSL: 0/1 file access, 2 sector access. */
-  char print_files[3][4][128]; /* Bitmap sizes, then faces; empty aliases face 0. */
+  /* Bitmap sizes, then faces; empty aliases face 0. */
+  char print_files[3][4][128];
 } SetupChoices;
 enum {
   kIniDisplay = 0,

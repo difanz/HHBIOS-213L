@@ -14,6 +14,7 @@ typedef struct FontLayout {
 int FitFont(const FontFileInfo* font, unsigned short width,
             unsigned short height, unsigned short rows, FontLayout* layout);
 int BetterFont(const FontFileInfo* candidate, const FontFileInfo* current,
-               unsigned short width, unsigned short height, unsigned short rows);
+               unsigned short width, unsigned short height,
+               unsigned short rows);
 
 #endif

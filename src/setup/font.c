@@ -113,7 +113,8 @@ const DisplayFont* SelectedDisplayFont(const MachineCapabilities* machine,
   unsigned number = SelectedVbeMode(choices);
   const DisplayMode* mode = FindDisplayMode(machine, number);
   if (mode) {
-    return ChooseFont(files, mode->width, mode->height, choices->rows, mode->banked);
+    return ChooseFont(files, mode->width, mode->height, choices->rows,
+                      mode->banked);
   }
   /* Older BIOS probes report only the standard mode bitmap. */
   switch (number) {

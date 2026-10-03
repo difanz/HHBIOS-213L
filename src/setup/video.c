@@ -207,7 +207,8 @@ static void VideoChanged(a_dialog* dialog, void* data) {
       uiupdatelistbox(&video->rows);
     }
   }
-  video->draft.rows = video->height_count ? video->heights[video->rows.choice] : 25;
+  video->draft.rows =
+      video->height_count ? video->heights[video->rows.choice] : 25;
   memset(video->detail, 0, sizeof(video->detail));
   const DisplayFont* font =
       SelectedDisplayFont(video->machine, video->files, &video->draft);

@@ -225,7 +225,8 @@ static void ColorChanged(a_dialog* dialog, void* data) {
     }
   }
   PaintColorPreview(dialog, 19, 2, 54,
-                    (colors->background.choice << 4) | colors->foreground.choice);
+                    (colors->background.choice << 4) |
+                        colors->foreground.choice);
 }
 
 static unsigned SelectColor(unsigned attribute) {

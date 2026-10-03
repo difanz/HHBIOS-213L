@@ -93,7 +93,8 @@ static void DescribeMonitor(char* out) {
   }
 }
 
-static int ReadConfigurationFile(const char* name, char* out, unsigned capacity) {
+static int ReadConfigurationFile(const char* name, char* out,
+                                 unsigned capacity) {
   FILE* file = fopen(name, "rb");
   unsigned byte_count;
   out[0] = 0;
@@ -733,7 +734,8 @@ int main(int argc, char** argv) {
     return error ? 1 : 0;
   }
   console_cursor = ConsoleCursorShape();
-  ConfigureScreen(!machine.loaded && language != 0 && machine.adapter == kAdapterVga);
+  ConfigureScreen(!machine.loaded && language != 0 &&
+                  machine.adapter == kAdapterVga);
   ConfigureResidentText(machine.loaded != 0);
   if (!uiinit(INIT_MOUSE_INITIALIZED)) {
     puts("Cannot initialize the DOS user interface.");

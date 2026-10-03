@@ -363,7 +363,9 @@ int ReadModuleChoices(const char* batch, SetupChoices* choices) {
   memset(parsed.print_files, 0, sizeof(parsed.print_files));
   while (*line && *line != '\x1a') {
     char text[256];
-    char *cursor, *command, *argument;
+    char* cursor;
+    char* command;
+    char* argument;
     unsigned length = (unsigned)strcspn(line, "\r\n\x1a");
     unsigned count = 0, number = 0;
     unsigned font_memory = 0;

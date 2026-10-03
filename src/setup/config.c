@@ -118,7 +118,8 @@ const char* ValidateConfiguration(const MachineCapabilities* machine,
     return "READ5 needs a free 256 KiB XMS block.";
   }
   if (choices->font == kFontEms &&
-      (machine->ems_version < 0x40 || (!machine->loaded && machine->ems_pages < 16) ||
+      (machine->ems_version < 0x40 ||
+       (!machine->loaded && machine->ems_pages < 16) ||
        !machine->ems_frame)) {
     return "READ4 needs EMS 4.0, a page frame and 16 free pages.";
   }
@@ -264,7 +265,8 @@ int MakeBatch(const char* path, const SetupChoices* choices, char* out) {
   unsigned mode = SelectedVbeMode(choices);
   if (!IsSafeDirectory(path) || choices->font >= kFontCount ||
       choices->video >= kVideoCount || choices->low > 1 ||
-      choices->paired > 1 || choices->ime > 15 || !TextRowsMask(choices->rows) ||
+      choices->paired > 1 || choices->ime > 15 ||
+      !TextRowsMask(choices->rows) ||
       !ValidModuleChoices(choices) ||
       (!mode && choices->rows > 25) ||
       (choices->video == kVideoDetected && (mode < 0x100 || mode > 0x3fff))) {
@@ -361,7 +363,8 @@ int MakeIni(const char* original, const IniSettings* settings, char* out) {
   unsigned i;
   IniSettings previous;
   char* line_cursor = out;
-  const char *line = original, *end;
+  const char* line = original;
+  const char* end;
   if (!ReadIni(original, &previous)) {
     return 0;
   }
@@ -467,7 +470,8 @@ int SetGreatWallMode(IniSettings* settings, unsigned enabled) {
   }
   for (i = 1; i <= 6; ++i) {
     for (j = 0; j < kFunctionKeyCount; ++j) {
-      if (j != i && updated.value[kIniKeys + i] == updated.value[kIniKeys + j]) {
+      if (j != i &&
+          updated.value[kIniKeys + i] == updated.value[kIniKeys + j]) {
         return 0;
       }
     }

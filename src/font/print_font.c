@@ -432,7 +432,8 @@ FontWord FONT_CALL InitializePrintFonts(void) {
   registers.bx = PrintSegment;
   PrintService(1, &registers);
   if (registers.dx != 0x4a06 || registers.ax > 1) {
-    Message("Update the HHBIOS display font reader before loading printing fonts.\r\n$");
+    Message("Update the HHBIOS display font reader before loading "
+            "printing fonts.\r\n$");
     return 0;
   }
   for (i = 0; i < 4; ++i) {

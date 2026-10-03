@@ -23,7 +23,8 @@ int TextRowShifted(const TextByte* previous, const TextWord TEXT_FAR* current,
 #pragma aux TextIsFrame \
     "TextIsFrame" parm[es bx][dx][cx] value[ax] modify[ax bx cx dx si di];
 #pragma aux TextHasHorizontalJoin \
-    "TextHasHorizontalJoin" parm[es bx][dx][cx] value[ax] modify[ax bx cx dx si di];
+    "TextHasHorizontalJoin" parm[es bx][dx][cx] value[ax] \
+    modify[ax bx cx dx si di];
 #pragma aux TextRowSame \
     "TextRowSame" parm[si][es bx] value[ax] modify[ax bx cx dx si di];
 #pragma aux TextRowShifted "TextRowShifted" parm[si][es bx][dx] \

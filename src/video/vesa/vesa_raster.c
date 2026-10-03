@@ -151,7 +151,8 @@ static u16 SelectGlyphPlanes(u16 plane, u16 attribute, u16 whole_bytes) {
 }
 
 /* Emit packed rows directly from the font cache or the shifted-row scratch.
- * Split only at window boundaries; a scanline crossing one needs byte stores. */
+ * Split only at window boundaries; a scanline crossing one needs byte
+ * stores. */
 static void DrawPackedRows(const u8* source, u16 source_pitch, u16 attribute,
                            u16 x, u16 y, u16 bytes, const u8* masks) {
   u32 offset = MultiplyWide(y, display_pitch) + x / 8;
@@ -172,7 +173,8 @@ static void DrawPackedRows(const u8* source, u16 source_pitch, u16 attribute,
         for (plane = 0; plane < 4; ++plane) {
           u8 foreground = (attribute & (1 << plane)) ? 255 : 0;
           u8 background = (attribute & (16 << plane)) ? 255 : 0;
-          u8 value = (source[byte_index] & (foreground ^ background)) ^ background;
+          u8 value = (source[byte_index] & (foreground ^ background)) ^
+                     background;
           if (SelectGlyphPlanes(plane, attribute, masks[byte_index] == 255)) {
             *destination = (*destination & ~masks[byte_index]) |
                            (value & masks[byte_index]);

@@ -23,7 +23,8 @@ int FitFont(const FontFileInfo* font, unsigned short width,
   layout->scale = 1;
   layout->height = height >= font->height * (rows + 1) ? font->height : body;
   for (scale = 2; scale <= 4 && width >= 80U * font->width * scale; ++scale) {
-    cell_height = height >= font->height * (rows + 1) * scale ? font->height : body;
+    cell_height =
+        height >= font->height * (rows + 1) * scale ? font->height : body;
     if (height >= cell_height * (rows + 1) * scale) {
       layout->scale = scale;
       layout->height = cell_height;
@@ -35,7 +36,8 @@ int FitFont(const FontFileInfo* font, unsigned short width,
 }
 
 int BetterFont(const FontFileInfo* candidate, const FontFileInfo* current,
-               unsigned short width, unsigned short height, unsigned short rows) {
+               unsigned short width, unsigned short height,
+               unsigned short rows) {
   FontLayout proposed;
   FontLayout previous;
   if (!FitFont(candidate, width, height, rows, &proposed)) {

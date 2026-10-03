@@ -134,8 +134,10 @@ int DecodeVbeModeInfo(struct VbeSurface* output, const u8* mode_info,
   return 1;
 }
 
-static int PlanarConsole(const struct VbeSurface* surface, const u8* mode_info) {
-  /* The banked rasterizer admits 64 KiB VGA windows with integral bank steps. */
+static int PlanarConsole(const struct VbeSurface* surface,
+                         const u8* mode_info) {
+  /* The banked rasterizer admits 64 KiB VGA windows with integral bank
+   * steps. */
   return !(ReadLittleEndianWord(mode_info) & 0x60) && surface->width >= 800 &&
          surface->height >= 600 && surface->width <= 4096 &&
          surface->height <= 2160 && surface->pitch && surface->pitch <= 512 &&
@@ -576,7 +578,8 @@ static int IsSavedSurfaceValid(const struct VbeSurface* saved, u16 rows) {
   }
   return saved->width >= 800 && saved->width <= 4096 && saved->height >= 600 &&
          saved->height <= 2160 && saved->pitch >= (saved->width + 7) / 8 &&
-         saved->pitch <= 512 && !(saved->pitch & 1) && saved->segment == 0xa000 &&
+         saved->pitch <= 512 && !(saved->pitch & 1) &&
+         saved->segment == 0xa000 &&
          saved->window_kb == 64 && saved->granularity_kb &&
          saved->granularity_kb <= 64 && !(64 % saved->granularity_kb) &&
          saved->window < 2 && saved->format == FORMAT_PLANAR4 &&
@@ -1523,7 +1526,8 @@ u16 CALL dispatch(void) {
   }
   if (function == 0x14 && subfunction == 24) {
     /* DX:AX is the bytes written to the linear map since the previous reset.
-     * CX=1 clears the counter after reporting it. Planar draws leave it zero. */
+     * CX=1 clears the counter after reporting it. Planar draws leave it
+     * zero. */
     request.ax = (u16)lfb_bytes;
     request.dx = (u16)(lfb_bytes >> 16);
     request.bx = linear_color;
