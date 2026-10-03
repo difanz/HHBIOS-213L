@@ -117,8 +117,8 @@ static int Capture(const char* name) {
   for (plane = 0; plane < 4; ++plane) {
     for (offset = 0; offset < plane_bytes; offset += count) {
       count = plane_bytes - offset < sizeof(buffer)
-                  ? (unsigned)(plane_bytes - offset)
-                  : sizeof(buffer);
+          ? (unsigned)(plane_bytes - offset)
+          : sizeof(buffer);
       memset(&r, 0, sizeof(r));
       r.x.ax = 0x1414;
       r.x.bx = plane;

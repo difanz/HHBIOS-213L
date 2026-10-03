@@ -9,7 +9,9 @@ int main(int argc, char** argv) {
   union REGPACK registers;
   FILE* output;
   unsigned vector, kind, segment, offset;
-  if (argc != 2) return 1;
+  if (argc != 2) {
+    return 1;
+  }
   if (!strcmp(argv[1], "fallback")) {
     /* Model a printer-owned default glyph handler without private offsets. */
     _dos_setvect(0x7c, _dos_getvect(0x17));
@@ -24,9 +26,11 @@ int main(int argc, char** argv) {
     return 0;
   }
   output = fopen(argv[1], "w");
-  if (output == NULL) return 2;
+  if (output == NULL) {
+    return 2;
+  }
   for (vector = 0x7a; vector <= 0x7f; ++vector) {
-    void (__interrupt __far* handler)(void) = _dos_getvect(vector);
+    void(__interrupt __far * handler)(void) = _dos_getvect(vector);
     segment = FP_SEG(handler);
     offset = FP_OFF(handler);
     for (kind = 0; kind <= 2; ++kind) {
@@ -41,12 +45,13 @@ int main(int argc, char** argv) {
       intr(0x2f, &registers);
       if (registers.x.bx != segment || registers.x.cx != 0x1234 ||
           registers.x.bp != 0x5678 || registers.x.es != 0x1357 ||
-          registers.x.ds != 0 || registers.x.si != 4 || registers.x.di != kind) {
+          registers.x.ds != 0 || registers.x.si != 4 ||
+          registers.x.di != kind) {
         fclose(output);
         return 3;
       }
-      fprintf(output, "%X %X %X %u %u %X\n", vector, segment, offset,
-              kind, registers.x.ax, registers.x.dx);
+      fprintf(output, "%X %X %X %u %u %X\n", vector, segment, offset, kind,
+              registers.x.ax, registers.x.dx);
     }
   }
   return fclose(output) == 0 ? 0 : 4;

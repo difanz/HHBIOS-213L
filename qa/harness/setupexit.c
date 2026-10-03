@@ -20,7 +20,9 @@ static int Capture(const char* filename) {
   values[0] = registers.x.ax;
   values[1] = *(unsigned __far*)MK_FP(0x40, 0x4a);
   values[2] = *(unsigned char __far*)MK_FP(0x40, 0x84) + 1;
-  if (values[2] < 25) values[2] = 25;
+  if (values[2] < 25) {
+    values[2] = 25;
+  }
   values[3] = registers.x.bx >> 8;
   registers.x.ax = 0x0300;
   intr(0x10, &registers);
@@ -53,14 +55,21 @@ static int Capture(const char* filename) {
     }
   }
   output = fopen(filename, "wb");
-  if (output == NULL) return 1;
-  if (fwrite(values, sizeof(values), 1, output) != 1) goto failed;
+  if (output == NULL) {
+    return 1;
+  }
+  if (fwrite(values, sizeof(values), 1, output) != 1) {
+    goto failed;
+  }
   remaining = values[1] * values[2] * 2;
   offset = *(unsigned __far*)MK_FP(0x40, 0x4e);
   while (remaining) {
     count = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
-    _fmemcpy(buffer, MK_FP((values[0] & 127) == 7 ? 0xb000 : 0xb800, offset), count);
-    if (fwrite(buffer, 1, count, output) != count) goto failed;
+    _fmemcpy(buffer, MK_FP((values[0] & 127) == 7 ? 0xb000 : 0xb800, offset),
+             count);
+    if (fwrite(buffer, 1, count, output) != count) {
+      goto failed;
+    }
     offset += count;
     remaining -= count;
   }
@@ -68,8 +77,9 @@ static int Capture(const char* filename) {
     pixels = (unsigned long)values[10] * values[9];
     for (plane = 0; plane < 4; ++plane) {
       for (position = 0; position < pixels; position += count) {
-        count = pixels - position < sizeof(buffer) ?
-                    (unsigned)(pixels - position) : sizeof(buffer);
+        count = pixels - position < sizeof(buffer)
+            ? (unsigned)(pixels - position)
+            : sizeof(buffer);
         memset(&registers, 0, sizeof(registers));
         registers.x.ax = 0x1414;
         registers.x.bx = plane;
@@ -79,7 +89,9 @@ static int Capture(const char* filename) {
         registers.x.es = FP_SEG(buffer);
         registers.x.di = FP_OFF(buffer);
         intr(0x10, &registers);
-        if (registers.x.ax || fwrite(buffer, 1, count, output) != count) goto failed;
+        if (registers.x.ax || fwrite(buffer, 1, count, output) != count) {
+          goto failed;
+        }
       }
     }
   }
@@ -91,9 +103,13 @@ failed:
 
 int main(int argc, char** argv) {
   int status;
-  if (Capture("BEFORE.BIN")) return 1;
-  status = spawnl(P_WAIT, "SETUP.EXE", "SETUP.EXE",
-                  argc > 1 ? argv[1] : "/EN", NULL);
-  if (status != 0) return 2;
+  if (Capture("BEFORE.BIN")) {
+    return 1;
+  }
+  status = spawnl(P_WAIT, "SETUP.EXE", "SETUP.EXE", argc > 1 ? argv[1] : "/EN",
+                  NULL);
+  if (status != 0) {
+    return 2;
+  }
   return Capture("AFTER.BIN");
 }

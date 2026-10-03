@@ -40,18 +40,28 @@ static unsigned g_last_key;
 
 static int CheckMenu(const char* mode) {
   union REGPACK regs;
-  if (!ReaderInstalled()) return 1;
+  if (!ReaderInstalled()) {
+    return 1;
+  }
   for (g_step = 0; g_step < 5; ++g_step) {
-    if (hostrequest(0x7000 + g_step)) return 2;
+    if (hostrequest(0x7000 + g_step)) {
+      return 2;
+    }
     /* Only the host's final sentinel may reach the foreground program. */
     g_last_key = ReadKey(mode);
-    if (g_last_key != '.') return 3;
-    if (ReaderInstalled() != (g_step < 4)) return 4;
+    if (g_last_key != '.') {
+      return 3;
+    }
+    if (ReaderInstalled() != (g_step < 4)) {
+      return 4;
+    }
   }
   regs.h.ah = 0x0f;
   intr(0x10, &regs);
   /* BIOS may retain the mode-set "do not clear" flag in AL bit 7. */
-  if ((regs.h.al & 0x7f) != 3 && (regs.h.al & 0x7f) != 7) return 5;
+  if ((regs.h.al & 0x7f) != 3 && (regs.h.al & 0x7f) != 7) {
+    return 5;
+  }
   puts("Keyboard menu completed; foreground program resumed.");
   return 0;
 }

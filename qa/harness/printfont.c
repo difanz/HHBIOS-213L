@@ -77,7 +77,8 @@ int main(void) {
   if (fwrite("HHPRINT1", 1, 8, output) != 8) {
     result = 5;
   }
-  while (!result && (length = fread(&request, 1, sizeof(request), input)) != 0) {
+  while (!result &&
+         (length = fread(&request, 1, sizeof(request), input)) != 0) {
     if (length != sizeof(request)) {
       result = 6;
     } else {

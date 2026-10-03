@@ -52,9 +52,13 @@ static int ControlMenu(void) {
   /* The saved BIOS handler consumes these keys inside CKBD's real menu.
    * Leave a sentinel for the foreground reader after Escape. */
   for (page = 0; page < 4; ++page) {
-    if (!QueueKey(page & 1 ? 0x4800 : 0x5000)) return 0;
+    if (!QueueKey(page & 1 ? 0x4800 : 0x5000)) {
+      return 0;
+    }
   }
-  if (!QueueKey(0x011b) || !QueueKey(0x342e)) return 0;
+  if (!QueueKey(0x011b) || !QueueKey(0x342e)) {
+    return 0;
+  }
   memset(&registers, 0, sizeof(registers));
   registers.w.ax = 0x2162; /* CKBD: execute the Ctrl+F5 function. */
   intr(0x16, &registers);
@@ -68,7 +72,9 @@ int main(void) {
   unsigned page;
   unsigned long start;
   union REGPACK registers;
-  if (!output) return 1;
+  if (!output) {
+    return 1;
+  }
   start = *ticks;
   if (!ControlMenu()) {
     fclose(output);
@@ -78,11 +84,15 @@ int main(void) {
   Video(5, 0x1e, 0);
   Page(0, 0);
   start = *ticks;
-  for (page = 0; page < 4; ++page) Page(page, 0);
+  for (page = 0; page < 4; ++page) {
+    Page(page, 0);
+  }
   Result(output, "ASCII_PAGES_4", start);
   Page(0, 1);
   start = *ticks;
-  for (page = 0; page < 4; ++page) Page(page, 1);
+  for (page = 0; page < 4; ++page) {
+    Page(page, 1);
+  }
   Result(output, "HANZI_PAGES_4", start);
   start = *ticks;
   for (page = 0; page < 8; ++page) {

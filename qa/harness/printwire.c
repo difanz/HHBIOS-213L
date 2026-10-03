@@ -18,7 +18,7 @@ static void PrintByte(unsigned value) {
 }
 
 int main(void) {
-  void (__interrupt __far* original)(void) = _dos_getvect(0x17);
+  void(__interrupt __far * original)(void) = _dos_getvect(0x17);
   static const char* filenames[] = {"PRN24.BIN", "PRN32.BIN", "PRN40.BIN"};
   static const char styles[] = {'A', 'u', 'U'};
   union REGPACK registers;
@@ -29,22 +29,38 @@ int main(void) {
   result = spawnl(P_WAIT, "PRNT.COM", "PRNT.COM", "5", NULL);
   printf("PRNT status=%d errno=%d\n", result, errno);
   /* DOS reports termination type 3 when the child stays resident. */
-  if (result < 0 || (result & 255) != 0) return 1;
+  if (result < 0 || (result & 255) != 0) {
+    return 1;
+  }
   result = 0;
   memset(&registers, 0, sizeof(registers));
   registers.x.ax = 0xffff;
   intr(0x17, &registers);
   printf("PRNT signature=%04X\n", registers.x.ax);
-  if (registers.x.ax != 0xded0) return 2;
+  if (registers.x.ax != 0xded0) {
+    return 2;
+  }
   for (i = 0; i < 3; ++i) {
     PrintCount = 0;
-    PrintByte(27); PrintByte('I'); PrintByte(styles[i]);
-    PrintByte(0xd6); PrintByte(0xd0); PrintByte('A');
-    PrintByte(13); PrintByte(10);
+    PrintByte(27);
+    PrintByte('I');
+    PrintByte(styles[i]);
+    PrintByte(0xd6);
+    PrintByte(0xd0);
+    PrintByte('A');
+    PrintByte(13);
+    PrintByte(10);
     output = fopen(filenames[i], "wb");
-    if (output == NULL) { result = 3; break; }
-    if (fwrite(PrintBytes, 1, PrintCount, output) != PrintCount) result = 3;
-    if (fclose(output) != 0) result = 3;
+    if (output == NULL) {
+      result = 3;
+      break;
+    }
+    if (fwrite(PrintBytes, 1, PrintCount, output) != PrintCount) {
+      result = 3;
+    }
+    if (fclose(output) != 0) {
+      result = 3;
+    }
   }
   registers.x.ax = 0x4a06;
   registers.x.si = 0;

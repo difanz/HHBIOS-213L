@@ -19,8 +19,8 @@ static void Video(unsigned ax, unsigned bx, unsigned cx, unsigned dx) {
 }
 
 static void Repaint(unsigned rows, unsigned frame, int chinese) {
-  static const unsigned codes[] = {
-      0xd6d0, 0xb9fa, 0xbaba, 0xd7d6, 0xcfb5, 0xcdb3, 0xb2e2, 0xcad4};
+  static const unsigned codes[] = {0xd6d0, 0xb9fa, 0xbaba, 0xd7d6,
+                                   0xcfb5, 0xcdb3, 0xb2e2, 0xcad4};
   unsigned cell;
   unsigned code;
   unsigned attribute = (frame & 1) ? 0x1e00 : 0x2f00;

@@ -39,8 +39,7 @@ int main(void) {
       return 4;
     }
     start = *ticks;
-    while ((unsigned long)(*ticks - start) < 4) {
-    }
+    while ((unsigned long)(*ticks - start) < 4) {}
     CallMouse(3, 0, 0);
     fprintf(trace_file, "%u %u %u ", step, mouse_registers.x.cx,
             mouse_registers.x.dx);
