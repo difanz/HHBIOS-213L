@@ -159,11 +159,11 @@ the classifier do touch it.
 
 | Region | Bytes | Direct-color UMB | Planar UMB | Who addresses it |
 | --- | ---: | --- | --- | --- |
-| `_TEXT` | 45334 | yes | yes | INT 10h, INT 08h, INT 33h, INT 2Fh |
+| `_TEXT` | 45336 | yes | yes | INT 10h, INT 08h, INT 33h, INT 2Fh |
 | shadow inside `_TEXT` | 8000 | yes | yes | real-mode compare, every refresh, including V86 |
 | stack inside `_TEXT` | 1042 | yes | yes | those hooks and `RestoreSurface` |
 | 32-bit glyph body (`pm32.bin` plus the far return) | 309 | yes | yes | selector 18h, only while PE is clear |
-| DATA | 220 | yes | yes | near `DS` |
+| DATA | 132 | yes | yes | near `DS` |
 | BSS | 6931 | yes | yes | near `DS` |
 | glyph arena inside BSS | 2096 | yes | yes | `font_draw`, then the bank walker or the 32-bit walker |
 | slot tables inside BSS | 260 | yes | yes | the same real-mode lookup |
@@ -173,7 +173,7 @@ the classifier do touch it.
 | `font_custom` inside BSS | 256 | yes | yes | real-mode font check |
 | mouse glyph temps inside BSS | 404 | yes | yes | real-mode cursor |
 | `text_transfer` | 8192 | no | yes | real-mode text snapshot and font bounce |
-| `INIT_TEXT` | 4497 | no | no | install only |
+| `INIT_TEXT` | 4583 | no | no | install only |
 
 BSS rows above share the 6931. The rest of that 6931 is scalars and the
 four-font catalog. `_TEXT` minus the shadow and the stack is instructions
@@ -353,15 +353,84 @@ a reason to move the 2096-byte pin.
 5. Do not take an XMS lock on the banked path. A lock is only a
    short-PE address, and V86 never takes that path.
 
-`text_transfer` (8192) is already outside the direct-color UMB. On
-planar 43/50 rows it is in the prefix because the snapshot is read
-while the window covers B800. Pointing that buffer at a mapped EMS
-page has the same aperture collision. `font_text` already moves 4 KiB
-chunks through it with `AH=0Bh` or `AH=57h`. The shadow (8000) is
-walked on every refresh, including the timer hook, so it stays last
-and conventional. The bank painter, the hooks, the 1040-byte stack,
-and the 309-byte 32-bit body stay in the prefix. `/AF` is unchanged:
-the flag defaults off and no accelerator entry is called.
+`text_transfer` (8192) is already outside the direct-color UMB. The
+ranking below is why it still cannot leave the planar image. `/AF` is
+unchanged: the flag defaults off and no accelerator entry is called.
+
+## What else is still conventional
+
+Direct color and planar 43/50 rows are two stops in one prefix, not two
+programs. `S_UMB` copies from offset 0 through `resident_end` or through
+`image_end`. A hole cannot be skipped. Bytes the direct-color painter
+never reads still sit in its UMB when the planar painter needs them in
+the same file.
+
+| Stop | Offset | Bytes | What DOS is asked to keep |
+| --- | ---: | ---: | --- |
+| Direct color, `resident_end` | `0xCD07` | 52487 | Rounded up to `0xCD10` (52496) |
+| Planar 43/50 rows, `image_end` | `0xED10` | 60688 | Already a paragraph boundary |
+| COM load image | `0xFEF7` | 65271 | File is 65015. Nine bytes under `0xFF00` |
+
+`text_transfer` is the 8192 bytes between `0xCD10` and `0xED10`. It is
+in the COM image and in the planar UMB. It is not in the direct-color
+UMB. `INIT_TEXT` (4583) is in the COM image only.
+
+| Buffer | Bytes | Direct-color UMB | Planar UMB | COM | Decision |
+| --- | ---: | --- | --- | --- | --- |
+| Shadow | 8000 | yes | yes | yes | Stays. `text_changed`, `choose_bank_paint`, and the space fill compare it on every refresh, including the timer |
+| `text_transfer` | 8192 | no | yes | yes | Stays. The keyboard query and `refresh_dirty` retarget `D_B800` at this snapshot and then use near loads. No XMS call fits there |
+| Planar scratch | 1296 | yes | yes | yes | Stays. `raster_large_cell` reads it while `graphics_bank` owns the window. Dead on direct color, but the prefix is shared |
+| Status line (`prompt_bits` and the cells around it) | 1680 | yes | yes | yes | Stays. `RefreshConsole` runs from IRQ0. A bounce would call HIMEM from that tick |
+| Glyph stage (`glyph_buf`) | 624 | yes | yes | yes | Stays. Misses and 24×64 records are staged here before either painter |
+| Glyph arena and slot tables | 2096 + 260 | yes | yes | yes | Stays. Already decided |
+| `font_custom` | 256 | yes | yes | yes | Stays. The classifier tests it per cell. Too small to move |
+| Mouse glyph temps | 404 | yes | yes | yes | Stays. Cursor draw is real mode, on the same lock as paint |
+| Stack | 1042 | yes | yes | yes | Stays |
+| 32-bit body | 309 | yes | yes | yes | Stays. V86 never runs it, and the hybrid image still needs it when PE is clear |
+| `INIT_TEXT` | 4583 | no | no | yes | Already dropped from both UMBs. An EXE would not shrink the prefix |
+
+HIMEM `AH=0Bh` is not reentrant. IRQ0 calls `tick`, and `tick` calls
+`RefreshConsole`, while a foreground program may already be inside
+HIMEM. The keyboard service (`AX` query while `busy` is set) is
+narrower: it points `D_B800` at `text_transfer` and scans with no C
+stack and no manager call. Replacing that snapshot with an XMS move
+would run HIMEM from that query. A chunked bounce does not help,
+because the scan treats the buffer as a text segment and walks all
+`text_cells`.
+
+`font_sync` and `font_text` already use `text_transfer` as the
+conventional side of an `AH=0Bh` or `AH=57h` move. Those calls happen
+under the renderer lock, not from the keyboard query. Shrinking the
+buffer would shrink the bounce those calls need. The planar space fill
+also reads it while the VGA window covers B800, so the snapshot cannot
+be the same bytes as the planar scratch.
+
+No remaining buffer is cold on both UMB stops. The only large region
+absent from the direct-color UMB is `text_transfer`, and the planar
+stop plus the keyboard query keep it. The shadow, the planar scratch,
+the status line, and the glyph stage are read from IRQ0 or while
+`set_win` is in progress. An XMS move there is not reentrant, and an
+EMS map there is the hard refusal: glyph bytes, the planar scratch,
+and the shadow are read while `WinFuncPtr` owns the window. Fetching
+them with `AH=44h` is not a candidate.
+
+### Bit walk
+
+The packed painter is unchanged. A full hanzi frame is still about
+249 ms at 114h and 117h: about 30 ms real mode, 9 ms of protected-mode
+entries, 166 ms scanning bits, 44 ms of `REP STOS`. `pm32_scan` already
+emits a run with `REP STOSW` or `REP STOSD`. Another entry per frame
+saves the 9 ms and holds CLI for the whole repaint. Tables for a
+repeated scale row need bytes this image does not have. An 8 KiB cache
+of expanded half-cells would cut the 166 ms on the 8-glyph bench and
+would add conventional RAM, which is the opposite of a UMB cut. `/AF`
+is still off. A 32-bit accelerator entry would need VCPI or DPMI, which
+this TSR does not call, and DOSBox-X has no AF driver to time.
+
+Nothing in this pass changes paint or residency, so those samples stay
+the ones in `qa/lfb-bench.md`. The next lever on the hot path is that
+bit scan, without a new conventional buffer and without a map inside
+`bank_span`. There is no safe UMB cut left among the buffers above.
 
 ## VBE/AF stays off unless `/AF` is set
 
