@@ -66,7 +66,7 @@ void app_poll(void) {
   }
   if (g_stage == 1) {
     if (g_ticks == 0) {
-      PushKey(0x4d00);
+      PushKey(0x0332);
     }
     if (++g_ticks < 18) {
       return;
@@ -79,11 +79,13 @@ void app_poll(void) {
   }
   if (g_stage == 2) {
     if (g_ticks == 0) {
-      PushKey(0x4d00);
-      PushKey(0x4d00);
-      PushKey(0x1c0d);
+      PushKey(0x011b);
+    } else if (g_ticks == 10) {
+      PushKey(0x0534);
+    } else if (g_ticks == 20) {
+      PushKey(0x0231);
     }
-    if (++g_ticks < 27) {
+    if (++g_ticks < 40) {
       return;
     }
     g_request = 0x7203;

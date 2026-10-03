@@ -112,54 +112,43 @@ class KeyboardModule:
         assert self.get('SP') == self.initial['SP'] + len(frame)
 
 
-MENU_NAMES = ['光标开关', '特显字符串', '简繁切换', '退出汉字', '长城键盘',
-              '联想开关', '直接写屏', '打印字符串', '显示模式', '重绘屏幕',
-              '拼音词组', '字典方式', '重码提示', '常驻提示行']
-MENU_BAR = 0xb0
-MENU_SEL = 0xe0
+MENU_LINES = [
+    '1输入 2显示 3输出 4退出',
+    '1长城键盘 2联想 3拼音词组 4字典 5重码',
+    '1光标 2简繁 3显示模式 4直接写屏 5重绘 6常驻提示行',
+    '1特显 2打印',
+    '1退出汉字',
+]
 
 
-def menu_origin(item):
-    if item <= 4:
-        return 1
-    if item >= 11:
-        return 8
-    return item - 3
+def menu_line(which):
+    raw = MENU_LINES[which].encode('gbk')
+    return raw + b' ' * (80 - len(raw))
 
 
-def menu_line(item):
-    parts = []
-    for number in range(menu_origin(item), menu_origin(item) + 7):
-        raw = MENU_NAMES[number - 1].encode('gbk')
-        parts.append(raw + b' ' * (10 - len(raw)))
-    text = b' '.join(parts)
-    return text + b' ' * (80 - len(text))
-
-
-def assert_menu_paint(cells, item):
+def assert_menu_paint(cells, which):
     assert len(cells) % 80 == 0
     line = cells[-80:]
     chars = bytes(cell for cell, _ in line)
     attrs = [attr for _, attr in line]
-    assert chars == menu_line(item)
+    assert chars == menu_line(which)
     assert b'[' not in chars and '上一项'.encode('gbk') not in chars
-    assert attrs.count(MENU_SEL) == 10
-    slot = item - menu_origin(item)
-    assert attrs[slot * 11:slot * 11 + 10] == [MENU_SEL] * 10
-    neighbor = 1 if slot == 0 else 0
-    assert attrs[neighbor * 11:neighbor * 11 + 10] == [MENU_BAR] * 10
+    assert attrs == [0x70] * 80
 
 
-@pytest.mark.parametrize('keys,selected', [
-    ([0x1c0d], 1),
-    ([0x4d00, 0x1c0d], 2),
-    ([0x4b00, 0x1c0d], 14),
-    ([0x4d00, 0x4d00, 0x4d00, 0x1c0d], 4),
-    ([0x0231, 0x0938, 0x0f09, 0x4700, 0x4f00, 0x4900, 0x5100, 0x4800, 0x5000,
-      0x1c0d], 1),
-    ([0x011b], 0x1b),
+@pytest.mark.parametrize('keys,selected,shown', [
+    ([0x011b], 0x1b, 0),
+    ([0x0332, 0x011b, 0x011b], 0x1b, 0),
+    ([0x0332, 0x0231], 1, 2),
+    ([0x0534, 0x0231], 4, 4),
+    ([0x0332, 0x0736], 14, 2),
+    ([0x0231, 0x0231], 5, 1),
+    ([0x0433, 0x0332], 8, 3),
+    ([0x0231, 0x0635], 13, 1),
+    ([0x4b00, 0x4d00, 0x1c0d, 0x0a39, 0x0433, 0x0231], 2, 3),
+    ([0x0332, 0x0837, 0x0736], 14, 2),
 ])
-def test_control_menu_navigation(menu_binary, keys, selected):
+def test_control_menu_navigation(menu_binary, keys, selected, shown):
     machine = KeyboardModule(menu_binary)
     queue = list(keys)
     drawn = []
@@ -186,8 +175,10 @@ def test_control_menu_navigation(menu_binary, keys, selected):
     assert not queue
     assert machine.get('AX') & 255 == selected
     assert panels == []
-    assert bytes(cell for cell, _ in drawn).startswith(menu_line(1))
-    assert_menu_paint(drawn, 1 if selected == 0x1b else selected)
+    assert bytes(cell for cell, _ in drawn[:80]) == menu_line(0)
+    assert_menu_paint(drawn, shown)
+    if shown == 2:
+        assert '6常驻提示行'.encode('gbk') in bytes(cell for cell, _ in drawn)
 
 
 def test_menu_reaches_cursor_exit_and_resident_row(menu_binary):
@@ -205,16 +196,16 @@ def test_menu_reaches_cursor_exit_and_resident_row(menu_binary):
     machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
     machine.set('DS', BASE//16)
     assert machine.byte('K_GBKG') == 0xff
-    queue.extend([0x1c0d])
+    queue.extend([0x0332, 0x0231])
     machine.call('L_XTK1')
     assert not queue and machine.byte('K_GBKG') == 0
     machine.set('SP', machine.initial['SP'])
-    queue.extend([0x4d00, 0x4d00, 0x4d00, 0x1c0d, 0x1579])
+    queue.extend([0x0534, 0x0231, 0x1579])
     machine.call('L_XTK1')
     assert not queue and machine.byte('D_EXIT') == 2
     machine.write('D_EXIT', b'\0')
     machine.set('SP', machine.initial['SP'])
-    queue.extend([0x4b00, 0x1c0d])
+    queue.extend([0x0332, 0x0736])
     machine.call('L_XTK1')
     assert not queue
     assert machine.uc.mem_read(BASE + 0xf4, 1) == b'\x02'

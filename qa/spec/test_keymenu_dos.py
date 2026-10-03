@@ -57,12 +57,13 @@ def operate_menu(keyboard, process):
                 time.sleep(.15)
                 press(keyboard, 'Control_L+F5')
                 if step == 0 and keyboard.screenshots:
-                    keyboard.capture(f'menu-open-{cycle}')
-                press(keyboard, 'Right')
+                    keyboard.capture(f'menu-groups-{cycle}')
+                press(keyboard, '2')
                 if step == 0 and keyboard.screenshots:
-                    keyboard.capture(f'menu-selected-{cycle}')
-                # The extra Rights land on 退出汉字, the exit confirmation.
-                for key in ('Right', 'Right', 'Return'):
+                    keyboard.capture(f'menu-display-{cycle}')
+                press(keyboard, 'Escape')
+                # 4 opens 退出, then 1 runs 退出汉字 and its confirmation.
+                for key in ('4', '1'):
                     press(keyboard, key)
                 time.sleep(1)
                 if keyboard.screenshots:

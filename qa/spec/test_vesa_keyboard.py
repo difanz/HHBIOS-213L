@@ -277,10 +277,11 @@ def test_keyboard_irq_during_real_refresh_defers_the_complete_menu(vesa_driver, 
     machine.uc.mem_write(keyboard_base + keyboard_symbols['D_INT16'],
                          struct.pack('<HH', 0xf100, keyboard_base // 16))
     machine.uc.mem_write(keyboard_base + 0xf100, b'\xcd\x60\xcf')
-    keys = [0x6200] + [0x4d00] * 4 + [0x1c0d, 0x316e, 0x342e]
+    # Ctrl+F5, group 4, command 1 (退出汉字), decline, then a foreground period.
+    keys = [0x6200, 0x0534, 0x0231, 0x316e, 0x342e]
     machine.uc.mem_write(0x41a, struct.pack('<HH', 0x1e, 0x1e + 2 * len(keys)))
     machine.uc.mem_write(0x480, struct.pack('<HH', 0x1e, 0x3e))
-    machine.uc.mem_write(0x41e, struct.pack('<8H', *keys))
+    machine.uc.mem_write(0x41e, struct.pack(f'<{len(keys)}H', *keys))
     machine.uc.mem_write(0xb8000, b'A\x07' * 2000)
     machine.write('active', b'\1')
 

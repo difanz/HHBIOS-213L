@@ -79,7 +79,7 @@ def test_pending_command_survives_unload(dosbox_binary, msdos_image, guest_build
                             for key in ['e', 'c', 'h', 'o', 'space', 'k', 'e', 'e', 'p']:
                                 press(keyboard, key)
                         elif step == 1:
-                            for key in ['Control_L+F5'] + ['Right'] * 4 + ['Return']:
+                            for key in ['Control_L+F5', '4', '1']:
                                 press(keyboard, key)
                             time.sleep(1)
                             keyboard.capture('confirm-unload')
