@@ -112,18 +112,42 @@ class KeyboardModule:
         assert self.get('SP') == self.initial['SP'] + len(frame)
 
 
+MENU_NAMES = ['光标开关', '特显字符串', '简繁切换', '退出汉字', '长城键盘',
+              '联想开关', '直接写屏', '打印字符串', '显示模式', '重绘屏幕',
+              '拼音词组', '字典方式', '重码提示', '常驻提示行']
+MENU_BAR = 0xb0
+MENU_SEL = 0xe0
+
+
+def menu_origin(item):
+    if item <= 4:
+        return 1
+    if item >= 11:
+        return 8
+    return item - 3
+
+
 def menu_line(item):
-    names = ['光标开关', '特显字符串', '简繁切换', '退出汉字', '长城键盘',
-             '联想开关', '直接写屏', '打印字符串', '显示模式', '重绘屏幕',
-             '拼音词组', '字典方式', '重码提示', '常驻提示行']
-    name = names[item - 1].encode('gbk')
-    name += b' ' * (10 - len(name))
-    text = ('系统菜单 '.encode('gbk') + '上一项 '.encode('gbk') + b'[' + name +
-            b'] ' + '下一项 '.encode('gbk') + '执行 '.encode('gbk') +
-            '关闭'.encode('gbk'))
-    text += b' ' * (68 - len(text))
-    text += f'{item:02d}/14'.encode('ascii')
-    return text
+    parts = []
+    for number in range(menu_origin(item), menu_origin(item) + 7):
+        raw = MENU_NAMES[number - 1].encode('gbk')
+        parts.append(raw + b' ' * (10 - len(raw)))
+    text = b' '.join(parts)
+    return text + b' ' * (80 - len(text))
+
+
+def assert_menu_paint(cells, item):
+    assert len(cells) % 80 == 0
+    line = cells[-80:]
+    chars = bytes(cell for cell, _ in line)
+    attrs = [attr for _, attr in line]
+    assert chars == menu_line(item)
+    assert b'[' not in chars and '上一项'.encode('gbk') not in chars
+    assert attrs.count(MENU_SEL) == 10
+    slot = item - menu_origin(item)
+    assert attrs[slot * 11:slot * 11 + 10] == [MENU_SEL] * 10
+    neighbor = 1 if slot == 0 else 0
+    assert attrs[neighbor * 11:neighbor * 11 + 10] == [MENU_BAR] * 10
 
 
 @pytest.mark.parametrize('keys,selected', [
@@ -138,7 +162,7 @@ def menu_line(item):
 def test_control_menu_navigation(menu_binary, keys, selected):
     machine = KeyboardModule(menu_binary)
     queue = list(keys)
-    drawn = bytearray()
+    drawn = []
     panels = []
     machine.write('D_INT16', struct.pack('<HH', 0xf000, BASE//16))
     machine.uc.mem_write(BASE+0xf000, b'\xcd\x60\xcf')
@@ -149,7 +173,7 @@ def test_control_menu_navigation(menu_binary, keys, selected):
             if machine.get('AX') == 0x1417:
                 panels.append(machine.get('DX'))
             elif machine.get('AX') == 0x1403:
-                drawn.append(machine.get('DX') & 255)
+                drawn.append((machine.get('DX') & 255, machine.get('BX') & 255))
         else:
             assert number == 0x60 and queue, 'menu did not accept its key'
             machine.set('AX', queue.pop(0))
@@ -162,9 +186,8 @@ def test_control_menu_navigation(menu_binary, keys, selected):
     assert not queue
     assert machine.get('AX') & 255 == selected
     assert panels == []
-    assert bytes(drawn).startswith(menu_line(1))
-    if selected != 0x1b:
-        assert menu_line(selected) in bytes(drawn)
+    assert bytes(cell for cell, _ in drawn).startswith(menu_line(1))
+    assert_menu_paint(drawn, 1 if selected == 0x1b else selected)
 
 
 def test_menu_reaches_cursor_exit_and_resident_row(menu_binary):

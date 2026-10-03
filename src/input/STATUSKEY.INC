@@ -1,6 +1,7 @@
-; One status row lists every system command. Left and Right change the
-; highlighted command. Enter runs it. Esc closes the row. The words on
-; that row are the mouse targets for the same four actions.
+; Several commands share the status row. Left, Right, and the pointer
+; move the selection. Enter or a left click runs it. Esc or the right
+; button leaves. Unselected text is black on bright cyan; the selected
+; command is black on yellow.
 S_CDKZ PROC NEAR
         PUSH    DS
         PUSH    CS
@@ -87,7 +88,8 @@ S_MENU_MOUSE_READY PROC NEAR
         RET
 S_MENU_MOUSE_READY ENDP
 
-; Sample INT 33h. A press on the prompt row hits one word.
+; Pointer movement selects a visible command. A new left press runs it.
+; A new right press leaves. The first sample only records the buttons.
 S_MENU_MOUSE PROC NEAR
         MOV     AX,3
         INT     33H
@@ -107,60 +109,52 @@ L_MS_ARM:
         MOV     AL,0FFH
         RET
 L_MS_EDGE:
-        TEST    SI,3
-        JNZ     L_MS_DOWN
-        MOV     D_MENU_BTN,0
-        MOV     AL,0FFH
-        RET
-L_MS_DOWN:
-        CMP     D_MENU_BTN,0
-        JZ      L_MS_NEW
-        MOV     AL,0FFH
-        RET
-L_MS_NEW:
-        MOV     D_MENU_BTN,1
+        PUSH    SI
         CALL    S_MENU_POINT
-        JC      L_MS_HIT
+        POP     SI
+        JC      L_MS_ON
+        TEST    SI,3
+        JNZ     L_MS_AWAY
+        MOV     D_MENU_BTN,0
+L_MS_AWAY:
         MOV     AL,0FFH
         RET
-L_MS_HIT:
+L_MS_ON:
+        CALL    S_MENU_SLOT
+        PUSHF
+        PUSH    AX
+        TEST    SI,3
+        JNZ     L_MS_HELD
+        MOV     D_MENU_BTN,0
+        JMP     L_MS_HOVER
+L_MS_HELD:
+        CMP     D_MENU_BTN,0
+        JNE     L_MS_HOVER
+        MOV     D_MENU_BTN,1
         TEST    SI,2
         JZ      L_MS_LEFT
+        POP     AX
+        POPF
         MOV     AL,1BH
         RET
 L_MS_LEFT:
-        CMP     AX,9
-        JB      L_MS_NONE
-        CMP     AX,14
-        JA      L_MS_NOT_PREV
-        JMP     L_KEY_PREV
-L_MS_NOT_PREV:
-        CMP     AX,16
-        JB      L_MS_NONE
-        CMP     AX,27
-        JBE     L_MS_RUN
-        CMP     AX,29
-        JB      L_MS_NONE
-        CMP     AX,34
-        JA      L_MS_NOT_NEXT
-        JMP     L_KEY_NEXT
-L_MS_NOT_NEXT:
-        CMP     AX,36
-        JB      L_MS_NONE
-        CMP     AX,39
-        JBE     L_MS_RUN
-        CMP     AX,41
-        JB      L_MS_NONE
-        CMP     AX,44
-        JBE     L_MS_CLOSE
-L_MS_NONE:
-        MOV     AL,0FFH
-        RET
-L_MS_RUN:
+        POP     AX
+        POPF
+        JNC     L_MS_NONE
+        MOV     D_MENU_ITEM,AL
         MOV     AL,0DH
         RET
-L_MS_CLOSE:
-        MOV     AL,1BH
+L_MS_HOVER:
+        POP     AX
+        POPF
+        JNC     L_MS_NONE
+        CMP     AL,D_MENU_ITEM
+        JE      L_MS_NONE
+        MOV     D_MENU_ITEM,AL
+        XOR     AL,AL
+        RET
+L_MS_NONE:
+        MOV     AL,0FFH
         RET
 S_MENU_MOUSE ENDP
 
@@ -206,70 +200,80 @@ L_POINT_MISS:
         RET
 S_MENU_POINT ENDP
 
+; AL=first visible command. Seven names stay on the row.
+S_MENU_ORIGIN PROC NEAR
+        MOV     AL,D_MENU_ITEM
+        CMP     AL,4
+        JBE     L_ORIGIN_HEAD
+        CMP     AL,11
+        JB      L_ORIGIN_MID
+        MOV     AL,8
+        RET
+L_ORIGIN_HEAD:
+        MOV     AL,1
+        RET
+L_ORIGIN_MID:
+        SUB     AL,3
+        RET
+S_MENU_ORIGIN ENDP
+
+; AX=column. CF=1 and AL=command when that column is one of the seven names.
+S_MENU_SLOT PROC NEAR
+        CMP     AX,76
+        JA      L_SLOT_MISS
+        XOR     DX,DX
+        MOV     CX,11
+        DIV     CX
+        CMP     DX,10
+        JAE     L_SLOT_MISS
+        PUSH    AX
+        CALL    S_MENU_ORIGIN
+        POP     BX
+        ADD     AL,BL
+        STC
+        RET
+L_SLOT_MISS:
+        CLC
+        RET
+S_MENU_SLOT ENDP
+
 S_MENU_DRAW PROC NEAR
         CALL    S_1400
         XOR     DL,DL
         CALL    S_1402
-        MOV     BL,D_TUX1
-        MOV     SI,OFFSET D_MENU_TITLE
-        MOV     CX,9
-        CALL    S_MENU_PUT
-        MOV     BL,D_TUX1
-        MOV     SI,OFFSET D_MENU_PREV
-        MOV     CX,7
-        CALL    S_MENU_PUT
-        MOV     DL,'['
-        CALL    S_1403
-        MOV     AL,D_MENU_ITEM
+        CALL    S_MENU_ORIGIN
+        MOV     D_MENU_WALK,AL
+        MOV     D_MENU_LEFT,7
+L_DRAW_NAME:
+        MOV     AL,D_MENU_WALK
+        MOV     BL,0B0H
+        CMP     AL,D_MENU_ITEM
+        JNE     L_DRAW_COLOR
+        MOV     BL,0E0H
+L_DRAW_COLOR:
         DEC     AL
         MOV     AH,10
         MUL     AH
         ADD     AX,OFFSET D_MENU_NAMES
         MOV     SI,AX
         MOV     CX,10
-        MOV     BL,D_QTS1
         CALL    S_MENU_PUT
-        MOV     BL,D_TUX1
-        MOV     SI,OFFSET D_MENU_MARK
-        MOV     CX,2
-        CALL    S_MENU_PUT
-        MOV     BL,D_TUX1
-        MOV     SI,OFFSET D_MENU_NEXT
-        MOV     CX,7
-        CALL    S_MENU_PUT
-        MOV     BL,D_TUX1
-        MOV     SI,OFFSET D_MENU_RUN
-        MOV     CX,5
-        CALL    S_MENU_PUT
-        MOV     BL,D_TUX1
-        MOV     SI,OFFSET D_MENU_CLOSE
+        DEC     D_MENU_LEFT
+        JZ      L_DRAW_PAD
+        MOV     BL,0B0H
+        MOV     DL,' '
+        CALL    S_1403
+        INC     D_MENU_WALK
+        JMP     L_DRAW_NAME
+L_DRAW_PAD:
         MOV     CX,4
-        CALL    S_MENU_PUT
-        MOV     CX,23
-L_MENU_PAD:
-        MOV     BL,D_TUX1
+L_DRAW_GAP:
+        MOV     BL,0B0H
         MOV     DL,' '
         PUSH    CX
         CALL    S_1403
         POP     CX
-        LOOP    L_MENU_PAD
-        MOV     AL,D_MENU_ITEM
-        AAM
-        ADD     AX,3030H
-        MOV     BL,D_TUX1
-        MOV     DL,AH
-        PUSH    AX
-        CALL    S_1403
-        POP     AX
-        MOV     BL,D_TUX1
-        MOV     DL,AL
-        CALL    S_1403
-        MOV     DL,'/'
-        CALL    S_1403
-        MOV     DL,'1'
-        CALL    S_1403
-        MOV     DL,'4'
-        CALL    S_1403
+        LOOP    L_DRAW_GAP
         RET
 S_MENU_DRAW ENDP
 
@@ -317,12 +321,8 @@ S_IDLE_PANEL ENDP
 
 D_MENU_ITEM DB 1
 D_MENU_BTN  DB 0
-D_MENU_TITLE DB 0CFH,0B5H,0CDH,0B3H,0B2H,0CBH,0B5H,0A5H,020H
-D_MENU_PREV  DB 0C9H,0CFH,0D2H,0BBH,0CFH,0EEH,020H
-D_MENU_NEXT  DB 0CFH,0C2H,0D2H,0BBH,0CFH,0EEH,020H
-D_MENU_RUN   DB 0D6H,0B4H,0D0H,0D0H,020H
-D_MENU_CLOSE DB 0B9H,0D8H,0B1H,0D5H
-D_MENU_MARK  DB 05DH,020H
+D_MENU_WALK DB 1
+D_MENU_LEFT DB 0
 D_MENU_NAMES:
         DB 0B9H,0E2H,0B1H,0EAH,0BFH,0AAH,0B9H,0D8H,020H,020H ; cursor
         DB 0CCH,0D8H,0CFH,0D4H,0D7H,0D6H,0B7H,0FBH,0B4H,0AEH ; special display
