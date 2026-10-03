@@ -361,7 +361,8 @@ the whole hanzi repaint to save only the leftover per-glyph entries. The byte
 counter behind AX=1418h counts those stores, not loads. There is no persistent
 unreal-mode segment cache, no VCPI client and no DPMI client. EMM386 does
 not make the switch faster; its useful effect is UMBs for the resident
-image, and its V86 mode is why the linear transfer aborts. VESA.COM
+image, and its V86 mode is why the linear transfer is not used. The
+console stays installed and paints through the window. VESA.COM
 now refuses to install unless that manager is present (`EMMXXXX0` and
 INT 67h `AH=40h`). JEMM386 and JEMMEX count. VGA.COM does not check.
 `/AF` sets the resident accelerator flag and `/AF-` clears it. The
@@ -390,47 +391,8 @@ rows are offered. If neither check passes, installation restores the previous
 mode. Logical columns stay 80. 132-column modes and VBE text modes 108h–10Ch
 are unchanged and unused.
 
-Other memory-access backends can be added without changing the classifier, but must be
-compared using the same pixels and update regions:
-
-| Path | Intended environment | Costs and lifetime to verify |
-| --- | --- | --- |
-| 16-bit banked, BIOS interrupt | Real mode or a compatible host | Bank crossings and BIOS calls; use returned granularity/stride |
-| 16-bit banked, `WinFuncPtr` | BIOS advertising a callable entry | Same geometry, reduced call overhead; no per-pixel banking |
-| Short real/protected/real LFB copy | 386+ real mode, PE clear on entry | One flat data selector per transfer of at most 4096 bytes; V86 cannot enter it |
-| 32-bit LFB via DPMI | Not used | A client selector does not survive as a TSR resource across mode switches |
-| Unreal-mode LFB | Not used | After per-glyph batching the leftover entry cost is about 12 ms; an FS limit left raised still faults if an interrupt reloads FS |
-
-DPMI's [physical mapping API](https://www.delorie.com/djgpp/doc/dpmi/api/310800.html)
-returns a linear address for device memory. It does not, by itself, make that
-mapping a permanent resource of a real-mode TSR. A resident backend must define
-ownership across client exit and switching, and a valid execution/stack context
-for callbacks. A selector obtained from an arbitrary foreground DPMI client
-cannot simply be kept for later timer use. CPU-mode changes must respect the
-host's control of protected/virtual-8086 execution; see
-[Intel's system programming manual](https://cdrdv2-public.intel.com/774491/253669-sdm-vol-3b.pdf).
-
-For host-assisted transitions, compare DPMI 0.9 real-mode callbacks (`0303h`)
-with its raw mode-switch entry points (`0306h`), including their stack/context
-requirements; both are described in
-[Stacks and Mode Switching](https://delorie.com/djgpp/doc/dpmi/ch4.3.html).
-Do not assume DPMI 1.0's resident-service APIs `0C00h/0C01h` are available on
-Windows 95. Their [resident-provider lifecycle](https://delorie.com/djgpp/doc/dpmi/ch4.8.html)
-also destroys the original LDT/IDT and requires per-client setup. A proposed
-32-bit resident design must be tested with the targeted 0.9 hosts, not just with
-a standalone host accepting newer APIs.
-
-Batch work into consecutive scanlines or dirty rectangles. Reuse a selected bank,
-and enter a protected rendering context for a batch, rather than for each pixel
-or character. Font caching must be bounded and measured against XMS/EMS transfer
-cost and conventional-memory use. Avoid a full framebuffer copy in conventional
-memory merely to simplify the implementation.
-
-Performance comparisons should include an idle screen, a single Chinese glyph,
-short text edits, scrolling, a full redraw and regions crossing bank boundaries.
-Record guest elapsed time, worst interrupt-disabled duration, bank/mode switches,
-bytes written, resident conventional/UMB memory and font-cache storage. Check exact
-pixels for every path before comparing speed. Separate fixture/pattern generation
-from timed drawing. Emulator results are comparative evidence, not estimates of
-ISA/VLB/PCI hardware performance. No renderer throughput benchmark has been
-established yet; these are criteria for choosing the next implementation.
+The shipping stores are the 16-bit bank (`WinFuncPtr`, else INT 10h
+`AX=4F05h`) and the short CR0 linear copy. DPMI and unreal mode are not
+used. Samples record idle, a few cells, one line, a scroll, and a full
+redraw: guest time, bytes written, and exact pixels. Emulator results
+compare those paths. They are not estimates of ISA/VLB/PCI hardware.
