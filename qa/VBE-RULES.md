@@ -338,43 +338,39 @@ Software cursor blinking adds its own small draws outside that text-refresh test
 At that size, prompt clear/output and wide strings also share a bank transaction across all
 their glyphs; their work-count tests require just two bank calls per operation.
 
-Direct-color drawing keeps the same dirty cells. Each store, fill, move, XOR,
-or glyph enters protected mode only for that transfer, then returns to real
-mode. The private GDT has a 16-bit 64 KiB code selector based at the resident
-segment, one 4 GB data selector based at physical 0, and a 32-bit 4 GB code
-selector at that same resident base. Copies, fills, and XOR run on the 16-bit
-code selector. The glyph painter far-jumps to the 32-bit selector, expands
-packed rows there, and stores with `REP STOS`. Linear consoles use that
-packed painter at every pixel scale. Planar scaling still unpacks. For that painter the flat data
-selector is also SS, because `[ebp+disp]` uses SS; the saved real-mode SS is
-restored before registers are popped. CR0.PE is set for the transfer and
-cleared before the real-mode far jump back. `SMSW` already reporting PE (V86,
-including EMM386) does not enter that transfer. A 64 KiB window then paints
-the frame in real mode; with no window the direct-color console does not
-stay installed.
-Interrupts stay off for at most 4096 bytes. There is no STI while PE is set:
-the real-mode IVT is not an IDT. Dirty spaces are one horizontal fill per run,
-still on the 16-bit path. A glyph chunk is one entry covering every
-framebuffer line of that chunk, split by source row only when the store would
-pass 4096 bytes. Holding PE for a whole frame would leave interrupts off for
-the whole hanzi repaint to save only the leftover per-glyph entries. The byte
-counter behind AX=1418h counts those stores, not loads. There is no persistent
-unreal-mode segment cache, no VCPI client and no DPMI client. EMM386 does
-not make the switch faster; its useful effect is UMBs for the resident
-image, and its V86 mode is why the linear transfer is not used. The
-console stays installed and paints through the window. VESA.COM
-now refuses to install unless that manager is present (`EMMXXXX0` and
-INT 67h `AH=40h`). JEMM386 and JEMMEX count. VGA.COM does not check.
-`/AF` sets the resident accelerator flag and `/AF-` clears it. The
-default is off. This image does not call an AF entry; no AF device is
-a no-op.
-Below 80 dirty
-text cells the resident console uses the real-mode window instead, including
-every refresh while PE is set. Details are in
-`qa/lfb-latency.md`. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
-when the framebuffer's physical range has bit 20 set. Why the other access
-paths were rejected is in `qa/lfb-fastpath.md`. PIT samples for modes 114h,
-117h and 245h are in `qa/lfb-bench.md`.
+### Direct-color dispatch
+
+This is the direct-color paint rule. `bank_cell_limit` is 80 dirty text
+cells, one full line. The count is the active B800 page against the shadow,
+with `CS` overrides while `DS` is the text page.
+
+- Fewer than 80 dirty cells, and the mode has a usable 64 KiB window:
+  paint through the window and `WinFuncPtr` (else INT 10h `AX=4F05h`
+  through the saved vector). Stay in real mode. Do not set PE.
+- 80 or more dirty cells, `PhysBasePtr` was recorded, and `SMSW` still
+  shows PE clear: the short-PE linear painter.
+- Scroll (`INT 10h` `AH=06h`) is not a dirty-cell refresh. It uses the
+  linear copy while PE is clear. Under V86 the same copy uses the window.
+- A refresh with no dirty text cells (status or caret only) uses the
+  window when one exists. Zero is below the limit.
+- Window but no `PhysBasePtr`: bank for every refresh.
+- `PhysBasePtr` but no usable window: the linear path only. PE set
+  still refuses it.
+- PE set at install: `have_lfb` is cleared, so the short-PE path is
+  not armed. If a window exists, install binds sticky B800 and does
+  not call `lfb_load`. Rows above 25 still need the linear alias read,
+  so 43 and 50 fail that install. If no window exists, install fails
+  the direct-color console.
+
+When that rule selects the linear painter, the entry is one glyph chunk.
+`qa/lfb-fastpath.md` describes the entry. Samples are in `qa/lfb-bench.md`
+and the console table in `qa/lfb-latency.md`. There is no VCPI client and
+no DPMI client. VESA.COM refuses to install unless an EMS manager is
+present (`EMMXXXX0` and INT 67h `AH=40h`). JEMM386 and JEMMEX count.
+VGA.COM does not check. `/AF` sets the resident accelerator flag and
+`/AF-` clears it. The default is off. This image does not call an AF
+entry. A20 is enabled, via INT 15h AX=2401h and port 92h bit 1, only
+when the framebuffer's physical range has bit 20 set.
 
 Attributes use a fixed CGA/EGA 16-color table. The low nibble is foreground
 and the high nibble is background, including bright background in bit 7.
@@ -391,8 +387,6 @@ rows are offered. If neither check passes, installation restores the previous
 mode. Logical columns stay 80. 132-column modes and VBE text modes 108h–10Ch
 are unchanged and unused.
 
-The shipping stores are the 16-bit bank (`WinFuncPtr`, else INT 10h
-`AX=4F05h`) and the short CR0 linear copy. DPMI and unreal mode are not
-used. Samples record idle, a few cells, one line, a scroll, and a full
+Samples record idle, a few cells, one line, a scroll, and a full
 redraw: guest time, bytes written, and exact pixels. Emulator results
 compare those paths. They are not estimates of ISA/VLB/PCI hardware.

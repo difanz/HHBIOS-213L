@@ -1,11 +1,8 @@
 # Direct-color console
 
-`VESA.COM` is a 16-bit real-mode TSR. Direct-color glyphs use the 32-bit
-painter in `qa/lfb-fastpath.md` when `SMSW` shows PE clear. Fewer than 80
-dirty text cells, a bank-only mode, and V86 paint through the 64 KiB
-window and `WinFuncPtr`. Scroll and a full line use the linear map only
-while PE is clear. There is no VCPI client, no DPMI client, and no call
-to an AF entry. `/AF` only sets `af_on`; the default is off.
+`VESA.COM` is a 16-bit real-mode TSR. Direct-color dispatch is
+[Direct-color dispatch](VBE-RULES.md#direct-color-dispatch). The linear
+entry, when that rule selects it, is `qa/lfb-fastpath.md`.
 
 Samples are DOSBox-X at `cycles=30000`, `core=normal`, `HH20.FNT`. The
 harness is `qa/harness/lfbbench.c`. PIT counts and the byte contract are
@@ -146,12 +143,11 @@ conventional memory. The footprint is the same bytes either way:
 direct color keeps `0xCD07` (52487), and planar 43/50 rows keep
 `0xED10` (60688).
 
-Real EMM386 or JEMM runs the guest in V86. `SMSW` shows PE, so the
-short-PE linear painter stays dark and every refresh uses the 64 KiB
-window and `WinFuncPtr`. DOSBox-X `ems=true` publishes the same device
-and does not set PE, so a large dirty region there still takes the
-short-PE path. The direct-color harness sets `ems=true` in
-`qa/profiles/vesa-hd.conf` for that reason.
+Real EMM386 or JEMM runs the guest in V86, so `SMSW` shows PE and
+dispatch takes that case of the direct-color rule. DOSBox-X `ems=true`
+publishes the same device and does not set PE, so the harness still
+takes the linear case. `qa/profiles/vesa-hd.conf` sets `ems=true` for
+that reason.
 
 ### Glyph arena stays in the prefix
 
@@ -182,10 +178,8 @@ Miss path, both painters. `LoadGlyph` copies one index page into the
 record into `large_glyph`, then `CacheGlyph` compacts it into the
 1968-byte region. `font_draw` calls `LoadGlyph` once per cell. The
 packed path then calls `raster_packed_cell` twice with that same
-pointer (left half, then right half). Sparse banked paint (fewer than
-80 dirty cells, or any refresh while PE is set) and a full linear
-paint share this lookup. They differ only in the store:
-`bank_span` versus the short-PE body.
+pointer (left half, then right half). The bank path and the linear path share this lookup. They differ only
+in the store: `bank_span` versus the short-PE body.
 
 `bank_span` reads the glyph with `DS:[SI]` in the same loop that calls
 `bank_fill_px` and `set_win`. `set_win` is `WinFuncPtr` or INT 10h
@@ -337,45 +331,16 @@ usage line. Do not call a 32-bit AF entry from this TSR.
 ## Protected mode is private
 
 The painter does not call VCPI or DPMI, and it does not load a server,
-CWSDPMI, or any other host. When PE is clear, a private GDT and a short
-CR0 session are legal. When PE is already set (Win95, EMM386, JEMM),
-that session is not. A mode that still has a 64 KiB window is painted
-through the window. A mode with neither a usable window nor a legal
-linear map fails the direct-color console and leaves the planar
-driver. There is no VCPI probe, no DPMI probe, and no switch that
-selects either one.
+CWSDPMI, or any other host. There is no VCPI probe, no DPMI probe, and
+no switch that selects either one. What runs when PE is set is
+[Direct-color dispatch](VBE-RULES.md#direct-color-dispatch).
 
-## Banked window in the resident console
+## Console samples
 
-`qa/lfb-bench.md` records both the paint-only harness and the resident
-hybrid. The harness never enters protected mode. `WinFuncPtr` (or
-`INT 10h` `AX=4F05h` through the saved vector, never a nested
-`INT 10h`) moves a 64 KiB window at A000. That painter lives in
-`VESA.COM`, ahead of `resident_end`. The link is `0xFEF7`.
-
-`bank_cell_limit` is 80 dirty text cells, one full line. Counted on
-the active B800 page against the shadow, with `CS` overrides while
-`DS` is the text page:
-
-- Fewer than 80 dirty cells, and the mode has a usable 64 KiB window:
-  paint through the window. Stay in real mode. Do not set PE.
-- 80 or more dirty cells, `PhysBasePtr` was recorded, and `SMSW` still
-  shows PE clear: the short-PE linear painter.
-- Scroll (`INT 10h` `AH=06h`) is not a dirty-cell refresh. It clears
-  the bank choice and uses the linear copy while PE is clear. Under
-  V86 the same copy uses the window.
-- A refresh with no dirty text cells (status or caret only) uses the
-  window when one exists. Zero is below the limit.
-- Window but no `PhysBasePtr`: bank for every refresh.
-- `PhysBasePtr` but no usable window: the linear path only. PE set
-  still refuses it.
-- PE set at install: `have_lfb` is cleared, so the short-PE path is
-  not armed. If a window exists, install binds sticky B800 and does
-  not call `lfb_load`. Rows above 25 still need the linear alias read,
-  so 43 and 50 fail that install. If no window exists, install fails
-  the direct-color console.
-
-The limit is the harness wash. Four cells were about
+Dispatch is [Direct-color dispatch](VBE-RULES.md#direct-color-dispatch).
+`qa/lfb-bench.md` records the paint-only harness. The table below is the
+resident `AX=1500h` refresh. The limit in that rule is the harness wash.
+Four cells were about
 2 ms and 2 switches on the paint-only harness; a scroll was 76 ms
 versus 26 ms linear; full hanzi was 417 ms versus 249 ms. A full line
 was 36 ms banked versus 33 ms linear, so 80 stays on the linear side.

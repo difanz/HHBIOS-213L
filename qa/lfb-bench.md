@@ -107,13 +107,5 @@ chunks (251 switches at pitch 1600). At pitch 2048 each 1600-byte row
 is its own span (800 switches). A few hundred extra far calls are
 under a millisecond.
 
-## Resident choice
-
-`bank_cell_limit` is 80 dirty text cells. Use the bank window when the
-dirty page is below 80 cells, when the mode has no `PhysBasePtr`, or
-when `SMSW` shows PE. Use the linear short-PE painter when PE is
-clear, the mode has `PhysBasePtr`, and the refresh is a full line, a
-scroll, or a full frame. One text line is the threshold because the
-harness line was a wash. The console timings, including the dirty
-walk, are in `qa/lfb-latency.md`. Under V86 a mode with a window stays
-banked. A mode with no window still refuses the linear console.
+Resident dispatch is [Direct-color dispatch](VBE-RULES.md#direct-color-dispatch).
+The console timings, including the dirty walk, are in `qa/lfb-latency.md`.

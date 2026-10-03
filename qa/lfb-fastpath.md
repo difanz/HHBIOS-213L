@@ -1,24 +1,10 @@
 # Direct-color painter
 
 `VESA.COM` stays a 16-bit real-mode TSR. It does not load VCPI, DPMI, a
-DOS extender, or CWSDPMI. Install requires an EMS manager (`EMMXXXX0`
-and INT 67h `AH=40h`) so the TSR can use a UMB. EMM386 and JEMM then
-run the guest in V86: `SMSW` shows PE, the short-PE transfer is not
-used, and the console stays installed on the 64 KiB window. A Win95
-DOS box is the same V86 case. No window and PE already set is the
-install that does not keep the direct-color console. Layout, the EMS
-gate, and the aperture rules are in `qa/lfb-latency.md`. Samples are
-in `qa/lfb-bench.md`.
-
-## Which painter
-
-Fewer than 80 dirty text cells, a bank-only mode, and every refresh
-while PE is set use the 64 KiB window and `WinFuncPtr` (else INT 10h
-`AX=4F05h` through the saved vector). There is no protected-mode entry
-on that path. Scroll, and 80 or more dirty cells, use the short-PE
-linear painter only when `PhysBasePtr` was recorded and PE is clear.
-`PhysBasePtr` with no usable window is linear only; PE set still
-refuses that install.
+DOS extender, or CWSDPMI. Which refresh uses this painter is
+[Direct-color dispatch](VBE-RULES.md#direct-color-dispatch). Layout,
+the EMS gate, and the aperture rules are in `qa/lfb-latency.md`.
+Samples are in `qa/lfb-bench.md`.
 
 ## One glyph chunk
 
@@ -84,4 +70,4 @@ protected-mode entry, 166 ms is the bit scan, and 44 ms is
 - A second linear painter for an 8086 or 286. Install already refuses
   those CPUs.
 - An AF entry. `/AF` only sets `af_on`.
-- VCPI, DPMI, and CWSDPMI. V86 stays on the window.
+- VCPI, DPMI, and CWSDPMI.
