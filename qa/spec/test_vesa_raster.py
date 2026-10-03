@@ -30,8 +30,17 @@ def test_status_panel_edges_preserve_glyph_area_and_neighbors(vesa_driver, colum
                             display_pitch=240, bank_step=1).items():
         machine.write(name, struct.pack('<H', value))
     machine.write('active', b'\1')
-    machine.uc.mem_write(0x1fe02, struct.pack('<4H', column, width, style, inset))
-    machine.run('raster_status_panel', limit=1000000)
+    # Args sit above the return address and below the stack canary.
+    sp = machine.symbols['stack_bottom'] - 2 - 8
+    machine.uc.mem_write((0x1000 << 4) + sp,
+                         struct.pack('<5H', 0xff00, column, width, style, inset))
+    for name, value in dict(CS=0x1000, DS=0x1000, SS=0x1000, SP=sp,
+                            EFLAGS=0x202).items():
+        machine.put(name, value)
+    machine.uc.emu_start(0x10000 + machine.symbols['raster_status_panel'],
+                         0x1ff00, count=1000000)
+    assert machine.get('IP') == 0xff00
+    assert machine.read('stack_bottom', 2) == b'\x5a\xa5'
     left, right = column * 24 + 1, (column + width) * 24 - 2
     top, bottom = 273, 295 + 2 * inset
     light, dark = (8, 15) if style == 2 else (15, 0)
@@ -40,8 +49,8 @@ def test_status_panel_edges_preserve_glyph_area_and_neighbors(vesa_driver, colum
         pixels.update({(x, top): light for x in range(left, right + 1)})
         pixels.update({(x, bottom): dark for x in range(left, right + 1)})
     for y in range(top + inset, bottom - inset + 1):
-        pixels.update({(left, y): light, (left + 1, y): 0 if style == 2 else 7,
-                       (right - 1, y): 7 if style == 2 else 8, (right, y): dark})
+        pixels.update({(left, y): light, (left + 1, y): light,
+                       (right - 1, y): dark, (right, y): dark})
     for plane in range(4):
         expected = bytearray(initial)
         for (x, y), color in pixels.items():
