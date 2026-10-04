@@ -113,11 +113,11 @@ class KeyboardModule:
 
 
 MENU_LINES = [
-    '1        输入          2        显示         3        输出         4        退出',
-    '1      长城      2      联想      3      拼音      4      字典       5      重码',
-    '1     光标    2     简繁    3     模式    4     写屏    5     重绘    6     常驻',
-    '1        特显                2        打印',
-    '1          退出汉字',
+    '1 输入  2 显示  3 输出  4 退出',
+    '1 长城  2 联想  3 拼音  4 字典  5 重码',
+    '1 光标  2 简繁  3 模式  4 写屏  5 重绘  6 常驻',
+    '1 特显  2 打印',
+    '1 退出汉字',
 ]
 
 
@@ -178,7 +178,7 @@ def test_control_menu_navigation(menu_binary, keys, selected, shown):
     assert bytes(cell for cell, _ in drawn[:80]) == menu_line(0)
     assert_menu_paint(drawn, shown)
     if shown == 2:
-        assert '6     常驻'.encode('gbk') in bytes(cell for cell, _ in drawn)
+        assert '6 常驻'.encode('gbk') in bytes(cell for cell, _ in drawn)
 
 
 def test_menu_reaches_cursor_exit_and_resident_row(menu_binary):
