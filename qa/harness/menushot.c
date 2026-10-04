@@ -66,18 +66,48 @@ void app_poll(void) {
   }
   if (g_stage == 1) {
     if (g_ticks == 0) {
-      PushKey(0x0332);
+      PushKey(0x0231);
     }
     if (++g_ticks < 18) {
       return;
     }
-    g_request = 0x7202;
+    g_request = 0x7204;
     g_phase = 1;
     g_stage = 2;
     g_ticks = 0;
     return;
   }
   if (g_stage == 2) {
+    if (g_ticks == 0) {
+      PushKey(0x011b);
+    } else if (g_ticks == 10) {
+      PushKey(0x0332);
+    }
+    if (++g_ticks < 28) {
+      return;
+    }
+    g_request = 0x7202;
+    g_phase = 1;
+    g_stage = 3;
+    g_ticks = 0;
+    return;
+  }
+  if (g_stage == 3) {
+    if (g_ticks == 0) {
+      PushKey(0x011b);
+    } else if (g_ticks == 10) {
+      PushKey(0x0433);
+    }
+    if (++g_ticks < 28) {
+      return;
+    }
+    g_request = 0x7205;
+    g_phase = 1;
+    g_stage = 4;
+    g_ticks = 0;
+    return;
+  }
+  if (g_stage == 4) {
     if (g_ticks == 0) {
       PushKey(0x011b);
     } else if (g_ticks == 10) {
@@ -90,13 +120,13 @@ void app_poll(void) {
     }
     g_request = 0x7203;
     g_phase = 1;
-    g_stage = 3;
+    g_stage = 5;
     g_ticks = 0;
     return;
   }
-  if (g_stage == 3) {
+  if (g_stage == 5) {
     PushKey(0x316e);
-    g_stage = 4;
+    g_stage = 6;
   }
 }
 

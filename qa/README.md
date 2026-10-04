@@ -136,9 +136,8 @@ This does not change the desktop or remote client's own shortcuts.
 The supplied `213L.INI` selects the Great Wall keyboard layout: Insert, Home,
 PageUp, Delete, End and PageDown select input modes. Ctrl+F5 opens the system
 menu on the status row: 1输入, 2显示, 3输出, 4退出. A second digit runs that
-group's command. Esc returns to the previous level. 长城键盘 is 1 in the 输入
-group; 1 then 1 switches to the standard Alt+function-key layout for the
-current session.
+group's command. Esc returns to the previous level. In 输入, 1 is 长城 and
+switches to the standard Alt+function-key layout for the current session.
 The DOS `README` command opens the installed GB2312 help file beside
 `README.COM`, even when invoked from another directory through PATH.
 
